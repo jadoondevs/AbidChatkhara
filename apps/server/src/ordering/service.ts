@@ -69,6 +69,7 @@ export interface OrderSummary {
   readonly tableLabel: string | null;
   readonly waiterId: number | null;
   readonly beneficiaryPersonId: number | null;
+  readonly shiftId: number | null;
   readonly openedAt: string;
   readonly billedAt: string | null;
   readonly closedAt: string | null;
@@ -94,6 +95,7 @@ interface OrderRow {
   table_label: string | null;
   waiter_id: number | null;
   beneficiary_person_id: number | null;
+  shift_id: number | null;
   opened_at: string;
   billed_at: string | null;
   closed_at: string | null;
@@ -120,6 +122,7 @@ function toOrderSummary(row: OrderRow): OrderSummary {
     tableLabel: row.table_label,
     waiterId: row.waiter_id,
     beneficiaryPersonId: row.beneficiary_person_id,
+    shiftId: row.shift_id,
     openedAt: row.opened_at,
     billedAt: row.billed_at,
     closedAt: row.closed_at,
@@ -288,6 +291,17 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
     throw new OrderStateError('beneficiaryPersonId is only valid for staff_meal/owner_meal orders');
   }
 
+  // Tags the order with whichever shift is currently open, the same
+  // direct-table-read convention as the person lookup above — not a
+  // hard requirement (a restaurant that hasn't opened a shift yet, or
+  // any test fixture that doesn't care about shifts, still works; the
+  // order simply carries shift_id: null). A real shift's own close-time
+  // cash reconciliation is necessarily scoped to orders that WERE
+  // tagged, so day-to-day operation opening a shift before taking orders
+  // is what actually keeps that reconciliation meaningful — see
+  // ARCHITECTURE.md's "Shifts" section.
+  const openShift = await db.selectFrom('shift').select('id').where('closed_at', 'is', null).executeTakeFirst();
+
   const now = new Date().toISOString();
   const row = await db
     .insertInto('order')
@@ -298,6 +312,7 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
       table_label: input.tableLabel ?? null,
       waiter_id: input.waiterId ?? null,
       beneficiary_person_id: input.beneficiaryPersonId ?? null,
+      shift_id: openShift?.id ?? null,
       opened_at: now,
       billed_at: null,
       closed_at: null,

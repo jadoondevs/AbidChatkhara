@@ -6,6 +6,7 @@ import { createUser } from '../identity/service.js';
 import { addLine, billOrder, createOrder } from '../ordering/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createTestDb } from '../platform/db/test-helpers.js';
+import { closeShift, openShift } from '../shifts/service.js';
 import { recordServiceChargeEntry, reverseServiceChargeEntries, waiterPayoutTotals } from './service.js';
 
 describe('gratuity/service', () => {
@@ -150,6 +151,36 @@ describe('gratuity/service', () => {
       const past = new Date(Date.now() - 60_000).toISOString();
       expect(await waiterPayoutTotals(ctx.db, { fromInclusive: future })).toEqual([]);
       expect(await waiterPayoutTotals(ctx.db, { fromInclusive: past })).toHaveLength(1);
+    });
+
+    it('filters by shiftId — the spec\'s per-shift payout sheet', async () => {
+      const { actor, item, waiter, cash } = await setupBase();
+      const firstShift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+      await closedOrderWithServiceCharge(item, waiter.id, cash.id, actor, paisa(50_00));
+      await closeShift(ctx.db, firstShift.id, { countedCashMinor: paisa(1_050_00) }, actor);
+
+      const secondShift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+      await closedOrderWithServiceCharge(item, waiter.id, cash.id, actor, paisa(30_00));
+
+      expect(await waiterPayoutTotals(ctx.db, { shiftId: firstShift.id })).toEqual([{ waiterId: waiter.id, waiterName: 'Bilal', totalMinor: 50_00 }]);
+      expect(await waiterPayoutTotals(ctx.db, { shiftId: secondShift.id })).toEqual([{ waiterId: waiter.id, waiterName: 'Bilal', totalMinor: 30_00 }]);
+      expect(await waiterPayoutTotals(ctx.db)).toEqual([{ waiterId: waiter.id, waiterName: 'Bilal', totalMinor: 80_00 }]);
+    });
+
+    it('a reversal nets against the ORIGINAL entry\'s shift, not whatever shift is open when the refund happens', async () => {
+      const { actor, item, waiter, cash } = await setupBase();
+      const firstShift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+      const closed = await closedOrderWithServiceCharge(item, waiter.id, cash.id, actor, paisa(50_00));
+      await closeShift(ctx.db, firstShift.id, { countedCashMinor: paisa(1_050_00) }, actor);
+
+      const secondShift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+      await refundOrder(ctx.db, closed.id, { reason: 'complaint' }, actor); // refunded on the SECOND shift
+
+      // The refund's reversal carries the original's shift_id (the first
+      // shift), so it nets to zero there — not against the second shift,
+      // which never had anything to reverse.
+      expect(await waiterPayoutTotals(ctx.db, { shiftId: firstShift.id })).toEqual([]);
+      expect(await waiterPayoutTotals(ctx.db, { shiftId: secondShift.id })).toEqual([]);
     });
   });
 });

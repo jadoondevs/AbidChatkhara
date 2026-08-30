@@ -353,6 +353,7 @@ export async function recordPayment(
       tableLabel: order.table_label,
       waiterId: order.waiter_id,
       beneficiaryPersonId: order.beneficiary_person_id,
+      shiftId: order.shift_id,
       openedAt: order.opened_at,
       billedAt: order.billed_at,
       closedAt: order.closed_at,
