@@ -1,0 +1,88 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { createTestDb } from '../platform/db/test-helpers.js';
+import { login, logout, resolveSession } from './auth.js';
+import { createUser, setUserActive } from './service.js';
+
+describe('identity/auth', () => {
+  let ctx: ReturnType<typeof createTestDb>;
+
+  afterEach(() => {
+    ctx?.sqlite.close();
+  });
+
+  it('logs in with the correct PIN and resolves the resulting token', async () => {
+    ctx = createTestDb();
+    const user = await createUser(ctx.db, { name: 'Ayesha', pin: '4821', role: 'cashier' }, { actorId: null, terminalId: 'seed' });
+
+    const result = await login(ctx.db, { userId: user.id, pin: '4821', terminalId: 'till-1' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+
+    const session = await resolveSession(ctx.db, result.token);
+    expect(session).toEqual({ userId: user.id, name: 'Ayesha', role: 'cashier', terminalId: 'till-1' });
+  });
+
+  it('rejects the wrong PIN', async () => {
+    ctx = createTestDb();
+    const user = await createUser(ctx.db, { name: 'Ayesha', pin: '4821', role: 'cashier' }, { actorId: null, terminalId: 'seed' });
+    const result = await login(ctx.db, { userId: user.id, pin: '0000', terminalId: 'till-1' });
+    expect(result).toEqual({ ok: false, reason: 'invalid_credentials' });
+  });
+
+  it('rejects login for an unknown user id', async () => {
+    ctx = createTestDb();
+    const result = await login(ctx.db, { userId: 999, pin: '4821', terminalId: 'till-1' });
+    expect(result).toEqual({ ok: false, reason: 'invalid_credentials' });
+  });
+
+  it('rejects login for a deactivated user', async () => {
+    ctx = createTestDb();
+    const admin = await createUser(ctx.db, { name: 'Admin', pin: '1111', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+    const user = await createUser(ctx.db, { name: 'Chand', pin: '4821', role: 'server' }, { actorId: admin.id, terminalId: 't1' });
+    await setUserActive(ctx.db, user.id, false, { actorId: admin.id, terminalId: 't1' });
+
+    const result = await login(ctx.db, { userId: user.id, pin: '4821', terminalId: 'till-1' });
+    expect(result).toEqual({ ok: false, reason: 'inactive' });
+  });
+
+  it('resolveSession returns null for an unknown token', async () => {
+    ctx = createTestDb();
+    expect(await resolveSession(ctx.db, 'nonexistent-token')).toBeNull();
+  });
+
+  it('resolveSession returns null after logout', async () => {
+    ctx = createTestDb();
+    const user = await createUser(ctx.db, { name: 'Ayesha', pin: '4821', role: 'cashier' }, { actorId: null, terminalId: 'seed' });
+    const result = await login(ctx.db, { userId: user.id, pin: '4821', terminalId: 'till-1' });
+    if (!result.ok) throw new Error('unreachable');
+
+    await logout(ctx.db, result.token);
+
+    expect(await resolveSession(ctx.db, result.token)).toBeNull();
+  });
+
+  it('resolveSession returns null once a user is deactivated after login', async () => {
+    ctx = createTestDb();
+    const admin = await createUser(ctx.db, { name: 'Admin', pin: '1111', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+    const user = await createUser(ctx.db, { name: 'Chand', pin: '4821', role: 'server' }, { actorId: admin.id, terminalId: 't1' });
+    const result = await login(ctx.db, { userId: user.id, pin: '4821', terminalId: 'till-1' });
+    if (!result.ok) throw new Error('unreachable');
+
+    await setUserActive(ctx.db, user.id, false, { actorId: admin.id, terminalId: 't1' });
+
+    expect(await resolveSession(ctx.db, result.token)).toBeNull();
+  });
+
+  it('each login issues a distinct, unguessable token bound to its own terminal', async () => {
+    ctx = createTestDb();
+    const user = await createUser(ctx.db, { name: 'Ayesha', pin: '4821', role: 'cashier' }, { actorId: null, terminalId: 'seed' });
+
+    const a = await login(ctx.db, { userId: user.id, pin: '4821', terminalId: 'till-1' });
+    const b = await login(ctx.db, { userId: user.id, pin: '4821', terminalId: 'till-2' });
+    if (!a.ok || !b.ok) throw new Error('unreachable');
+
+    expect(a.token).not.toBe(b.token);
+    expect((await resolveSession(ctx.db, a.token))?.terminalId).toBe('till-1');
+    expect((await resolveSession(ctx.db, b.token))?.terminalId).toBe('till-2');
+  });
+});
