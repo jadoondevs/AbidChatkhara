@@ -7,17 +7,19 @@ specific, non-obvious choice, see `docs/decisions/`.
 ## Status
 
 Built so far: **platform** (money type, event bus, SQLite/Kysely, migrations,
-the durable sync-queue seam), **identity** (users, PIN login, roles, audit
-log), **catalog** (categories, items, effective-dated prices, modifier
-groups/modifiers, availability), **ordering** (orders, lines, order-level
-discount proration, the open→billed pro-forma-bill flow, line and order
-void), and **partners** (partners, effective-dated ownership shares, the
-pure allocation engine, the append-only allocation ledger with snapshotted-
-share reversal). Everything else — billing/payments/printing, service
+the durable sync-queue seam, ESC/POS printing), **identity** (users, PIN
+login, roles, audit log), **catalog** (categories, items, effective-dated
+prices, modifier groups/modifiers, availability), **ordering** (orders,
+lines, order-level discount proration, the open→billed pro-forma-bill flow,
+line and order void), **partners** (partners, effective-dated ownership
+shares, the pure allocation engine, the append-only allocation ledger with
+snapshotted-share reversal), and **billing** (payment methods, split
+payments, the billed→closed settlement transition with gap-free invoice
+numbering, refunds, bill/receipt printing). Everything else — service
 charge, consumption, shifts, reporting, and the frontend — is designed for
-(the module boundaries and seams below
-exist) but not built yet. Each lands as its own milestone; this file's
-"Modules" section says, per module, what exists today.
+(the module boundaries and seams below exist) but not built yet. Each lands
+as its own milestone; this file's "Modules" section says, per module, what
+exists today.
 
 ## Why local-first and single-writer
 
@@ -63,10 +65,10 @@ else:
 apps/server/src/
   identity/       users, PIN login, roles, audit log            [BUILT]
   platform/       event bus, money-adjacent infra, db/migrations,
-                  sync-queue                                     [BUILT — see below]
+                  sync-queue, ESC/POS printing                   [BUILT — see below]
   catalog/        items, categories, modifiers, prices           [BUILT]
   ordering/       orders, order lines, discounts, lifecycle      [BUILT — open/billed/voided; see below]
-  billing/        payments, bill/receipt printing, invoice #s    [not yet built]
+  billing/        payments, bill/receipt printing, invoice #s    [BUILT — see below]
   tax/            configurable tax rules (disabled at launch)    [not yet built]
   partners/       partners, ownership shares, allocation engine  [BUILT — see below]
   consumption/    staff and owner meals                          [not yet built]
@@ -319,6 +321,76 @@ given instant, and writes `line_allocation` rows.
   10000) plus `scheduleOwnershipIntegrityCheck`, which runs it on an
   interval (default 24h) from `index.ts` and logs any violation found —
   there's nowhere else for a background finding like this to surface yet.
+
+## Billing, payments, and printing
+
+`apps/server/src/billing` implements stage 2 of the spec's two-stage
+billing flow (ordering built stage 1 — see the Ordering section above):
+payment methods, split payments, the `billed -> closed` settlement
+transition, refunds, and bill/receipt printing.
+
+- **Closing an order is one transaction spanning three modules'
+  service functions**, not billing reaching into ordering's or
+  partners' tables. `recordPayment` — once payments sum to
+  `total_minor` — calls `allocateInvoiceNumber` (billing's own
+  counter), `partners.allocateOrderInTransaction`, and
+  `ordering.closeOrderInTransaction`, all inside the one transaction it
+  already opened to insert the payment row. Each of those three
+  functions exists in exactly this composable, no-transaction-of-its-
+  own shape (see the refactor commit at the start of this milestone)
+  specifically so this could be one atomic commit rather than three
+  separately-committed steps with a window for a crash to leave them
+  inconsistent.
+- **Invoice numbers are allocated at settlement, never at print** — see
+  docs/decisions/007. A bill printed first can close after a bill
+  printed later and get the *higher* number; that's correct, not a race
+  to fix.
+- **The double-close and "settle out of print order" scenarios are both
+  proven, not just designed for.** `billing/service.test.ts` fires two
+  `recordPayment` calls at the same order via `Promise.allSettled` and
+  checks exactly one succeeds — the other gets `OrderStateError`
+  ("already settled"), not a duplicate invoice number or a duplicate
+  allocation row. A second test bills four tables, settles them in a
+  different order than they were billed (with one billed and settled in
+  the middle of the others), and checks invoice numbers come out
+  sequential and gap-free in *settlement* order, with every order's own
+  total unaffected by the others.
+- **A cash overpayment's change is computed, never stored.** `tenderedMinor`
+  (what the customer handed over) is an input to `recordPayment` used
+  only to compute `changeMinor` in the response — the `payment` row
+  itself always records the applied amount, matching the spec's literal
+  `payment` schema, which has no tendered/change columns.
+- **A refund reverses through the same snapshot mechanism partners
+  already built** (`reverseLineAllocationsInTransaction` /
+  `reverseOrderAllocationsInTransaction`, docs/decisions/006) and records
+  a negative `payment` row referencing the original via
+  `reversed_by_payment_id` — both in the one transaction `refundOrder`
+  opens, so a refund's ledger entry and its allocation reversal can never
+  commit one without the other.
+- **Printing is server-rendered and fire-and-forget.** `platform/printing`
+  is a small, purposeful ESC/POS command builder (`ReceiptBuilder`) plus
+  a raw-TCP client (`sendToPrinter`) — not a general ESC/POS library, just
+  the handful of commands a bill/receipt ticket and a drawer kick need.
+  `billing/printing.ts` assembles the actual ticket content (joining
+  order lines back to catalog item/modifier names, since the ticket is
+  rendered here, server-side, not by a frontend that already has that
+  data) and sends it. A print failure (`PrintError`: printer off,
+  wrong IP, connection timeout) never crashes the request that
+  triggered it — order-taking and billing must keep working with a dead
+  printer, per the local-first principle — it's mapped to a clean 502 at
+  the HTTP layer instead.
+- **The cash drawer only kicks on a receipt with a cash payment**, never
+  on a bill (there's nothing to make change for yet) and never on a
+  receipt paid entirely by wallet/bank transfer — `cashPaymentReceived`
+  on `ReceiptTicketData` is exactly that check, computed from the
+  order's actual payment rows.
+- **The printer's address is environment-configured**
+  (`POS_PRINTER_HOST`/`POS_PRINTER_PORT`), not a database table — the
+  spec's screen list has no "printer config" screen, so this follows
+  `POS_PORT`/`POS_DB_PATH`'s existing pattern instead of inventing an
+  admin UI surface nothing asked for. Print routes respond `503` with a
+  clear message when it's unset, rather than attempting to connect
+  anywhere.
 
 ## Testing approach
 
