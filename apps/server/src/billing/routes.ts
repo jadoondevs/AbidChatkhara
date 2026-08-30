@@ -8,7 +8,9 @@ import { ConcurrentModificationError, OrderStateError } from '../ordering/servic
 import type { Database } from '../platform/db/types.js';
 import { PrintError, type PrinterTarget } from '../platform/printing/client.js';
 import { printBill, printReceipt } from './printing.js';
-import { createPaymentMethod, listPaymentMethods, recordPayment, refundOrder, updatePaymentMethod } from './service.js';
+import { createPaymentMethod, listPaymentMethods, recordPayment, refundOrder, settleConsumption, updatePaymentMethod } from './service.js';
+
+const settlementTypeSchema = z.enum(['house_expense', 'payroll_deduction', 'partner_personal']);
 
 const paymentMethodKindSchema = z.enum(['cash', 'wallet', 'bank_transfer', 'card']);
 
@@ -33,6 +35,7 @@ const orderSummarySchema = z.object({
   channel: z.string(),
   tableLabel: z.string().nullable(),
   waiterId: z.number().int().nullable(),
+  beneficiaryPersonId: z.number().int().nullable(),
   openedAt: z.string(),
   billedAt: z.string().nullable(),
   closedAt: z.string().nullable(),
@@ -71,6 +74,29 @@ const refundResultSchema = z.object({
   refundPaymentId: z.number().int(),
   amountMinor: z.number().int(),
   allocationsReversed: z.number().int(),
+});
+
+const consumptionRecordSchema = z.object({
+  id: z.number().int(),
+  orderId: z.number().int(),
+  personId: z.number().int(),
+  personName: z.string(),
+  policySnapshot: z.object({
+    mealPolicy: z.enum(['free', 'discounted', 'full_price', 'payroll_deduction']),
+    mealDiscountBp: z.number().int(),
+  }),
+  menuValueMinor: z.number().int(),
+  chargedMinor: z.number().int(),
+  settlementMinor: z.number().int(),
+  settlementType: settlementTypeSchema.nullable(),
+  createdAt: z.string(),
+});
+
+const settleConsumptionResultSchema = z.object({
+  consumptionRecord: consumptionRecordSchema,
+  payment: paymentResultSchema.shape.payment.nullable(),
+  order: orderSummarySchema,
+  invoiceNo: z.number().int(),
 });
 
 export interface BillingPluginOptions {
@@ -187,6 +213,28 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
       const actor = requireAuth(request, reply);
       reply.code(201);
       return recordPayment(db, request.params.id, request.body, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  // ---- settling a staff/owner meal ----
+
+  app.post(
+    '/api/orders/:id/settle-consumption',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        body: z.object({
+          settlementType: settlementTypeSchema.optional(),
+          paymentMethodId: z.number().int().optional(),
+          referenceNo: z.string().optional(),
+        }),
+        response: { 201: settleConsumptionResultSchema },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireAuth(request, reply);
+      reply.code(201);
+      return settleConsumption(db, request.params.id, request.body, { actorId: actor.userId, terminalId: actor.terminalId });
     },
   );
 

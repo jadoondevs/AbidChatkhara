@@ -4,6 +4,7 @@ import type { Kysely } from 'kysely';
 import { z } from 'zod';
 import { billingRoutes } from './billing/routes.js';
 import { catalogRoutes } from './catalog/routes.js';
+import { consumptionRoutes } from './consumption/routes.js';
 import { resolveSession } from './identity/auth.js';
 import { identityRoutes } from './identity/routes.js';
 import { orderingRoutes } from './ordering/routes.js';
@@ -52,6 +53,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(catalogRoutes, { db: opts.db });
   await app.register(orderingRoutes, { db: opts.db });
   await app.register(partnersRoutes, { db: opts.db });
+  await app.register(consumptionRoutes, { db: opts.db });
   await app.register(billingRoutes, { db: opts.db, printer: opts.printer ?? null });
 
   // TODO(frontend milestone): register @fastify/static against
