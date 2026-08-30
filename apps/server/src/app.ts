@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { catalogRoutes } from './catalog/routes.js';
 import { resolveSession } from './identity/auth.js';
 import { identityRoutes } from './identity/routes.js';
+import { orderingRoutes } from './ordering/routes.js';
 import type { Database } from './platform/db/types.js';
 
 export interface BuildAppOptions {
@@ -43,6 +44,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   await app.register(identityRoutes, { db: opts.db });
   await app.register(catalogRoutes, { db: opts.db });
+  await app.register(orderingRoutes, { db: opts.db });
 
   // TODO(frontend milestone): register @fastify/static against
   // apps/frontend/dist and fall through to index.html for client-side

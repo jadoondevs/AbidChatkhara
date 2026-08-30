@@ -176,6 +176,12 @@ export async function listItems(
   return rows.map(toItemSummary);
 }
 
+/** A single item by id, or null. What ordering looks up when adding a line. */
+export async function getItem(db: Kysely<Database>, id: number): Promise<ItemSummary | null> {
+  const row = await db.selectFrom('item').selectAll().where('id', '=', id).executeTakeFirst();
+  return row ? toItemSummary(row) : null;
+}
+
 export interface UpdateItemInput {
   readonly name?: string | undefined;
   readonly categoryId?: number | undefined;
@@ -468,6 +474,12 @@ export async function listModifiers(db: Kysely<Database>, opts: { groupId?: numb
   if (opts.groupId !== undefined) query = query.where('group_id', '=', opts.groupId);
   const rows = await query.orderBy('name', 'asc').execute();
   return rows.map(toModifierSummary);
+}
+
+/** A single modifier by id, or null. What ordering looks up when adding a line's modifiers. */
+export async function getModifier(db: Kysely<Database>, id: number): Promise<ModifierSummary | null> {
+  const row = await db.selectFrom('modifier').selectAll().where('id', '=', id).executeTakeFirst();
+  return row ? toModifierSummary(row) : null;
 }
 
 export interface UpdateModifierInput {
