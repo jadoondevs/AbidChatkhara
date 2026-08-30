@@ -15,13 +15,16 @@ line and order void), **partners** (partners, effective-dated ownership
 shares, the pure allocation engine, the append-only allocation ledger with
 snapshotted-share reversal), **billing** (payment methods, split
 payments, the billed→closed settlement transition with gap-free invoice
-numbering, refunds, bill/receipt printing), and **gratuity** (the service
+numbering, refunds, bill/receipt printing), **gratuity** (the service
 charge recorded as a liability held for the waiter, never revenue; its own
-append-only ledger with reversal on full refund; waiter payout totals).
-Everything else — consumption, shifts, reporting, and the frontend — is
-designed for (the module boundaries and seams below exist) but not built
-yet. Each lands as its own milestone; this file's "Modules" section says,
-per module, what exists today.
+append-only ledger with reversal on full refund; waiter payout totals),
+and **consumption** (staff and owner meals — a named person, a per-person
+meal policy that decides what they're charged, and a settlement record
+for the gap, all while the owning partner is still credited in full).
+Everything else — shifts, reporting, and the frontend — is designed for
+(the module boundaries and seams below exist) but not built yet. Each
+lands as its own milestone; this file's "Modules" section says, per
+module, what exists today.
 
 ## Why local-first and single-writer
 
@@ -73,7 +76,7 @@ apps/server/src/
   billing/        payments, bill/receipt printing, invoice #s    [BUILT — see below]
   tax/            configurable tax rules (disabled at launch)    [not yet built]
   partners/       partners, ownership shares, allocation engine  [BUILT — see below]
-  consumption/    staff and owner meals                          [not yet built]
+  consumption/    staff and owner meals                          [BUILT — see below]
   gratuity/       service charge, waiter attribution              [BUILT — see below]
   shifts/         shift open/close, Z-reports                    [not yet built]
   reporting/      read-only cross-module queries                 [not yet built]
@@ -453,6 +456,83 @@ The module is small on purpose: one append-only table
   shift-close deliverable that belongs to the shifts milestone once
   shifts exist to scope it to. There is nothing for an HTTP route to do
   yet that isn't already reachable through billing's own routes.
+
+## Consumption (staff and owner meals)
+
+`apps/server/src/consumption` implements the spec's "Staff and owner
+meals": a named person (`person` — never free text, "so reports can
+total per person") consumes food that goes through the ordinary sales
+pipeline at full menu price, and what they actually pay is a completely
+separate figure, driven by their own meal policy.
+
+- **The order carries the full menu price; the discount lives entirely
+  outside the money pipeline.** `channel: 'staff_meal' | 'owner_meal'`
+  (already reserved on `order` since migration 0004) picks a person at
+  order-creation time, the same moment a dine_in order picks its waiter
+  — the spec's "Staff meal flow: pick person first". `setDiscount`
+  actively refuses a non-zero order-level discount on such an order,
+  because `net_sales_minor` doubles as both the pipeline's own figure
+  *and* `consumption_record.menu_value_minor` — an order discount here
+  would silently understate what the person owes AND what the owning
+  partner gets credited for, the opposite of the spec's "partner
+  allocations are written as usual, so the owning partner is credited
+  for food that was actually consumed."
+- **Ordering validates the person without importing consumption.**
+  `createOrder` reads the `person` table directly via Kysely — active,
+  right `kind` for the channel (`staff_meal` needs `kind: 'staff'`,
+  `owner_meal` needs `kind: 'partner'`) — the same "read the table
+  directly for a simple check" convention billing already uses for
+  `order`/`payment_method` (see the Billing section above). Importing
+  consumption's *service module* from ordering would create the one
+  import cycle this codebase otherwise avoids end to end: consumption
+  itself has to call back into ordering to close a settled meal, so the
+  dependency has to run one way only.
+- **Settling a meal is its own entry point, not a variant of
+  recordPayment.** `billing.settleConsumption` is `recordPayment`'s
+  sibling — same one-transaction shape (invoice number, partner
+  allocation, service charge entry, `closeOrderInTransaction`) — but a
+  different completion condition. `recordPayment` closes once payments
+  sum to `total_minor`; a staff/owner meal is very often not paying
+  `total_minor` at all, so `settleConsumption` instead computes
+  `chargedMinor` from the beneficiary's policy
+  (`consumption/policy.ts`'s pure `computeMealCharge`) and requires a
+  payment for exactly that figure when it's positive, writing none when
+  it's zero. Each entry point rejects the other's channel outright
+  (`recordPayment` on a staff/owner meal, or `settleConsumption` on a
+  customer order, both fail loudly rather than doing the wrong thing
+  quietly).
+- **"Must not count toward expected cash unless the person actually paid
+  cash" falls out of that structurally, not as a special case.** A free
+  or `payroll_deduction`-policy meal writes zero `payment` rows —
+  there's nothing to collect — so a later shift's cash reconciliation
+  will sum `payment` rows exactly the way it already does for every
+  other order and simply never see one. No filter, no channel check
+  anywhere in that future reconciliation code.
+- **`meal_policy` decides what's charged; `settlement_type` is the
+  caller's own choice for the gap, not derived from the policy** — see
+  docs/decisions/009 for the full reasoning, including why `free` and
+  `payroll_deduction` charge identically (nothing collected at the till
+  either way) and differ only in what `settlement_type` defaults to.
+- **The policy is snapshotted at settlement, not order-creation.**
+  `consumption_record.policy_snapshot` freezes whatever the person's
+  `meal_policy`/`meal_discount_bp` *are at the moment the order is
+  settled* — same "snapshot, never recompute" rule as ownership shares
+  (docs/decisions/006) — so a policy change afterward can never rewrite
+  an already-closed consumption_record, provable the same way: settle,
+  change the person's policy, reload the record, see it unchanged.
+- **No reversal column on `consumption_record`, unlike
+  `service_charge_entry`.** The spec's own schema for this table has no
+  `reverses_*` field — a refund of a staff/owner meal order still
+  reverses the payment and the partner allocation through the usual
+  mechanisms, but the consumption_record itself stands as the
+  historical fact of what was charged and settled.
+- **`listConsumptionRecords`** is this milestone's reporting seam, the
+  same role `waiterPayoutTotals` plays for gratuity: an itemised,
+  date-range-filterable query (spec: "menu value, amount charged, and
+  amount settled") that the reporting milestone builds its CSV export
+  and cross-report rollups (the daily sales "combined total" line, a
+  partner statement's customer-vs-consumption split) on top of, rather
+  than re-deriving from `order` rows.
 
 ## Testing approach
 

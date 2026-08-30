@@ -55,6 +55,7 @@ const orderSummarySchema = z.object({
   channel: orderChannelSchema,
   tableLabel: z.string().nullable(),
   waiterId: z.number().int().nullable(),
+  beneficiaryPersonId: z.number().int().nullable(),
   openedAt: z.string(),
   billedAt: z.string().nullable(),
   closedAt: z.string().nullable(),
@@ -140,8 +141,10 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
       schema: {
         body: z.object({
           orderType: orderTypeSchema,
+          channel: orderChannelSchema.optional(),
           tableLabel: z.string().min(1).optional(),
           waiterId: z.number().int().optional(),
+          beneficiaryPersonId: z.number().int().optional(),
         }),
         response: { 201: orderSummarySchema },
       },
