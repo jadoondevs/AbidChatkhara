@@ -11,6 +11,7 @@ import { orderingRoutes } from './ordering/routes.js';
 import { partnersRoutes } from './partners/routes.js';
 import type { Database } from './platform/db/types.js';
 import type { PrinterTarget } from './platform/printing/client.js';
+import { reportingRoutes } from './reporting/routes.js';
 import { shiftsRoutes } from './shifts/routes.js';
 import { taxRoutes } from './tax/routes.js';
 
@@ -58,6 +59,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(consumptionRoutes, { db: opts.db });
   await app.register(taxRoutes, { db: opts.db });
   await app.register(shiftsRoutes, { db: opts.db });
+  await app.register(reportingRoutes, { db: opts.db });
   await app.register(billingRoutes, { db: opts.db, printer: opts.printer ?? null });
 
   // TODO(frontend milestone): register @fastify/static against
