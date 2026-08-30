@@ -67,6 +67,7 @@ export interface OrderSummary {
   readonly channel: OrderChannel;
   readonly tableLabel: string | null;
   readonly waiterId: number | null;
+  readonly beneficiaryPersonId: number | null;
   readonly openedAt: string;
   readonly billedAt: string | null;
   readonly closedAt: string | null;
@@ -91,6 +92,7 @@ interface OrderRow {
   channel: OrderChannel;
   table_label: string | null;
   waiter_id: number | null;
+  beneficiary_person_id: number | null;
   opened_at: string;
   billed_at: string | null;
   closed_at: string | null;
@@ -116,6 +118,7 @@ function toOrderSummary(row: OrderRow): OrderSummary {
     channel: row.channel,
     tableLabel: row.table_label,
     waiterId: row.waiter_id,
+    beneficiaryPersonId: row.beneficiary_person_id,
     openedAt: row.opened_at,
     billedAt: row.billed_at,
     closedAt: row.closed_at,
@@ -235,8 +238,15 @@ export async function listOrders(db: Kysely<Database>, opts: ListOrdersOptions =
 
 export interface CreateOrderInput {
   readonly orderType: OrderType;
+  /** Defaults to 'customer'. staff_meal/owner_meal require a
+   * beneficiaryPersonId of the matching kind (see below) — this is the
+   * "pick person first" step of the spec's staff meal flow (screen 6),
+   * done once at order creation, same moment as picking the waiter for
+   * a dine_in order. */
+  readonly channel?: OrderChannel | undefined;
   readonly tableLabel?: string | undefined;
   readonly waiterId?: number | undefined;
+  readonly beneficiaryPersonId?: number | undefined;
 }
 
 /**
@@ -255,15 +265,38 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
     if (!waiter) throw new Error(`user ${input.waiterId} not found`);
   }
 
+  const channel = input.channel ?? 'customer';
+  // consumption's `person` table is read directly, not through its
+  // service module — that direction (ordering -> consumption) would
+  // create the one cycle this codebase otherwise avoids, since
+  // consumption itself needs to call back into ordering to close a
+  // settled meal. Same convention billing already uses for `order`/
+  // `payment_method` (see billing/service.ts): a simple existence/shape
+  // check reads the table directly; only an actual state-changing
+  // operation goes through the owning module's exported function.
+  if (channel === 'staff_meal' || channel === 'owner_meal') {
+    if (!input.beneficiaryPersonId) throw new OrderStateError(`${channel} orders require a beneficiary person`);
+    const expectedKind = channel === 'staff_meal' ? 'staff' : 'partner';
+    const person = await db.selectFrom('person').selectAll().where('id', '=', input.beneficiaryPersonId).executeTakeFirst();
+    if (!person) throw new Error(`person ${input.beneficiaryPersonId} not found`);
+    if (person.active !== 1) throw new OrderStateError(`person ${input.beneficiaryPersonId} is not active`);
+    if (person.kind !== expectedKind) {
+      throw new OrderStateError(`a ${channel} order requires a person of kind '${expectedKind}'; person ${input.beneficiaryPersonId} is '${person.kind}'`);
+    }
+  } else if (input.beneficiaryPersonId !== undefined) {
+    throw new OrderStateError('beneficiaryPersonId is only valid for staff_meal/owner_meal orders');
+  }
+
   const now = new Date().toISOString();
   const row = await db
     .insertInto('order')
     .values({
       invoice_no: null,
       order_type: input.orderType,
-      channel: 'customer',
+      channel,
       table_label: input.tableLabel ?? null,
       waiter_id: input.waiterId ?? null,
+      beneficiary_person_id: input.beneficiaryPersonId ?? null,
       opened_at: now,
       billed_at: null,
       closed_at: null,
@@ -570,6 +603,16 @@ export async function setDiscount(db: Kysely<Database>, orderId: number, input: 
 
   return db.transaction().execute(async (trx) => {
     const order = await requireOpenOrder(trx, orderId);
+    if (input.discountMinor > 0 && order.channel !== 'customer') {
+      // A staff/owner meal flows through the pipeline at full menu
+      // price on purpose (spec, "Staff and owner meals") — the
+      // partner allocation and the consumption record's menu_value_minor
+      // both read order.net_sales_minor, and an order-level discount
+      // here would silently understate both. What the person actually
+      // pays is a separate figure, computed from their own meal policy
+      // at settlement — see consumption/policy.ts.
+      throw new OrderStateError(`a ${order.channel} order is always billed at full menu price — use the person's meal policy instead of an order discount`);
+    }
     if (input.discountMinor > order.subtotal_minor) {
       throw new OrderStateError(`discount ${input.discountMinor} exceeds subtotal ${order.subtotal_minor}`);
     }

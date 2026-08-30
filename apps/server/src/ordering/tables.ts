@@ -12,6 +12,7 @@ export interface OrderTable {
   channel: OrderChannel;
   table_label: string | null;
   waiter_id: number | null;
+  beneficiary_person_id: number | null;
   opened_at: string;
   billed_at: string | null;
   closed_at: string | null;

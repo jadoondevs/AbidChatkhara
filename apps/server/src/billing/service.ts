@@ -1,5 +1,7 @@
 import { add, paisa, sub, sum, type Paisa } from '@pos/shared';
 import type { Kysely, Transaction } from 'kysely';
+import { recordConsumptionInTransaction, type ConsumptionRecordSummary, type SettlementType } from '../consumption/service.js';
+import { computeMealCharge } from '../consumption/policy.js';
 import { recordAudit } from '../identity/audit.js';
 import type { ActorContext } from '../identity/service.js';
 import { closeOrderInTransaction, OrderStateError, type OrderSummary } from '../ordering/service.js';
@@ -292,6 +294,9 @@ export async function recordPayment(
     if (order.status !== 'billed') {
       throw new OrderStateError(`order ${orderId} is ${order.status}, not billed — ${order.status === 'closed' ? 'this bill was already settled' : 'nothing to pay'}`);
     }
+    if (order.channel === 'staff_meal' || order.channel === 'owner_meal') {
+      throw new OrderStateError(`order ${orderId} is a ${order.channel} order — settle it via settleConsumption, not recordPayment`);
+    }
 
     const method = await trx.selectFrom('payment_method').selectAll().where('id', '=', input.paymentMethodId).executeTakeFirst();
     if (!method || method.active !== 1) throw new Error(`payment method ${input.paymentMethodId} not found or inactive`);
@@ -347,6 +352,7 @@ export async function recordPayment(
       channel: order.channel,
       tableLabel: order.table_label,
       waiterId: order.waiter_id,
+      beneficiaryPersonId: order.beneficiary_person_id,
       openedAt: order.opened_at,
       billedAt: order.billed_at,
       closedAt: order.closed_at,
@@ -387,6 +393,125 @@ export async function recordPayment(
       order: closedOrder,
       invoiceNo,
     };
+  });
+}
+
+// ---------------------------------------------------------------------
+// Settling a staff/owner meal (consumption)
+// ---------------------------------------------------------------------
+
+export interface SettleConsumptionInput {
+  readonly settlementType?: SettlementType | undefined;
+  /** Required whenever the beneficiary's meal policy leaves something
+   * charged (see consumption/policy.ts); must be omitted for a
+   * free/payroll_deduction meal, where nothing is collected at the till. */
+  readonly paymentMethodId?: number | undefined;
+  readonly referenceNo?: string | undefined;
+}
+
+export interface SettleConsumptionResult {
+  readonly consumptionRecord: ConsumptionRecordSummary;
+  readonly payment: PaymentSummary | null;
+  readonly order: OrderSummary;
+  readonly invoiceNo: number;
+}
+
+/**
+ * The staff/owner-meal counterpart to recordPayment: closes a billed
+ * staff_meal/owner_meal order in one transaction, the same shape —
+ * allocate the invoice number, write partner allocations (on the full,
+ * undiscounted net_sales_minor, per the spec: "partner allocations are
+ * written as usual"), write the service charge entry, transition to
+ * closed. What differs is the completion condition: there is no "sum of
+ * payments equals total_minor" here, because the beneficiary is very
+ * often not paying total_minor at all. Instead, this always closes in
+ * one call, and only inserts a `payment` row when the person's own meal
+ * policy actually leaves something charged.
+ *
+ * That's also exactly how the spec's "must not count toward expected
+ * cash unless the person actually paid cash" is satisfied structurally,
+ * not by a special case: a shift's cash reconciliation (a later
+ * milestone) will simply sum `payment` rows the same way it does for
+ * every other order, and a free or payroll_deduction meal never writes
+ * one.
+ */
+export async function settleConsumption(
+  db: Kysely<Database>,
+  orderId: number,
+  input: SettleConsumptionInput,
+  actor: BillingActor,
+): Promise<SettleConsumptionResult> {
+  return db.transaction().execute(async (trx) => {
+    const order = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirst();
+    if (!order) throw new Error(`order ${orderId} not found`);
+    if (order.status !== 'billed') {
+      throw new OrderStateError(`order ${orderId} is ${order.status}, not billed — ${order.status === 'closed' ? 'this bill was already settled' : 'nothing to settle'}`);
+    }
+    if (order.channel !== 'staff_meal' && order.channel !== 'owner_meal') {
+      throw new OrderStateError(`order ${orderId} is a '${order.channel}' order — settle it via recordPayment, not settleConsumption`);
+    }
+
+    // beneficiary_person_id is guaranteed non-null here: createOrder
+    // refuses to open a staff_meal/owner_meal order without one.
+    const person = await trx.selectFrom('person').selectAll().where('id', '=', order.beneficiary_person_id as number).executeTakeFirstOrThrow();
+    const { chargedMinor } = computeMealCharge(order.net_sales_minor, person.meal_policy, person.meal_discount_bp);
+
+    const now = new Date().toISOString();
+    let paymentRow: PaymentRow | null = null;
+    if (chargedMinor > 0) {
+      if (!input.paymentMethodId) {
+        throw new OrderStateError(`${person.name} owes ${chargedMinor} for this meal — a payment method is required to collect it`);
+      }
+      const method = await trx.selectFrom('payment_method').selectAll().where('id', '=', input.paymentMethodId).executeTakeFirst();
+      if (!method || method.active !== 1) throw new Error(`payment method ${input.paymentMethodId} not found or inactive`);
+      if ((method.kind === 'wallet' || method.kind === 'bank_transfer') && !input.referenceNo?.trim()) {
+        throw new OrderStateError(`a reference number is required for ${method.kind} payments`);
+      }
+
+      paymentRow = await trx
+        .insertInto('payment')
+        .values({
+          order_id: orderId,
+          payment_method_id: input.paymentMethodId,
+          amount_minor: chargedMinor,
+          reference_no: input.referenceNo ?? null,
+          received_by: actor.actorId,
+          received_at: now,
+          reversed_by_payment_id: null,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+      await recordAudit(trx, {
+        actorId: actor.actorId,
+        terminalId: actor.terminalId,
+        action: 'payment.record',
+        entity: 'order',
+        entityId: orderId,
+        after: toPaymentSummary(paymentRow),
+      });
+      eventBus.emit('PaymentRecorded', {
+        orderId,
+        paymentId: paymentRow.id,
+        amountMinor: paymentRow.amount_minor,
+        paymentMethodId: input.paymentMethodId,
+      });
+    } else if (input.paymentMethodId !== undefined) {
+      throw new OrderStateError(`${person.name}'s meal is not charged — there is nothing to collect a payment for`);
+    }
+
+    const invoiceNo = await allocateInvoiceNumber(trx);
+    await allocateOrderInTransaction(trx, orderId, new Date(now), actor);
+    await recordServiceChargeEntryInTransaction(trx, orderId, actor);
+    const consumptionRecord = await recordConsumptionInTransaction(trx, orderId, { settlementType: input.settlementType }, actor);
+    const closedOrder = await closeOrderInTransaction(trx, orderId, {
+      invoiceNo,
+      closedBy: actor.actorId,
+      terminalId: actor.terminalId,
+    });
+    eventBus.emit('OrderClosed', { orderId, invoiceNo, closedAt: now, closedBy: actor.actorId });
+
+    return { consumptionRecord, payment: paymentRow ? toPaymentSummary(paymentRow) : null, order: closedOrder, invoiceNo };
   });
 }
 

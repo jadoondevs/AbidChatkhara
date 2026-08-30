@@ -1,12 +1,13 @@
 import { paisa, sum } from '@pos/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCategory, createItem, setItemPrice } from '../catalog/service.js';
+import { createPerson } from '../consumption/service.js';
 import { createUser } from '../identity/service.js';
 import { addLine, billOrder, createOrder, getOrder, OrderStateError } from '../ordering/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createTestDb } from '../platform/db/test-helpers.js';
 import { eventBus } from '../platform/events/bus.js';
-import { createPaymentMethod, listPaymentMethods, recordPayment, refundOrder, updatePaymentMethod } from './service.js';
+import { createPaymentMethod, listPaymentMethods, recordPayment, refundOrder, settleConsumption, updatePaymentMethod } from './service.js';
 
 describe('billing/service', () => {
   let ctx: ReturnType<typeof createTestDb>;
@@ -205,6 +206,73 @@ describe('billing/service', () => {
       for (const settled of [a, b, c, d]) {
         expect(settled.totalMinor).toBe(1000_00);
       }
+    });
+  });
+
+  describe('settleConsumption', () => {
+    async function billedMealOrder(item: { id: number }, person: { id: number }, actor: { actorId: number; terminalId: string }) {
+      const order = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: person.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      return billOrder(ctx.db, order.id, {}, actor);
+    }
+
+    it('closes a payroll_deduction staff meal with no payment, but still allocates the full menu value to the owning partner', async () => {
+      const { actor, item, partner } = await setupBase();
+      const person = await createPerson(ctx.db, { name: 'Bilal', kind: 'staff', mealPolicy: 'payroll_deduction' }, actor);
+      const billed = await billedMealOrder(item, person, actor);
+
+      const result = await settleConsumption(ctx.db, billed.id, {}, actor);
+      expect(result.payment).toBeNull();
+      expect(result.order.status).toBe('closed');
+      expect(result.consumptionRecord).toMatchObject({ chargedMinor: 0, settlementMinor: 1000_00, settlementType: 'payroll_deduction' });
+
+      const allocations = await ctx.db.selectFrom('line_allocation').selectAll().where('partner_id', '=', partner.id).execute();
+      expect(sum(allocations.map((a) => a.amount_minor))).toBe(1000_00); // the partner is credited in full, discount notwithstanding
+    });
+
+    it('requires a payment method when the meal leaves a charge, and records it for exactly the charged amount', async () => {
+      const { actor, item, cash } = await setupBase();
+      const person = await createPerson(ctx.db, { name: 'Bilal', kind: 'staff', mealPolicy: 'discounted', mealDiscountBp: 4_000 }, actor);
+      const billed = await billedMealOrder(item, person, actor);
+
+      await expect(settleConsumption(ctx.db, billed.id, {}, actor)).rejects.toThrow(/payment method is required/);
+
+      const result = await settleConsumption(ctx.db, billed.id, { paymentMethodId: cash.id, settlementType: 'house_expense' }, actor);
+      expect(result.payment).toMatchObject({ amountMinor: 600_00, paymentMethodId: cash.id }); // 60% of 1000
+      expect(result.consumptionRecord).toMatchObject({ chargedMinor: 600_00, settlementMinor: 400_00, settlementType: 'house_expense' });
+    });
+
+    it('a full_price meal is fully collected and needs no settlement type', async () => {
+      const { actor, item, cash } = await setupBase();
+      const person = await createPerson(ctx.db, { name: 'Alice', kind: 'partner', mealPolicy: 'full_price' }, actor);
+      const order = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'owner_meal', beneficiaryPersonId: person.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      const billed = await billOrder(ctx.db, order.id, {}, actor);
+
+      const result = await settleConsumption(ctx.db, billed.id, { paymentMethodId: cash.id }, actor);
+      expect(result.payment).toMatchObject({ amountMinor: 1000_00 });
+      expect(result.consumptionRecord).toMatchObject({ chargedMinor: 1000_00, settlementMinor: 0, settlementType: null });
+    });
+
+    it('rejects settleConsumption on a plain customer order, and recordPayment on a staff/owner meal order', async () => {
+      const { actor, item, cash } = await setupBase();
+      const customerBilled = await billedOrder(item, actor);
+      await expect(settleConsumption(ctx.db, customerBilled.id, {}, actor)).rejects.toThrow(OrderStateError);
+
+      const person = await createPerson(ctx.db, { name: 'Bilal', kind: 'staff', mealPolicy: 'free' }, actor);
+      const mealBilled = await billedMealOrder(item, person, actor);
+      await expect(recordPayment(ctx.db, mealBilled.id, { paymentMethodId: cash.id, amountMinor: mealBilled.totalMinor }, actor)).rejects.toThrow(
+        OrderStateError,
+      );
+    });
+
+    it('cannot be settled twice', async () => {
+      const { actor, item } = await setupBase();
+      const person = await createPerson(ctx.db, { name: 'Bilal', kind: 'staff', mealPolicy: 'payroll_deduction' }, actor);
+      const billed = await billedMealOrder(item, person, actor);
+
+      await settleConsumption(ctx.db, billed.id, {}, actor);
+      await expect(settleConsumption(ctx.db, billed.id, {}, actor)).rejects.toThrow(/already settled/);
     });
   });
 

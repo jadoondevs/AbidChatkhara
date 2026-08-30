@@ -1,6 +1,7 @@
 import { paisa } from '@pos/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCategory, createItem, createModifier, createModifierGroup, linkModifierGroup, setItemPrice } from '../catalog/service.js';
+import { createPerson } from '../consumption/service.js';
 import { createUser } from '../identity/service.js';
 import { createTestDb } from '../platform/db/test-helpers.js';
 import { eventBus } from '../platform/events/bus.js';
@@ -75,6 +76,62 @@ describe('ordering/service', () => {
       const { orderActor } = await setupMenu();
       await expect(createOrder(ctx.db, { orderType: 'dine_in', tableLabel: 'T1', waiterId: 99999 }, orderActor)).rejects.toThrow(
         /not found/,
+      );
+    });
+  });
+
+  describe('createOrder — staff and owner meals', () => {
+    async function setupPeople(orderActor: { actorId: number; terminalId: string }) {
+      const staffPerson = await createPerson(ctx.db, { name: 'Bilal', kind: 'staff', mealPolicy: 'free' }, orderActor);
+      const partnerPerson = await createPerson(ctx.db, { name: 'Alice', kind: 'partner', mealPolicy: 'discounted', mealDiscountBp: 5_000 }, orderActor);
+      const inactivePerson = await createPerson(ctx.db, { name: 'Left', kind: 'staff', mealPolicy: 'free' }, orderActor);
+      await ctx.db.updateTable('person').set({ active: 0 }).where('id', '=', inactivePerson.id).execute();
+      return { staffPerson, partnerPerson, inactivePerson };
+    }
+
+    it('opens a staff_meal order for a staff-kind person', async () => {
+      const { orderActor } = await setupMenu();
+      const { staffPerson } = await setupPeople(orderActor);
+      const order = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: staffPerson.id }, orderActor);
+      expect(order).toMatchObject({ channel: 'staff_meal', beneficiaryPersonId: staffPerson.id });
+    });
+
+    it('opens an owner_meal order for a partner-kind person', async () => {
+      const { orderActor } = await setupMenu();
+      const { partnerPerson } = await setupPeople(orderActor);
+      const order = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'owner_meal', beneficiaryPersonId: partnerPerson.id }, orderActor);
+      expect(order).toMatchObject({ channel: 'owner_meal', beneficiaryPersonId: partnerPerson.id });
+    });
+
+    it('rejects a staff_meal/owner_meal order with no beneficiary person', async () => {
+      const { orderActor } = await setupMenu();
+      await expect(createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal' }, orderActor)).rejects.toThrow(/require a beneficiary person/);
+    });
+
+    it('rejects a staff_meal order given a partner-kind person, and vice versa', async () => {
+      const { orderActor } = await setupMenu();
+      const { staffPerson, partnerPerson } = await setupPeople(orderActor);
+      await expect(
+        createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: partnerPerson.id }, orderActor),
+      ).rejects.toThrow(/kind 'staff'/);
+      await expect(
+        createOrder(ctx.db, { orderType: 'takeaway', channel: 'owner_meal', beneficiaryPersonId: staffPerson.id }, orderActor),
+      ).rejects.toThrow(/kind 'partner'/);
+    });
+
+    it('rejects an inactive beneficiary person', async () => {
+      const { orderActor } = await setupMenu();
+      const { inactivePerson } = await setupPeople(orderActor);
+      await expect(
+        createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: inactivePerson.id }, orderActor),
+      ).rejects.toThrow(/not active/);
+    });
+
+    it('rejects a beneficiaryPersonId on a plain customer order', async () => {
+      const { orderActor } = await setupMenu();
+      const { staffPerson } = await setupPeople(orderActor);
+      await expect(createOrder(ctx.db, { orderType: 'takeaway', beneficiaryPersonId: staffPerson.id }, orderActor)).rejects.toThrow(
+        /only valid for staff_meal\/owner_meal/,
       );
     });
   });
@@ -211,6 +268,16 @@ describe('ordering/service', () => {
       const cleared = await setDiscount(ctx.db, order.id, { discountMinor: paisa(0) }, orderActor);
       expect(cleared.orderDiscountMinor).toBe(0);
       expect(cleared.discountReason).toBeNull();
+    });
+
+    it('rejects a non-zero discount on a staff/owner meal order — always full menu price', async () => {
+      const { item, orderActor } = await setupMenu();
+      const staffPerson = await createPerson(ctx.db, { name: 'Bilal', kind: 'staff', mealPolicy: 'free' }, orderActor);
+      const order = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: staffPerson.id }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1, modifierIds: [] }, orderActor);
+      await expect(setDiscount(ctx.db, order.id, { discountMinor: paisa(50_00), reason: 'x' }, orderActor)).rejects.toThrow(
+        /full menu price/,
+      );
     });
   });
 
