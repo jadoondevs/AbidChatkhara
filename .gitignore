@@ -1,0 +1,37 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+
+# database
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*-wal
+*-shm
+
+# local env / secrets
+.env
+.env.*
+!.env.example
+
+# backups
+backups/
+*.bak
+
+# logs
+*.log
+npm-debug.log*
+
+# editor / os
+.vscode/
+.idea/
+.DS_Store
+
+# coverage
+coverage/
