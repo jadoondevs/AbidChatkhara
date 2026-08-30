@@ -6,10 +6,11 @@ Pakistan. See `ARCHITECTURE.md` for how it's put together and why, and
 
 This system is being built incrementally, one milestone per branch, merged
 to `main` as each lands. **Status: platform, the money module, identity
-(users, PIN login, audit log), catalog (menu, prices, modifiers), and
-ordering (orders through the pro-forma bill, line/order void) are done.**
-The partner allocation engine, billing/payments/printing, service charge,
-consumption, shifts, reporting, and the frontend are not built yet — see
+(users, PIN login, audit log), catalog (menu, prices, modifiers), ordering
+(orders through the pro-forma bill, line/order void), and partners (the
+allocation engine, effective-dated ownership) are done.**
+Billing/payments/printing, service charge, consumption, shifts, reporting,
+and the frontend are not built yet — see
 `ARCHITECTURE.md` for the current module status.
 
 ## Requirements
