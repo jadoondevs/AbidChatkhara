@@ -4,6 +4,7 @@ import { getItem, getModifier, getCurrentPrice, listModifierGroupsForItem } from
 import { recordAudit } from '../identity/audit.js';
 import type { Database } from '../platform/db/types.js';
 import { eventBus } from '../platform/events/bus.js';
+import { computeTaxForOrder } from '../tax/service.js';
 import { computeOrderPipeline, type LineInput } from './pipeline.js';
 import type { OrderChannel, OrderStatus, OrderType } from './tables.js';
 
@@ -655,9 +656,10 @@ export interface BillOrderInput {
  * Sets status to 'billed' and computes the final total — but allocates
  * NO invoice number, records NO payment, and writes NO partner
  * allocations (those happen only at close, in the billing milestone).
- * Tax is hardcoded to zero here (no tax module wired in yet — see
- * ARCHITECTURE.md); enabling a tax rule later changes this line without
- * touching anything else in the pipeline.
+ * Tax (money pipeline stage 5) is computed here via tax/service.ts's
+ * computeTaxForOrder — zero on every order while no tax_rule is active,
+ * exactly as the spec requires, without a single line of code changing
+ * when a rule is turned on.
  */
 export async function billOrder(db: Kysely<Database>, orderId: number, input: BillOrderInput, actor: OrderActor): Promise<OrderDetail> {
   return db.transaction().execute(async (trx) => {
@@ -678,14 +680,15 @@ export async function billOrder(db: Kysely<Database>, orderId: number, input: Bi
       throw new OrderStateError('service charge requires a waiter; this order has none');
     }
 
-    const taxMinor = paisa(0); // no active tax rules — see the tax module (a later milestone)
+    const now = new Date();
+    const taxResult = await computeTaxForOrder(trx, orderId, order.order_type, now);
+    const taxMinor = taxResult.taxMinor;
     const preRound = add(add(order.net_sales_minor, taxMinor), serviceChargeMinor);
     const { total, adjustment } = roundToRupee(preRound);
 
-    const now = new Date().toISOString();
     const updated = await versionedUpdate(trx, orderId, order.version, {
       status: 'billed',
-      billed_at: now,
+      billed_at: now.toISOString(),
       tax_minor: taxMinor,
       service_charge_minor: serviceChargeMinor,
       rounding_adjustment_minor: adjustment,
