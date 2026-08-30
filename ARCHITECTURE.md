@@ -13,13 +13,15 @@ prices, modifier groups/modifiers, availability), **ordering** (orders,
 lines, order-level discount proration, the open→billed pro-forma-bill flow,
 line and order void), **partners** (partners, effective-dated ownership
 shares, the pure allocation engine, the append-only allocation ledger with
-snapshotted-share reversal), and **billing** (payment methods, split
+snapshotted-share reversal), **billing** (payment methods, split
 payments, the billed→closed settlement transition with gap-free invoice
-numbering, refunds, bill/receipt printing). Everything else — service
-charge, consumption, shifts, reporting, and the frontend — is designed for
-(the module boundaries and seams below exist) but not built yet. Each lands
-as its own milestone; this file's "Modules" section says, per module, what
-exists today.
+numbering, refunds, bill/receipt printing), and **gratuity** (the service
+charge recorded as a liability held for the waiter, never revenue; its own
+append-only ledger with reversal on full refund; waiter payout totals).
+Everything else — consumption, shifts, reporting, and the frontend — is
+designed for (the module boundaries and seams below exist) but not built
+yet. Each lands as its own milestone; this file's "Modules" section says,
+per module, what exists today.
 
 ## Why local-first and single-writer
 
@@ -72,7 +74,7 @@ apps/server/src/
   tax/            configurable tax rules (disabled at launch)    [not yet built]
   partners/       partners, ownership shares, allocation engine  [BUILT — see below]
   consumption/    staff and owner meals                          [not yet built]
-  gratuity/       service charge, waiter attribution              [not yet built]
+  gratuity/       service charge, waiter attribution              [BUILT — see below]
   shifts/         shift open/close, Z-reports                    [not yet built]
   reporting/      read-only cross-module queries                 [not yet built]
 
@@ -391,6 +393,66 @@ transition, refunds, and bill/receipt printing.
   admin UI surface nothing asked for. Print routes respond `503` with a
   clear message when it's unset, rather than attempting to connect
   anywhere.
+
+## Service charge / gratuity
+
+`apps/server/src/gratuity` treats a service charge as money the
+restaurant holds in custody for the waiter who earned it, never as the
+business's own revenue — see docs/decisions/008 for the full reasoning.
+The module is small on purpose: one append-only table
+(`service_charge_entry`) and the service functions that write to it.
+
+- **Recorded from billing's close transaction, not ordering's.** Ordering
+  computes and validates `order.service_charge_minor` when a bill is
+  printed (money pipeline stage 6), but the entry that actually credits a
+  waiter only gets written once the order is *paid* —
+  `recordServiceChargeEntryInTransaction` is called from
+  `billing.recordPayment`'s close branch, alongside
+  `partners.allocateOrderInTransaction`, inside the same transaction
+  that also calls `ordering.closeOrderInTransaction`. An order that's
+  billed but never settled never generates a payout entry, matching the
+  spec: nothing is owed until money actually changes hands.
+- **The liability framing is structural, not a filter.** Service charge
+  never enters `subtotal_minor` or `allocation_base_minor` in the money
+  pipeline (ordering) and is never summed into anything the partner
+  allocation engine reads — there's no code path by which it could reach
+  a partner's allocation, so no report or query needs to remember to
+  subtract it back out. `gratuity/service.test.ts` checks this directly:
+  an order with both a service charge and a partner-owned item closes
+  with `sum(line_allocation.amount_minor) === netSalesMinor`, not
+  `totalMinor`.
+- **A no-op is the common case, not an error.** Most orders carry no
+  service charge; `recordServiceChargeEntryInTransaction` reads
+  `order.service_charge_minor`, returns `null` and writes nothing when
+  it's zero, and only throws if it finds a *positive* charge with no
+  waiter to attribute it to — a defensive re-check of a guard ordering's
+  own `billOrder` already enforces, which should be unreachable in
+  practice.
+- **Reversal follows the full order, not the line.** A full-order refund
+  (`refundOrder` with no `orderLineId`) reverses every not-yet-reversed
+  entry for the order the same way partner allocation reverses — a new
+  row with a negated amount, referencing the original via
+  `reverses_entry_id`, never an edit — and is idempotent: calling it
+  again finds nothing left to reverse. A **partial**, single-line refund
+  deliberately does *not* touch the service charge: it's an order-level
+  figure, not a per-line one, and the waiter is still owed it regardless
+  of which item came back.
+- **`waiterPayoutTotals` is the source of truth for what's owed** — it
+  sums each waiter's entries (reversals net out automatically, since
+  they're just negative rows in the same sum) and drops any waiter whose
+  net is exactly zero, rather than a report deriving the figure by
+  summing `order.service_charge_minor` across orders after the fact. It
+  already takes an optional date range, ready for two later milestones to
+  reuse the exact same query shape: shifts (8) scoping it to one shift's
+  `opened_at`/`closed_at` window for the spec's payout sheet, and
+  reporting (9) for a "service charge report, per date range."
+- **No `gratuity/routes.ts` yet, deliberately.** The spec's 12-screen list
+  has no dedicated service-charge screen — entry happens implicitly
+  through the bill screen ordering already built (entering a service
+  charge amount when billing an order), and the payout sheet is a
+  shift-close deliverable that belongs to the shifts milestone once
+  shifts exist to scope it to. There is nothing for an HTTP route to do
+  yet that isn't already reachable through billing's own routes.
 
 ## Testing approach
 

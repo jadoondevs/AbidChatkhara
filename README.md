@@ -8,9 +8,11 @@ This system is being built incrementally, one milestone per branch, merged
 to `main` as each lands. **Status: platform, the money module, identity
 (users, PIN login, audit log), catalog (menu, prices, modifiers), ordering
 (orders through the pro-forma bill, line/order void), partners (the
-allocation engine, effective-dated ownership), and billing (payments,
-settlement, invoice numbering, refunds, ESC/POS printing) are done.**
-Service charge, consumption, shifts, reporting, and the frontend are not
+allocation engine, effective-dated ownership), billing (payments,
+settlement, invoice numbering, refunds, ESC/POS printing), and gratuity
+(service charge held as a liability for the waiter, not revenue; waiter
+payout totals) are done.**
+Consumption, shifts, reporting, and the frontend are not
 built yet — see `ARCHITECTURE.md` for the current module status.
 
 ## Requirements

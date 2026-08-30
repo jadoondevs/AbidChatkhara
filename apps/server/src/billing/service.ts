@@ -3,6 +3,7 @@ import type { Kysely, Transaction } from 'kysely';
 import { recordAudit } from '../identity/audit.js';
 import type { ActorContext } from '../identity/service.js';
 import { closeOrderInTransaction, OrderStateError, type OrderSummary } from '../ordering/service.js';
+import { recordServiceChargeEntryInTransaction, reverseServiceChargeEntriesInTransaction } from '../gratuity/service.js';
 import { allocateOrderInTransaction, reverseLineAllocationsInTransaction, reverseOrderAllocationsInTransaction } from '../partners/service.js';
 import type { Database } from '../platform/db/types.js';
 import { eventBus } from '../platform/events/bus.js';
@@ -367,6 +368,7 @@ export async function recordPayment(
     if (nowFullyPaid) {
       invoiceNo = await allocateInvoiceNumber(trx);
       await allocateOrderInTransaction(trx, orderId, new Date(now), actor);
+      await recordServiceChargeEntryInTransaction(trx, orderId, actor);
       closedOrder = await closeOrderInTransaction(trx, orderId, {
         invoiceNo,
         closedBy: actor.actorId,
@@ -422,13 +424,22 @@ export async function refundOrder(db: Kysely<Database>, orderId: number, input: 
       throw new OrderStateError(`order ${orderId} is ${order.status}, not closed — nothing to refund`);
     }
 
-    const reversals =
-      input.orderLineId !== undefined
-        ? await reverseLineAllocationsInTransaction(trx, input.orderLineId, actor)
-        : await reverseOrderAllocationsInTransaction(trx, orderId, actor);
+    const isFullOrderRefund = input.orderLineId === undefined;
+    const reversals = isFullOrderRefund
+      ? await reverseOrderAllocationsInTransaction(trx, orderId, actor)
+      : await reverseLineAllocationsInTransaction(trx, input.orderLineId, actor);
 
     if (reversals.length === 0) {
       throw new OrderStateError('nothing to refund — every allocation for this target has already been reversed');
+    }
+
+    // Service charge is order-level, not per-line — a full-order refund
+    // reverses it too (spec: "voids and refunds reverse the
+    // corresponding entry"); a partial, single-line refund leaves it
+    // alone, since the waiter is still owed it regardless of which item
+    // came back.
+    if (isFullOrderRefund) {
+      await reverseServiceChargeEntriesInTransaction(trx, orderId, actor);
     }
 
     const amountToRefund = paisa(-sum(reversals.map((r) => r.amountMinor))); // reversal amounts are negative; refund is positive
