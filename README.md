@@ -13,10 +13,11 @@ settlement, invoice numbering, refunds, ESC/POS printing), gratuity
 (service charge held as a liability for the waiter, not revenue; waiter
 payout totals), consumption (staff and owner meals — a per-person
 meal policy, settled separately from the partner's own full-value
-credit), tax (configurable rules, shipped with none active), and shifts
-(open/close, cash reconciliation, Z-report, waiter payout sheet) are
-done.** Reporting and the frontend are not built yet — see
-`ARCHITECTURE.md` for the current module status.
+credit), tax (configurable rules, shipped with none active), shifts
+(open/close, cash reconciliation, Z-report, waiter payout sheet), and
+reporting (all six spec-required reports, each CSV-exportable) are
+done.** The frontend is not built yet — see `ARCHITECTURE.md` for the
+current module status.
 
 ## Requirements
 
