@@ -8,13 +8,14 @@ specific, non-obvious choice, see `docs/decisions/`.
 
 Built so far: **platform** (money type, event bus, SQLite/Kysely, migrations,
 the durable sync-queue seam), **identity** (users, PIN login, roles, audit
-log), and **catalog** (categories, items, effective-dated prices, modifier
-groups/modifiers, availability). Everything else described in the original
-spec — ordering, the partner allocation engine, billing/payments/printing,
-service charge, consumption, shifts, reporting, and the frontend — is
-designed for (the module boundaries and seams below exist) but not built
-yet. Each lands as its own milestone; this file's "Modules" section says,
-per module, what exists today.
+log), **catalog** (categories, items, effective-dated prices, modifier
+groups/modifiers, availability), and **ordering** (orders, lines, order-level
+discount proration, the open→billed pro-forma-bill flow, line and order
+void). Everything else — the partner allocation engine,
+billing/payments/printing, service charge, consumption, shifts, reporting,
+and the frontend — is designed for (the module boundaries and seams below
+exist) but not built yet. Each lands as its own milestone; this file's
+"Modules" section says, per module, what exists today.
 
 ## Why local-first and single-writer
 
@@ -62,7 +63,7 @@ apps/server/src/
   platform/       event bus, money-adjacent infra, db/migrations,
                   sync-queue                                     [BUILT — see below]
   catalog/        items, categories, modifiers, prices           [BUILT]
-  ordering/       orders, order lines, discounts, lifecycle      [not yet built]
+  ordering/       orders, order lines, discounts, lifecycle      [BUILT — open/billed/voided; see below]
   billing/        payments, bill/receipt printing, invoice #s    [not yet built]
   tax/            configurable tax rules (disabled at launch)    [not yet built]
   partners/       partners, ownership shares, allocation engine  [not yet built]
@@ -200,6 +201,66 @@ Items, categories, modifier groups/modifiers, and item availability
   always inserts both rows in the same call. `changed_by`/`changed_at`
   plus the same `audit_log` entry every mutation writes are enough
   history for "who last 86'd this item and when" without a full ledger.
+
+## Ordering
+
+Orders, order lines, and order-line modifiers (`apps/server/src/ordering`).
+This module builds the order lifecycle up through the pro-forma bill —
+`open → billed` — and voiding, both line-level and whole-order. It
+deliberately stops there: `billed → closed` (invoice numbering, partner
+allocations, payment recording) is the billing module's job (a later
+milestone), because closing needs machinery — a dedicated invoice counter,
+the partner allocation engine, payment rows — that doesn't exist yet. See
+docs/decisions/005-ordering-stops-at-billed.md.
+
+- **No current order, anywhere.** Every mutating route takes an explicit
+  order id (`/api/orders/:id/...`); there is no route, no server-side
+  session field, no in-memory map keyed by terminal, that means "the
+  order this terminal is working on". Two terminals editing two different
+  orders never interact; the test proving this
+  (`service.test.ts`, "every order is independently addressable") adds
+  lines to two orders concurrently via `Promise.all` and checks each
+  order ends up with only its own lines.
+- **The money pipeline is recomputed from scratch on every change**, not
+  updated incrementally: `recomputeAndPersist` re-pulls every non-voided
+  line (using each line's own already-snapshotted unit price — a line's
+  price is fixed at the moment it's added and never re-fetched from the
+  catalog afterward) and re-runs `computeOrderPipeline`
+  (`ordering/pipeline.ts`) every time a line is added or voided, or the
+  discount changes. There is no incremental "subtract this line's old
+  contribution, add its new one" logic to keep in sync with the database
+  — the database is re-derived from its own current rows every time,
+  which is simple enough to trust and cheap enough (a handful of rows per
+  order) not to optimize.
+- **`order.version` is bumped on every write**, but in this milestone it's
+  forward-looking infrastructure more than an active guard: every
+  mutation here reads the current version and writes it back inside one
+  transaction, and Kysely serializes concurrent `.transaction()` calls
+  against this server's single SQLite connection, so no caller can
+  actually observe a stale version between two calls today. What
+  prevents an invalid double-transition right now is each function's own
+  status check (e.g. `billOrder` requires `status = 'open'`) — proven by
+  a test that fires two concurrent `billOrder` calls at the same order
+  and checks exactly one succeeds. `ConcurrentModificationError` becomes
+  load-bearing once a caller supplies a version it read *separately*
+  from the mutating call — exactly the spec's double-close test, which
+  the billing milestone's close operation will implement on top of the
+  same `versionedUpdate` helper already here.
+- **Order-level discount proration happens twice**, not once: first
+  across lines (by each line's full gross), then, within a line, again
+  across the item's own portion and each of its modifiers' portions — so
+  a modifier with its own partner ownership (spec: "modifier ownership is
+  optional") gets its own `net_sales_minor`/`allocation_base_minor` for
+  the allocation engine to use later. See
+  docs/decisions/004-order-line-modifier-allocation-breakdown.md.
+- **Tax is hardcoded to zero** in `billOrder` — there is no `tax_rule`
+  table or engine yet (that's a later milestone, alongside shifts). One
+  line in the pipeline changes when it lands; nothing else does.
+- **A modifier selection is validated against its group's min/max**, not
+  just checked for existing ids — `addLine` rejects a selection that
+  doesn't satisfy every linked modifier group's `min_select`/`max_select`
+  (the spec's "choose your protein: min 1 max 1"), and rejects a modifier
+  that belongs to a group not linked to the item at all.
 
 ## Testing approach
 
