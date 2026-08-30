@@ -1,0 +1,11 @@
+import type { IdentityTables } from '../../identity/tables.js';
+import type { SyncQueueTables } from '../sync-queue/tables.js';
+
+/**
+ * The single Kysely `Database` type, composed from each module's own
+ * table interfaces. Kysely needs one schema type to query against, but
+ * each module still owns and exports only its own slice — this file is
+ * the one place they're stitched together, and it grows by one `extends`
+ * per module, never by a module reaching into another's tables.
+ */
+export interface Database extends IdentityTables, SyncQueueTables {}
