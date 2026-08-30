@@ -1,0 +1,182 @@
+# Architecture
+
+This document describes the system as actually shipped, kept current in the
+same commit as any change that makes it wrong. For the reasoning behind a
+specific, non-obvious choice, see `docs/decisions/`.
+
+## Status
+
+Built so far: **platform** (money type, event bus, SQLite/Kysely, migrations,
+the durable sync-queue seam) and **identity** (users, PIN login, roles,
+audit log). Everything else described in the original spec — catalog,
+ordering, the partner allocation engine, billing/payments/printing, service
+charge, consumption, shifts, reporting, and the frontend — is designed for
+(the module boundaries and seams below exist) but not built yet. Each
+lands as its own milestone; this file's "Modules" section says, per module,
+what exists today.
+
+## Why local-first and single-writer
+
+This runs a single restaurant's till. It has to keep taking orders,
+printing bills, and closing sales with no internet connection — Wi-Fi to
+the printers and tablets is the only network dependency that can never be
+allowed to fail the business. That constraint shapes almost everything
+else:
+
+- **One process, one database file, one writer.** SQLite in WAL mode
+  (`apps/server/src/platform/db`) gives one writer and many concurrent
+  readers against a single file with no server process of its own to keep
+  running, back up, or fail over. There is no multi-device write path to
+  reconcile, no eventual consistency, no conflict resolution — a whole
+  class of distributed-systems problems simply doesn't exist here, because
+  it doesn't need to. Terminals (tablets) are thin clients against this one
+  server over the restaurant's local network; nothing is ever written
+  directly by a terminal.
+- **Everything the business needs to keep running is local.** Orders,
+  bills, payments, and shift close all work with the server unreachable
+  from the internet — because the server never needs the internet for any
+  of that. Anything that does need the internet (today: nothing at
+  launch; eventually, tax e-invoicing) goes through
+  `platform/sync-queue` — a durable, retrying queue backed by the same
+  SQLite database, so a task survives a server restart and gets retried
+  with backoff rather than being attempted once, inline, and lost if the
+  connection is down. Nothing customer-facing ever blocks on that queue
+  draining.
+- **better-sqlite3's synchronous API is used as-is, not wrapped in an
+  artificial async layer** (a worker thread, a queue, a promise wrapper
+  around a callback that was never actually async). A single writer with
+  synchronous calls is simpler to reason about than any alternative that
+  reintroduces concurrency this system doesn't need. Kysely's query
+  builder API is Promise-based (that's Kysely's normal API surface, and
+  what `dependencies` on that library get), but the underlying execution
+  against better-sqlite3 is still synchronous, single-threaded, and
+  immediate — there's no real asynchrony being added, just the type of
+  interface Kysely exposes.
+
+## Module layout
+
+```
+apps/server/src/
+  identity/       users, PIN login, roles, audit log            [BUILT]
+  platform/       event bus, money-adjacent infra, db/migrations,
+                  sync-queue                                     [BUILT — see below]
+  catalog/        items, categories, modifiers, prices           [not yet built]
+  ordering/       orders, order lines, discounts, lifecycle      [not yet built]
+  billing/        payments, bill/receipt printing, invoice #s    [not yet built]
+  tax/            configurable tax rules (disabled at launch)    [not yet built]
+  partners/       partners, ownership shares, allocation engine  [not yet built]
+  consumption/    staff and owner meals                          [not yet built]
+  gratuity/       service charge, waiter attribution              [not yet built]
+  shifts/         shift open/close, Z-reports                    [not yet built]
+  reporting/      read-only cross-module queries                 [not yet built]
+
+packages/shared/src/
+  money/          the Paisa branded type + all money arithmetic  [BUILT]
+
+apps/frontend/    React PWA                                      [not yet built]
+```
+
+Each module owns its own database tables and exposes a service interface
+(plain async functions taking a `Kysely<Database>` and returning typed
+results) — other modules call that interface, never another module's
+tables directly. Kysely needs one `Database` schema type to query against;
+`apps/server/src/platform/db/types.ts` is the one place that composes each
+module's own `XxxTables` interface into it, so the "who owns which table"
+boundary is enforced by where a table's type is *defined* (in that
+module), not weakened by where Kysely's schema type has to live.
+
+### Where the money module actually lives, and why
+
+The spec's module list names `platform/money`. The money module instead
+lives in the shared workspace package,
+`packages/shared/src/money`, consumed by both `apps/server` and (once it
+exists) `apps/frontend` as `@pos/shared`. This is a deliberate deviation:
+the spec separately requires "shared types between server and frontend via
+a workspace package", and money is exactly such a type — the frontend
+needs the identical `Paisa` type and the identical `format()` function the
+server uses, not a re-implementation of currency formatting maintained in
+two places. See `docs/decisions/001-integer-money-and-paisa-type.md`.
+Everywhere else, "platform/" concerns (the event bus, migrations, the
+sync-queue, and printing once it's built) live in `apps/server/src/platform`,
+matching the spec's layout exactly, because those are genuinely
+server-only (they touch the filesystem, TCP sockets, or the database) with
+nothing for the frontend to share.
+
+## Domain events
+
+`apps/server/src/platform/events` is an in-process, synchronous
+publish/subscribe bus (`EventBus`). The event map
+(`platform/events/types.ts`) starts empty on purpose: `platform/` doesn't
+know what `ordering` or `billing`'s events look like. A module that
+publishes an event augments the map via TypeScript declaration merging
+where it defines the event, e.g. (illustrative — `ordering` doesn't exist
+yet):
+
+```ts
+declare module '../../platform/events/types.js' {
+  interface DomainEventMap {
+    OrderClosed: { orderId: number; invoiceNo: number; closedAt: string /* ... */ };
+  }
+}
+```
+
+so `eventBus.on('OrderClosed', handler)` is fully typed without
+`platform/` ever importing from a domain module. `OrderClosed`,
+`OrderVoided`, `RefundIssued`, `PaymentRecorded`, and `ShiftClosed` will be
+added as the modules that emit them are built (ordering, billing, shifts).
+Nothing subscribes to anything yet — the bus exists and is tested, but its
+only current subscribers are its own test suite's fixtures.
+
+**Where inventory and staff management will plug in**: both are explicitly
+out of scope for this build (see the original spec's "Scope — do not
+build"). The seam for both is this event bus: inventory will subscribe to
+`OrderClosed` to deduct stock and will eventually supply an alternative
+weight to the partner-allocation `distribute()` primitive (a cost-based
+allocation mode, behind the same strategy interface the
+`NET_SALES_EX_TAX` mode will use); staff management will subscribe to
+`OrderClosed`/`ShiftClosed` for `payroll_deduction` consumption records and
+service-charge payout data. Neither module exists, and none of today's
+code imports from where they would live — the event bus is the whole
+integration surface they'll need.
+
+## Identity and attribution
+
+Every mutation anywhere in the system is expected to record who did it,
+when, and from which terminal (audit_log — `identity/tables.ts`). PIN login
+(`identity/auth.ts`) issues a bearer token whose *hash* (not the token
+itself) is stored in the `session` table, bound to the terminal it was
+issued from; a Fastify `preHandler` hook resolves that token into
+`request.actor` for every route. A module that needs to attribute a write
+takes an `ActorContext { actorId: number | null; terminalId: string }` —
+`actorId: null` is reserved for a genuine system action with no human actor
+(e.g. the eventual seed script creating the very first admin account,
+which can't attribute itself to a user that doesn't exist yet).
+
+Roles (`server | cashier | manager | admin`) are ranked
+(`identity/roles.ts`, `hasAtLeastRole`) so a route can require "at least
+manager" without hard-coding every qualifying role — used wherever the
+spec names a minimum role for an action (e.g. ownership edits require
+manager). Where the spec instead names an exact, non-hierarchical actor
+("the cashier enters the service charge"), the code checks the role
+directly rather than via the hierarchy helper.
+
+## Testing approach
+
+- **Unit tests** sit next to the code they test (`*.test.ts`), run by
+  Vitest across every workspace package from one root config.
+- **Property tests** (`fast-check`) verify the money module's invariants —
+  most importantly, that `distribute` (largest-remainder splitting, behind
+  both discount proration and, later, partner allocation) always sums
+  exactly to its input — over thousands of generated cases, not just a
+  handful of examples.
+- **The money-arithmetic guard** (`tools/money-arithmetic-guard`) is a
+  type-aware static check, run as part of the test suite: it builds a real
+  TypeScript `Program` over every source file in `apps/` and `packages/`
+  and fails if a `*` or `/` operator appears on a `Paisa`-typed operand
+  outside `packages/shared/src/money`. It has its own fixture-based unit
+  tests proving the detector actually catches what it claims to (multiply,
+  divide, compound-assignment, right-hand-side operands, exclusion paths)
+  before it's trusted as a gate over the real workspace.
+- **Integration tests** build the real Fastify app (`buildApp`) against a
+  real (in-memory) SQLite database and drive it through `app.inject()` —
+  no mocking of the database or the HTTP layer.
