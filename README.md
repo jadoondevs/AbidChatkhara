@@ -9,11 +9,12 @@ to `main` as each lands. **Status: platform, the money module, identity
 (users, PIN login, audit log), catalog (menu, prices, modifiers), ordering
 (orders through the pro-forma bill, line/order void), partners (the
 allocation engine, effective-dated ownership), billing (payments,
-settlement, invoice numbering, refunds, ESC/POS printing), and gratuity
+settlement, invoice numbering, refunds, ESC/POS printing), gratuity
 (service charge held as a liability for the waiter, not revenue; waiter
-payout totals) are done.**
-Consumption, shifts, reporting, and the frontend are not
-built yet — see `ARCHITECTURE.md` for the current module status.
+payout totals), and consumption (staff and owner meals — a per-person
+meal policy, settled separately from the partner's own full-value
+credit) are done.** Shifts, reporting, and the frontend are not built
+yet — see `ARCHITECTURE.md` for the current module status.
 
 ## Requirements
 
