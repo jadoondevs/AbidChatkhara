@@ -1,3 +1,4 @@
+import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import SqliteDatabase from 'better-sqlite3';
@@ -6,6 +7,13 @@ import { runMigrations } from './migrate.js';
 
 const migrationsDir = path.resolve(fileURLToPath(new URL('.', import.meta.url)), 'migrations');
 
+// Computed from the directory, not hardcoded, so this test doesn't need
+// editing every time a later milestone adds a migration file — it's
+// testing "every .sql file gets applied", not a specific list of names.
+const allMigrationFiles = readdirSync(migrationsDir)
+  .filter((name) => name.endsWith('.sql'))
+  .sort();
+
 function openMemoryDb(): SqliteDatabase.Database {
   const db = new SqliteDatabase(':memory:');
   db.pragma('foreign_keys = ON');
@@ -13,10 +21,10 @@ function openMemoryDb(): SqliteDatabase.Database {
 }
 
 describe('runMigrations', () => {
-  it('applies every migration file and records them', () => {
+  it('applies every migration file in order and records them', () => {
     const db = openMemoryDb();
     const applied = runMigrations(db, migrationsDir);
-    expect(applied).toEqual(['0001_identity.sql', '0002_sync_queue.sql']);
+    expect(applied).toEqual(allMigrationFiles);
 
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map(
       (r) => r.name,
@@ -35,7 +43,7 @@ describe('runMigrations', () => {
     const db = openMemoryDb();
     runMigrations(db, migrationsDir);
     const rows = db.prepare('SELECT id FROM schema_migrations ORDER BY id').all() as { id: string }[];
-    expect(rows.map((r) => r.id)).toEqual(['0001_identity.sql', '0002_sync_queue.sql']);
+    expect(rows.map((r) => r.id)).toEqual(allMigrationFiles);
   });
 
   it('rolls back a failing migration entirely rather than applying it partially', () => {

@@ -1,3 +1,4 @@
+import type { CatalogTables } from '../../catalog/tables.js';
 import type { IdentityTables } from '../../identity/tables.js';
 import type { SyncQueueTables } from '../sync-queue/tables.js';
 
@@ -8,4 +9,4 @@ import type { SyncQueueTables } from '../sync-queue/tables.js';
  * the one place they're stitched together, and it grows by one `extends`
  * per module, never by a module reaching into another's tables.
  */
-export interface Database extends IdentityTables, SyncQueueTables {}
+export interface Database extends IdentityTables, SyncQueueTables, CatalogTables {}
