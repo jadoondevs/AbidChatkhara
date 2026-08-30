@@ -22,11 +22,13 @@ append-only ledger with reversal on full refund; waiter payout totals),
 meal policy that decides what they're charged, and a settlement record
 for the gap, all while the owning partner is still credited in full),
 **tax** (configurable rules, shipped active-rule-free so `tax_minor` is
-zero everywhere until a manager turns one on), and **shifts** (open/
+zero everywhere until a manager turns one on), **shifts** (open/
 close, cash reconciliation scoped to what actually moved through that
-shift, a Z-report, and the waiter payout sheet). Everything else —
-reporting and the frontend — is designed for (the module boundaries and
-seams below exist) but not built yet. Each lands as its own milestone;
+shift, a Z-report, and the waiter payout sheet), and **reporting** (all
+six spec-required reports, CSV-exportable, built on the other modules'
+own read seams rather than re-deriving their figures). Everything else
+— the frontend — is designed for (the module boundaries and seams below
+exist) but not built yet. Each lands as its own milestone;
 this file's "Modules" section says, per module, what exists today.
 
 ## Why local-first and single-writer
@@ -82,7 +84,7 @@ apps/server/src/
   consumption/    staff and owner meals                          [BUILT — see below]
   gratuity/       service charge, waiter attribution              [BUILT — see below]
   shifts/         shift open/close, Z-reports                    [BUILT — see below]
-  reporting/      read-only cross-module queries                 [not yet built]
+  reporting/      read-only cross-module queries                 [BUILT — see below]
 
 packages/shared/src/
   money/          the Paisa branded type + all money arithmetic  [BUILT]
@@ -636,6 +638,65 @@ exactly what happened during that one shift.
   same figure — one ledger, one query, two callers (this module's Z-report
   companion, and the reporting milestone's own per-date-range service
   charge report).
+
+## Reporting
+
+`apps/server/src/reporting` implements the spec's six required reports
+— daily sales, partner statement, item mix, consumption, service
+charge, void and discount — each CSV-exportable. It's deliberately a
+thin layer: most of the real work already lives in the module that owns
+the underlying figures, and reporting composes those seams rather than
+re-deriving anything from raw tables a second time.
+
+- **Reuses, rather than reimplements, three other modules' own
+  query shapes.** The service-charge report is `gratuity.waiterPayoutTotals`
+  directly (already date-range- and shift-scoped); the consumption
+  report wraps `consumption.listConsumptionRecords` with a per-person
+  rollup; the daily sales report's payment-method breakdown is the same
+  shape shifts' own Z-report already built (kept as a small local
+  duplicate rather than a shared cross-module helper — the scoping key
+  differs, order-closed-date-range here versus `shift_id` there, and
+  the duplication is a few lines, not worth a fragile shared internal).
+- **The partner-statement reconciliation counts only *original*
+  allocations, deliberately excluding reversals** — see
+  docs/decisions/012. Summing every `line_allocation` row (reversals
+  included) against a line's immutable `allocation_base_minor` breaks
+  the moment an order in the period is refunded, since the base never
+  changes to reflect a refund but the reversal legitimately cancels the
+  original allocation — a false alarm on the one figure the spec
+  requires to always read zero. Excluding reversals makes the
+  reconciliation prove what it's actually meant to: that the allocation
+  engine distributed every sale correctly *at the time it happened*,
+  independent of anything that happened to that order afterwards.
+  `partnerStatement`'s own headline totals are a separate query and are
+  **not** narrowed this way — they're net of refunds, because "how much
+  has this partner actually been allocated" is exactly what a partner
+  wants their own statement to answer.
+- **Every date-range figure is scoped by which *order* closed in
+  range**, not by a sub-row's own timestamp — `order.closed_at` decides
+  which orders are in scope, and every related row (a payment, a
+  `line_allocation`, an `order_line`) is then pulled in by belonging to
+  one of those orders. This is what lets the reconciliation stay
+  correct regardless of when a refund happens: the reversal is tied to
+  the same order as the original sale, so scoping by the order's own
+  close date, not the reversal's timestamp, keeps them together.
+- **The void-and-discount report reads `audit_log`, not `order`/
+  `order_line`'s own columns** — only a line-level void carries its own
+  `void_approved_by`; an order-level void's and a discount's actor exist
+  only in the audit trail, which was built for exactly this
+  ("theft control": who did what, when). A line void's audit entry
+  stores the *line* id, not the order id, so its order is resolved via
+  one extra lookup against `order_line` — the only place this report
+  needs to reach past `audit_log` itself. A discount cleared back to
+  zero is excluded from the listing; it isn't a discount that needs
+  scrutiny.
+- **CSV export is one generic path, not a bespoke shape per report.**
+  `reporting/csv.ts`'s `toCsv` is pure and reused by every route: an
+  array response becomes one row per element; a single-object response
+  (daily sales, a partner statement) becomes one row of its own
+  top-level fields, with any nested array/object field (like
+  `paymentMethodBreakdown`) JSON-encoded inside its own cell rather than
+  spawning a second, nested CSV shape.
 
 ## Testing approach
 
