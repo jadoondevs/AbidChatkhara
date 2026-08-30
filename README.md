@@ -11,10 +11,12 @@ to `main` as each lands. **Status: platform, the money module, identity
 allocation engine, effective-dated ownership), billing (payments,
 settlement, invoice numbering, refunds, ESC/POS printing), gratuity
 (service charge held as a liability for the waiter, not revenue; waiter
-payout totals), and consumption (staff and owner meals — a per-person
+payout totals), consumption (staff and owner meals — a per-person
 meal policy, settled separately from the partner's own full-value
-credit) are done.** Shifts, reporting, and the frontend are not built
-yet — see `ARCHITECTURE.md` for the current module status.
+credit), tax (configurable rules, shipped with none active), and shifts
+(open/close, cash reconciliation, Z-report, waiter payout sheet) are
+done.** Reporting and the frontend are not built yet — see
+`ARCHITECTURE.md` for the current module status.
 
 ## Requirements
 

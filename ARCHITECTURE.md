@@ -18,13 +18,16 @@ payments, the billed→closed settlement transition with gap-free invoice
 numbering, refunds, bill/receipt printing), **gratuity** (the service
 charge recorded as a liability held for the waiter, never revenue; its own
 append-only ledger with reversal on full refund; waiter payout totals),
-and **consumption** (staff and owner meals — a named person, a per-person
+**consumption** (staff and owner meals — a named person, a per-person
 meal policy that decides what they're charged, and a settlement record
-for the gap, all while the owning partner is still credited in full).
-Everything else — shifts, reporting, and the frontend — is designed for
-(the module boundaries and seams below exist) but not built yet. Each
-lands as its own milestone; this file's "Modules" section says, per
-module, what exists today.
+for the gap, all while the owning partner is still credited in full),
+**tax** (configurable rules, shipped active-rule-free so `tax_minor` is
+zero everywhere until a manager turns one on), and **shifts** (open/
+close, cash reconciliation scoped to what actually moved through that
+shift, a Z-report, and the waiter payout sheet). Everything else —
+reporting and the frontend — is designed for (the module boundaries and
+seams below exist) but not built yet. Each lands as its own milestone;
+this file's "Modules" section says, per module, what exists today.
 
 ## Why local-first and single-writer
 
@@ -74,11 +77,11 @@ apps/server/src/
   catalog/        items, categories, modifiers, prices           [BUILT]
   ordering/       orders, order lines, discounts, lifecycle      [BUILT — open/billed/voided; see below]
   billing/        payments, bill/receipt printing, invoice #s    [BUILT — see below]
-  tax/            configurable tax rules (disabled at launch)    [not yet built]
+  tax/            configurable tax rules (disabled at launch)    [BUILT — see below]
   partners/       partners, ownership shares, allocation engine  [BUILT — see below]
   consumption/    staff and owner meals                          [BUILT — see below]
   gratuity/       service charge, waiter attribution              [BUILT — see below]
-  shifts/         shift open/close, Z-reports                    [not yet built]
+  shifts/         shift open/close, Z-reports                    [BUILT — see below]
   reporting/      read-only cross-module queries                 [not yet built]
 
 packages/shared/src/
@@ -533,6 +536,106 @@ separate figure, driven by their own meal policy.
   and cross-report rollups (the daily sales "combined total" line, a
   partner statement's customer-vs-consumption split) on top of, rather
   than re-deriving from `order` rows.
+
+## Tax (configurable, shipped disabled)
+
+`apps/server/src/tax` is the money pipeline's stage 5, built and wired
+in now — "build the module and the schema now... ship with no active
+rules" — so `tax_minor` is genuinely zero on every order today, and
+turning it on later is a configuration change, never a code change.
+
+- **`computeTax` (`tax/engine.ts`) is pure**, same shape as partners'
+  `allocateOne` and consumption's `computeMealCharge`: given each line's
+  already-discount-prorated `net_sales_minor`, the order's type, and a
+  list of rules, it returns a tax figure per line and a total — no
+  database, no I/O. `tax/service.ts`'s `computeTaxForOrder` is the
+  DB-facing wrapper `ordering.billOrder` calls: it loads the order's own
+  non-voided lines, each line's category (read directly from catalog's
+  `item` table — the same convention as every other "just a lookup"
+  cross-module read in this codebase), and every rule whose
+  `valid_from`/`valid_to` window covers the instant of billing.
+- **`inclusive` changes how a rule's rate is computed, never whether the
+  result is added to the total** — see docs/decisions/010. The money
+  pipeline's stage 7 total is one unconditional formula
+  (`net_sales_minor + tax_minor + service_charge_minor`); making
+  `inclusive` skip that addition would mean either breaking that
+  formula or shrinking `net_sales_minor` to compensate, and the latter
+  would shrink every partner's allocation too — exactly what the spec's
+  definition-of-done test forbids. `tax/service.test.ts` proves the
+  actual invariant end to end: bills and closes an order with an active
+  16% rule and a configured partner, and checks the partner's allocation
+  still equals the untaxed net sales exactly.
+- **A new money primitive, not a reuse of `distribute`/`splitByShares`.**
+  `packages/shared/src/money/rate.ts`'s `proportionalAmount` computes a
+  single proportional amount (`round_half_up(amount * numerator /
+  denominator)`) — unlike `distribute`, it isn't splitting a whole into
+  parts that must sum back exactly, so ordinary rounding, not
+  largest-remainder, is the right and simpler tool.
+- **A tax rule's rate, scope, and inclusive flag are set once, at
+  creation** — `updateTaxRule` only ever touches `name`/`active`/
+  `valid_to`, the same "correcting a figure is a new row, never an edit
+  to the historical one" principle as ownership and price
+  effective-dating, applied here to activation rather than a value.
+
+## Shifts
+
+`apps/server/src/shifts` is shift open/close and cash reconciliation
+(spec, screen 12): an opening float, a closing count, the variance
+between them, a Z-report, and the waiter payout sheet — all scoped to
+exactly what happened during that one shift.
+
+- **At most one shift is ever open at a time**, enforced in
+  `openShift` (SQLite has no direct "at most one row where X"
+  constraint) — a second `openShift` call while one is already open
+  fails with `ShiftStateError` rather than silently starting a second,
+  overlapping shift.
+- **`order.shift_id` is best-effort, not required** — `createOrder`
+  tags a new order with whichever shift is currently open, if any, but
+  does not refuse to open one when none is. See docs/decisions/011 for
+  why: making an open shift a hard prerequisite would be the
+  operationally correct rule, but it would also require every other
+  module's test fixtures (which call `createOrder` constantly and have
+  nothing to do with shifts) to open one first, for a rule real usage
+  already satisfies on its own by opening a shift before the day's first
+  order. `service_charge_entry.shift_id` follows the same rule, copied
+  from the order at the moment gratuity records the entry — and a
+  reversal always carries the *original* entry's `shift_id`, never
+  whatever shift is open when the reversal itself happens, so a refund
+  processed on a later shift still nets against the shift the original
+  charge belonged to.
+- **Refusing to close lists exactly what's blocking it.**
+  `ShiftCloseBlockedError` carries the full list of orders tagged with
+  this shift that are still `open` or `billed` (spec: "refuse to close
+  while any order is still open or awaiting payment, listing which
+  ones") — `shifts/routes.ts` maps it to a 422 with that list in the
+  response body, not just a count.
+- **Expected cash is opening float plus every unreversed *cash* payment**
+  against an order this shift owns — wallet/bank payments never count
+  (they're not physical cash in the drawer), and a cash refund is
+  already a negative `payment` row, so it nets out of the same sum with
+  no special case. A cash-collected service charge is already inside
+  that same payment amount (it's part of what the customer physically
+  handed over), so it's included in expected cash exactly as the spec
+  requires ("included in total_minor and therefore in expected cash")
+  without `computeExpectedCash` needing to know service charge exists
+  at all — the figure the Z-report shows *separately*
+  (`serviceChargeCollectedMinor`, from gratuity's own ledger) is what
+  makes it visible as cash held, not earned, per the spec, rather than
+  quietly folded into "sales."
+- **The Z-report splits customer sales from consumption** (spec:
+  "default the headline number to customer sales only, with consumption
+  on its own line directly beneath it") by grouping `order.channel`
+  within the shift, scoped by `order.shift_id`, rather than any date
+  math — since a shift's own orders are the natural, already-correct
+  scope, and by the time a shift is closeable every one of them is
+  `closed` or `voided` (the close-blocking check above guarantees it),
+  so summing every order regardless of status is equivalent to summing
+  only the closed ones.
+- **The payout sheet reuses gratuity's `waiterPayoutTotals`** with its
+  `shiftId` filter, rather than shifts computing its own version of the
+  same figure — one ledger, one query, two callers (this module's Z-report
+  companion, and the reporting milestone's own per-date-range service
+  charge report).
 
 ## Testing approach
 
