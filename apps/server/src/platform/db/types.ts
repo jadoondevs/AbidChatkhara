@@ -1,5 +1,6 @@
 import type { BillingTables } from '../../billing/tables.js';
 import type { CatalogTables } from '../../catalog/tables.js';
+import type { GratuityTables } from '../../gratuity/tables.js';
 import type { IdentityTables } from '../../identity/tables.js';
 import type { OrderingTables } from '../../ordering/tables.js';
 import type { PartnersTables } from '../../partners/tables.js';
@@ -18,4 +19,5 @@ export interface Database
     CatalogTables,
     OrderingTables,
     PartnersTables,
-    BillingTables {}
+    BillingTables,
+    GratuityTables {}
