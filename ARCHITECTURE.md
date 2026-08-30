@@ -7,13 +7,14 @@ specific, non-obvious choice, see `docs/decisions/`.
 ## Status
 
 Built so far: **platform** (money type, event bus, SQLite/Kysely, migrations,
-the durable sync-queue seam) and **identity** (users, PIN login, roles,
-audit log). Everything else described in the original spec — catalog,
-ordering, the partner allocation engine, billing/payments/printing, service
-charge, consumption, shifts, reporting, and the frontend — is designed for
-(the module boundaries and seams below exist) but not built yet. Each
-lands as its own milestone; this file's "Modules" section says, per module,
-what exists today.
+the durable sync-queue seam), **identity** (users, PIN login, roles, audit
+log), and **catalog** (categories, items, effective-dated prices, modifier
+groups/modifiers, availability). Everything else described in the original
+spec — ordering, the partner allocation engine, billing/payments/printing,
+service charge, consumption, shifts, reporting, and the frontend — is
+designed for (the module boundaries and seams below exist) but not built
+yet. Each lands as its own milestone; this file's "Modules" section says,
+per module, what exists today.
 
 ## Why local-first and single-writer
 
@@ -60,7 +61,7 @@ apps/server/src/
   identity/       users, PIN login, roles, audit log            [BUILT]
   platform/       event bus, money-adjacent infra, db/migrations,
                   sync-queue                                     [BUILT — see below]
-  catalog/        items, categories, modifiers, prices           [not yet built]
+  catalog/        items, categories, modifiers, prices           [BUILT]
   ordering/       orders, order lines, discounts, lifecycle      [not yet built]
   billing/        payments, bill/receipt printing, invoice #s    [not yet built]
   tax/            configurable tax rules (disabled at launch)    [not yet built]
@@ -159,6 +160,46 @@ spec names a minimum role for an action (e.g. ownership edits require
 manager). Where the spec instead names an exact, non-hierarchical actor
 ("the cashier enters the service charge"), the code checks the role
 directly rather than via the hierarchy helper.
+
+## Auth is wired once, globally, not per-module
+
+The bearer-token-to-`request.actor` resolution used to live inside
+`identity`'s own route plugin as a `preHandler` hook. That only ever
+protected identity's own routes: Fastify's plugin encapsulation means a
+hook registered inside one plugin does not apply to a sibling plugin
+registered separately (`app.register(catalogRoutes, ...)` next to
+`app.register(identityRoutes, ...)`) — each plugin is its own
+encapsulation context. Adding `catalog` surfaced this, so the hook moved
+to `app.ts`, registered on the root app instance before any route plugin
+is registered; every module's routes now get `request.actor` for free.
+`identity/require-auth.ts` exports the reusable `requireAuth`/`requireRole`
+helpers every module's routes call — a plain function taking
+`(request, reply)`, not tied to any one plugin's closure.
+
+## Catalog
+
+Items, categories, modifier groups/modifiers, and item availability
+(`apps/server/src/catalog`). Two things worth calling out:
+
+- **Only prices are effective-dated.** `item_price` follows the same
+  "close the open row, insert a new one, never update in place" pattern
+  ownership shares will use later (see the spec's partners section) —
+  enforced both by the service function (`setItemPrice`) and by a partial
+  unique index (`item_price(item_id) WHERE valid_to IS NULL`) so at most
+  one row can be open per item even if a caller bypassed the service
+  layer. Every other catalog field (an item's name, a modifier's price
+  delta, a category's sort order) is a plain mutable column — the spec's
+  domain model only shapes `item_price` this way, and a sale's own
+  `order_line` row will separately snapshot the unit price actually
+  charged, so catalog-level price history and a specific sale's price are
+  two different things protected two different ways.
+- **`item_availability` is a 1:1 sidecar, not a log.** One row per item,
+  updated in place (there's no historical-sales reason for it to be
+  append-only), created automatically alongside the item itself so no
+  caller ever has to handle "no availability recorded yet" — `createItem`
+  always inserts both rows in the same call. `changed_by`/`changed_at`
+  plus the same `audit_log` entry every mutation writes are enough
+  history for "who last 86'd this item and when" without a full ledger.
 
 ## Testing approach
 

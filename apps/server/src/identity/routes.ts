@@ -1,18 +1,11 @@
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { Kysely } from 'kysely';
 import type { Database } from '../platform/db/types.js';
-import { login, logout, resolveSession, type Session } from './auth.js';
-import { hasAtLeastRole, type Role } from './roles.js';
+import { login, logout } from './auth.js';
+import { requireAuth, requireRole } from './require-auth.js';
 import { changeUserRole, createUser, listUsers, setUserActive } from './service.js';
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    /** Set by the auth preHandler once the bearer token resolves to a live session. */
-    actor?: Session;
-  }
-}
 
 const roleSchema = z.enum(['server', 'cashier', 'manager', 'admin']);
 
@@ -29,33 +22,13 @@ export interface IdentityPluginOptions {
   db: Kysely<Database>;
 }
 
+/**
+ * Auth and user-management routes. The bearer-token-to-actor preHandler
+ * that these rely on (`request.actor`) is installed once, globally, in
+ * app.ts — not here — so every module's routes get it, not just these.
+ */
 export const identityRoutes: FastifyPluginAsync<IdentityPluginOptions> = async (fastify, { db }) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
-
-  app.addHook('preHandler', async (request: FastifyRequest) => {
-    const header = request.headers.authorization;
-    if (!header?.startsWith('Bearer ')) return;
-    const token = header.slice('Bearer '.length);
-    const session = await resolveSession(db, token);
-    if (session) request.actor = session;
-  });
-
-  function requireAuth(request: FastifyRequest, reply: FastifyReply): Session {
-    if (!request.actor) {
-      reply.code(401);
-      throw new Error('unauthorized');
-    }
-    return request.actor;
-  }
-
-  function requireRole(request: FastifyRequest, reply: FastifyReply, minimum: Role): Session {
-    const actor = requireAuth(request, reply);
-    if (!hasAtLeastRole(actor.role, minimum)) {
-      reply.code(403);
-      throw new Error('forbidden');
-    }
-    return actor;
-  }
 
   app.post(
     '/api/auth/login',
