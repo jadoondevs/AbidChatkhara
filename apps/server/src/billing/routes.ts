@@ -36,6 +36,7 @@ const orderSummarySchema = z.object({
   tableLabel: z.string().nullable(),
   waiterId: z.number().int().nullable(),
   beneficiaryPersonId: z.number().int().nullable(),
+  shiftId: z.number().int().nullable(),
   openedAt: z.string(),
   billedAt: z.string().nullable(),
   closedAt: z.string().nullable(),

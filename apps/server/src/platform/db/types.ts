@@ -5,6 +5,8 @@ import type { GratuityTables } from '../../gratuity/tables.js';
 import type { IdentityTables } from '../../identity/tables.js';
 import type { OrderingTables } from '../../ordering/tables.js';
 import type { PartnersTables } from '../../partners/tables.js';
+import type { ShiftsTables } from '../../shifts/tables.js';
+import type { TaxTables } from '../../tax/tables.js';
 import type { SyncQueueTables } from '../sync-queue/tables.js';
 
 /**
@@ -22,4 +24,6 @@ export interface Database
     PartnersTables,
     BillingTables,
     GratuityTables,
-    ConsumptionTables {}
+    ConsumptionTables,
+    TaxTables,
+    ShiftsTables {}

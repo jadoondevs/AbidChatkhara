@@ -13,6 +13,7 @@ export interface ServiceChargeEntrySummary {
   readonly orderId: number;
   readonly waiterId: number;
   readonly amountMinor: Paisa;
+  readonly shiftId: number | null;
   readonly createdBy: number;
   readonly createdAt: string;
   readonly reversesEntryId: number | null;
@@ -23,6 +24,7 @@ interface ServiceChargeEntryRow {
   order_id: number;
   waiter_id: number;
   amount_minor: Paisa;
+  shift_id: number | null;
   created_by: number;
   created_at: string;
   reverses_entry_id: number | null;
@@ -34,6 +36,7 @@ function toSummary(row: ServiceChargeEntryRow): ServiceChargeEntrySummary {
     orderId: row.order_id,
     waiterId: row.waiter_id,
     amountMinor: row.amount_minor,
+    shiftId: row.shift_id,
     createdBy: row.created_by,
     createdAt: row.created_at,
     reversesEntryId: row.reverses_entry_id,
@@ -54,7 +57,7 @@ export async function recordServiceChargeEntryInTransaction(
   orderId: number,
   actor: ServiceChargeActor,
 ): Promise<ServiceChargeEntrySummary | null> {
-  const order = await trx.selectFrom('order').select(['service_charge_minor', 'waiter_id']).where('id', '=', orderId).executeTakeFirstOrThrow();
+  const order = await trx.selectFrom('order').select(['service_charge_minor', 'waiter_id', 'shift_id']).where('id', '=', orderId).executeTakeFirstOrThrow();
   if (order.service_charge_minor <= 0) return null;
   if (order.waiter_id === null) {
     // ordering's billOrder already refuses a non-zero service charge on
@@ -70,6 +73,7 @@ export async function recordServiceChargeEntryInTransaction(
       order_id: orderId,
       waiter_id: order.waiter_id,
       amount_minor: order.service_charge_minor,
+      shift_id: order.shift_id,
       created_by: actor.actorId,
       created_at: now,
       reverses_entry_id: null,
@@ -128,6 +132,12 @@ export async function reverseServiceChargeEntriesInTransaction(
         order_id: original.order_id,
         waiter_id: original.waiter_id,
         amount_minor: paisa(-original.amount_minor),
+        // Carries the ORIGINAL entry's shift, not whatever shift happens
+        // to be open when the reversal is recorded — the reversal
+        // belongs to the shift whose payout it corrects, so a refund
+        // processed on a later shift doesn't wrongly show up as a debit
+        // against that later shift's own payout sheet.
+        shift_id: original.shift_id,
         created_by: actor.actorId,
         created_at: now,
         reverses_entry_id: original.id,
@@ -172,16 +182,19 @@ export interface WaiterPayoutLine {
 export interface PayoutRangeOptions {
   readonly fromInclusive?: string | undefined;
   readonly toExclusive?: string | undefined;
+  /** Scopes to one shift's entries via service_charge_entry.shift_id —
+   * the spec's "payout sheet listing amount owed per waiter for that
+   * shift". Combine with a date range, or use alone; either way,
+   * reversed entries net out the same way. */
+  readonly shiftId?: number | undefined;
 }
 
 /**
  * Amount currently owed to each waiter — reversed entries net out
  * automatically since they're just negative rows summed alongside the
- * originals. Unscoped (the whole system's history) unless a date range
- * is given; the shifts milestone will scope this to a shift's own
- * opened_at/closed_at window for the spec's per-shift payout sheet, and
- * the reporting milestone will expose the same date-range shape it
- * already has here for its own "per date range" service charge report.
+ * originals. Unscoped (the whole system's history) unless a shiftId or
+ * date range is given; the reporting milestone reuses this same shape
+ * for its own "per date range" service charge report.
  */
 export async function waiterPayoutTotals(db: Kysely<Database>, opts: PayoutRangeOptions = {}): Promise<WaiterPayoutLine[]> {
   let query = db
@@ -190,6 +203,7 @@ export async function waiterPayoutTotals(db: Kysely<Database>, opts: PayoutRange
     .select(['service_charge_entry.waiter_id as waiterId', 'user.name as waiterName', 'service_charge_entry.amount_minor as amountMinor']);
   if (opts.fromInclusive) query = query.where('service_charge_entry.created_at', '>=', opts.fromInclusive);
   if (opts.toExclusive) query = query.where('service_charge_entry.created_at', '<', opts.toExclusive);
+  if (opts.shiftId !== undefined) query = query.where('service_charge_entry.shift_id', '=', opts.shiftId);
 
   const rows = await query.execute();
   const byWaiter = new Map<number, { waiterName: string; amounts: Paisa[] }>();

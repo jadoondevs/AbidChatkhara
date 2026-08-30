@@ -6,6 +6,7 @@ export interface ServiceChargeEntryTable {
   order_id: number;
   waiter_id: number;
   amount_minor: Paisa;
+  shift_id: number | null;
   created_by: number;
   created_at: string;
   reverses_entry_id: number | null;

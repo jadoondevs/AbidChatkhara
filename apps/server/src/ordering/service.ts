@@ -4,6 +4,7 @@ import { getItem, getModifier, getCurrentPrice, listModifierGroupsForItem } from
 import { recordAudit } from '../identity/audit.js';
 import type { Database } from '../platform/db/types.js';
 import { eventBus } from '../platform/events/bus.js';
+import { computeTaxForOrder } from '../tax/service.js';
 import { computeOrderPipeline, type LineInput } from './pipeline.js';
 import type { OrderChannel, OrderStatus, OrderType } from './tables.js';
 
@@ -68,6 +69,7 @@ export interface OrderSummary {
   readonly tableLabel: string | null;
   readonly waiterId: number | null;
   readonly beneficiaryPersonId: number | null;
+  readonly shiftId: number | null;
   readonly openedAt: string;
   readonly billedAt: string | null;
   readonly closedAt: string | null;
@@ -93,6 +95,7 @@ interface OrderRow {
   table_label: string | null;
   waiter_id: number | null;
   beneficiary_person_id: number | null;
+  shift_id: number | null;
   opened_at: string;
   billed_at: string | null;
   closed_at: string | null;
@@ -119,6 +122,7 @@ function toOrderSummary(row: OrderRow): OrderSummary {
     tableLabel: row.table_label,
     waiterId: row.waiter_id,
     beneficiaryPersonId: row.beneficiary_person_id,
+    shiftId: row.shift_id,
     openedAt: row.opened_at,
     billedAt: row.billed_at,
     closedAt: row.closed_at,
@@ -287,6 +291,17 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
     throw new OrderStateError('beneficiaryPersonId is only valid for staff_meal/owner_meal orders');
   }
 
+  // Tags the order with whichever shift is currently open, the same
+  // direct-table-read convention as the person lookup above — not a
+  // hard requirement (a restaurant that hasn't opened a shift yet, or
+  // any test fixture that doesn't care about shifts, still works; the
+  // order simply carries shift_id: null). A real shift's own close-time
+  // cash reconciliation is necessarily scoped to orders that WERE
+  // tagged, so day-to-day operation opening a shift before taking orders
+  // is what actually keeps that reconciliation meaningful — see
+  // ARCHITECTURE.md's "Shifts" section.
+  const openShift = await db.selectFrom('shift').select('id').where('closed_at', 'is', null).executeTakeFirst();
+
   const now = new Date().toISOString();
   const row = await db
     .insertInto('order')
@@ -297,6 +312,7 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
       table_label: input.tableLabel ?? null,
       waiter_id: input.waiterId ?? null,
       beneficiary_person_id: input.beneficiaryPersonId ?? null,
+      shift_id: openShift?.id ?? null,
       opened_at: now,
       billed_at: null,
       closed_at: null,
@@ -655,9 +671,10 @@ export interface BillOrderInput {
  * Sets status to 'billed' and computes the final total — but allocates
  * NO invoice number, records NO payment, and writes NO partner
  * allocations (those happen only at close, in the billing milestone).
- * Tax is hardcoded to zero here (no tax module wired in yet — see
- * ARCHITECTURE.md); enabling a tax rule later changes this line without
- * touching anything else in the pipeline.
+ * Tax (money pipeline stage 5) is computed here via tax/service.ts's
+ * computeTaxForOrder — zero on every order while no tax_rule is active,
+ * exactly as the spec requires, without a single line of code changing
+ * when a rule is turned on.
  */
 export async function billOrder(db: Kysely<Database>, orderId: number, input: BillOrderInput, actor: OrderActor): Promise<OrderDetail> {
   return db.transaction().execute(async (trx) => {
@@ -678,14 +695,15 @@ export async function billOrder(db: Kysely<Database>, orderId: number, input: Bi
       throw new OrderStateError('service charge requires a waiter; this order has none');
     }
 
-    const taxMinor = paisa(0); // no active tax rules — see the tax module (a later milestone)
+    const now = new Date();
+    const taxResult = await computeTaxForOrder(trx, orderId, order.order_type, now);
+    const taxMinor = taxResult.taxMinor;
     const preRound = add(add(order.net_sales_minor, taxMinor), serviceChargeMinor);
     const { total, adjustment } = roundToRupee(preRound);
 
-    const now = new Date().toISOString();
     const updated = await versionedUpdate(trx, orderId, order.version, {
       status: 'billed',
-      billed_at: now,
+      billed_at: now.toISOString(),
       tax_minor: taxMinor,
       service_charge_minor: serviceChargeMinor,
       rounding_adjustment_minor: adjustment,
