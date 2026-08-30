@@ -1,0 +1,40 @@
+import type { Paisa } from '@pos/shared';
+import type { Generated } from 'kysely';
+
+export type PaymentMethodKind = 'cash' | 'wallet' | 'bank_transfer' | 'card';
+
+export interface PaymentMethodTable {
+  id: Generated<number>;
+  code: string;
+  display_name: string;
+  kind: PaymentMethodKind;
+  active: number;
+  sort_order: number;
+  print_on_bill: number;
+  account_title: string | null;
+  account_number: string | null;
+  bank_name: string | null;
+  instructions_line: string | null;
+}
+
+export interface PaymentTable {
+  id: Generated<number>;
+  order_id: number;
+  payment_method_id: number;
+  amount_minor: Paisa;
+  reference_no: string | null;
+  received_by: number;
+  received_at: string;
+  reversed_by_payment_id: number | null;
+}
+
+export interface InvoiceCounterTable {
+  id: number;
+  next_value: number;
+}
+
+export interface BillingTables {
+  payment_method: PaymentMethodTable;
+  payment: PaymentTable;
+  invoice_counter: InvoiceCounterTable;
+}
