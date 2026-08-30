@@ -694,6 +694,56 @@ export async function reopenOrder(db: Kysely<Database>, orderId: number, actor: 
   });
 }
 
+export interface CloseOrderInput {
+  readonly invoiceNo: number;
+  readonly closedBy: number;
+  readonly terminalId: string;
+}
+
+/**
+ * The `billed -> closed` state transition — ordering's own piece of the
+ * spec's two-stage close. This is the ONLY place that ever writes
+ * `invoice_no`/`closed_at`/`closed_by`; billing (which owns payments and
+ * the invoice counter) calls this from inside its own close transaction
+ * once it has verified payments sum to `total_minor` and allocated the
+ * invoice number — ordering never touches payments or invoice numbering
+ * itself, only its own table. Composable into a caller's transaction
+ * (like partners' `allocateOrderInTransaction`) so allocating the
+ * invoice number, writing partner allocations, and this transition all
+ * commit together or not at all, per the spec's close requirement.
+ */
+export async function closeOrderInTransaction(
+  trx: Transaction<Database>,
+  orderId: number,
+  input: CloseOrderInput,
+): Promise<OrderSummary> {
+  const order = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirst();
+  if (!order) throw new Error(`order ${orderId} not found`);
+  if (order.status !== 'billed') {
+    throw new OrderStateError(`order ${orderId} is ${order.status}, not billed — cannot close`);
+  }
+
+  const now = new Date().toISOString();
+  const updated = await versionedUpdate(trx, orderId, order.version, {
+    status: 'closed',
+    closed_at: now,
+    closed_by: input.closedBy,
+    invoice_no: input.invoiceNo,
+  });
+
+  await recordAudit(trx, {
+    actorId: input.closedBy,
+    terminalId: input.terminalId,
+    action: 'order.close',
+    entity: 'order',
+    entityId: orderId,
+    before: { status: 'billed' },
+    after: { status: 'closed', invoiceNo: input.invoiceNo },
+  });
+
+  return toOrderSummary(updated);
+}
+
 // ---------------------------------------------------------------------
 // Order-level void
 // ---------------------------------------------------------------------

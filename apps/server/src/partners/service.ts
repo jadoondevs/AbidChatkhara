@@ -259,100 +259,114 @@ export interface LineAllocationRow {
  * transaction only has to call it, not design it.
  */
 export async function allocateOrder(db: Kysely<Database>, orderId: number, atInstant: Date, actor: ActorContext): Promise<LineAllocationRow[]> {
-  return db.transaction().execute(async (trx) => {
-    const lines = await trx.selectFrom('order_line').selectAll().where('order_id', '=', orderId).where('voided', '=', 0).execute();
-    const modifiers = await trx
-      .selectFrom('order_line_modifier')
-      .selectAll()
-      .where(
-        'order_line_id',
-        'in',
-        lines.map((l) => l.id),
-      )
-      .execute();
+  return db.transaction().execute((trx) => allocateOrderInTransaction(trx, orderId, atInstant, actor));
+}
 
-    const targets: AllocationTarget[] = [];
-    const targetLineId = new Map<string, { orderLineId: number; orderLineModifierId: number | null }>();
-    // Two lines can be the same item (a dish ordered in two separate
-    // addLine calls) — cache each item's/modifier's ownership lookup
-    // across the whole order rather than re-querying it per line.
-    const itemOwnershipCache = new Map<number, OwnershipShare[]>();
-    const modifierOwnershipCache = new Map<number, OwnershipShare[]>();
+/**
+ * The same logic as `allocateOrder`, but running inside a transaction
+ * the caller already holds open — what billing's close operation calls,
+ * so allocating an order's revenue happens in the same atomic
+ * transaction as allocating its invoice number and recording its
+ * closure, rather than as a second, separately-committed step.
+ */
+export async function allocateOrderInTransaction(
+  trx: Transaction<Database>,
+  orderId: number,
+  atInstant: Date,
+  actor: ActorContext,
+): Promise<LineAllocationRow[]> {
+  const lines = await trx.selectFrom('order_line').selectAll().where('order_id', '=', orderId).where('voided', '=', 0).execute();
+  const modifiers = await trx
+    .selectFrom('order_line_modifier')
+    .selectAll()
+    .where(
+      'order_line_id',
+      'in',
+      lines.map((l) => l.id),
+    )
+    .execute();
 
-    for (const line of lines) {
-      const lineModifiers = modifiers.filter((m) => m.order_line_id === line.id);
-      let itemOwnBase = line.allocation_base_minor;
+  const targets: AllocationTarget[] = [];
+  const targetLineId = new Map<string, { orderLineId: number; orderLineModifierId: number | null }>();
+  // Two lines can be the same item (a dish ordered in two separate
+  // addLine calls) — cache each item's/modifier's ownership lookup
+  // across the whole order rather than re-querying it per line.
+  const itemOwnershipCache = new Map<number, OwnershipShare[]>();
+  const modifierOwnershipCache = new Map<number, OwnershipShare[]>();
 
-      for (const modifier of lineModifiers) {
-        let modifierShares = modifierOwnershipCache.get(modifier.modifier_id);
-        if (!modifierShares) {
-          modifierShares = await getActiveModifierOwnership(trx, modifier.modifier_id, atInstant);
-          modifierOwnershipCache.set(modifier.modifier_id, modifierShares);
-        }
-        if (modifierShares.length === 0) continue; // follows the item's own ownership — stays in itemOwnBase
+  for (const line of lines) {
+    const lineModifiers = modifiers.filter((m) => m.order_line_id === line.id);
+    let itemOwnBase = line.allocation_base_minor;
 
-        itemOwnBase = paisa(itemOwnBase - modifier.allocation_base_minor);
-        const key = `modifier:${modifier.id}`;
-        targets.push({ key, allocationBaseMinor: modifier.allocation_base_minor, shares: modifierShares, allocationBaseMode: 'NET_SALES_EX_TAX' });
-        targetLineId.set(key, { orderLineId: line.id, orderLineModifierId: modifier.id });
+    for (const modifier of lineModifiers) {
+      let modifierShares = modifierOwnershipCache.get(modifier.modifier_id);
+      if (!modifierShares) {
+        modifierShares = await getActiveModifierOwnership(trx, modifier.modifier_id, atInstant);
+        modifierOwnershipCache.set(modifier.modifier_id, modifierShares);
       }
+      if (modifierShares.length === 0) continue; // follows the item's own ownership — stays in itemOwnBase
 
-      let itemShares = itemOwnershipCache.get(line.item_id);
-      if (!itemShares) {
-        itemShares = await getActiveItemOwnership(trx, line.item_id, atInstant);
-        itemOwnershipCache.set(line.item_id, itemShares);
-      }
-      const key = `line:${line.id}`;
-      targets.push({ key, allocationBaseMinor: itemOwnBase, shares: itemShares, allocationBaseMode: 'NET_SALES_EX_TAX' });
-      targetLineId.set(key, { orderLineId: line.id, orderLineModifierId: null });
+      itemOwnBase = paisa(itemOwnBase - modifier.allocation_base_minor);
+      const key = `modifier:${modifier.id}`;
+      targets.push({ key, allocationBaseMinor: modifier.allocation_base_minor, shares: modifierShares, allocationBaseMode: 'NET_SALES_EX_TAX' });
+      targetLineId.set(key, { orderLineId: line.id, orderLineModifierId: modifier.id });
     }
 
-    const allocated: AllocatedAmount[] = allocateAll(targets);
-
-    const now = new Date().toISOString();
-    const written: LineAllocationRow[] = [];
-    for (const a of allocated) {
-      const target = targetLineId.get(a.key);
-      if (!target) throw new Error(`allocateOrder: no line mapping for allocation target "${a.key}"`); // unreachable
-      const row = await trx
-        .insertInto('line_allocation')
-        .values({
-          order_line_id: target.orderLineId,
-          order_line_modifier_id: target.orderLineModifierId,
-          partner_id: a.partnerId,
-          share_bp_snapshot: a.shareBpSnapshot,
-          amount_minor: a.amountMinor,
-          allocation_base_mode: a.allocationBaseMode,
-          created_at: now,
-          reverses_allocation_id: null,
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow();
-      written.push(toLineAllocationRow(row));
+    let itemShares = itemOwnershipCache.get(line.item_id);
+    if (!itemShares) {
+      itemShares = await getActiveItemOwnership(trx, line.item_id, atInstant);
+      itemOwnershipCache.set(line.item_id, itemShares);
     }
+    const key = `line:${line.id}`;
+    targets.push({ key, allocationBaseMinor: itemOwnBase, shares: itemShares, allocationBaseMode: 'NET_SALES_EX_TAX' });
+    targetLineId.set(key, { orderLineId: line.id, orderLineModifierId: null });
+  }
 
-    // Defense in depth: everything just allocated must sum to the
-    // order's own net sales — the reconciliation the partner-statement
-    // report will surface later, checked here before it's ever wrong.
-    const order = await trx.selectFrom('order').select('net_sales_minor').where('id', '=', orderId).executeTakeFirstOrThrow();
-    const totalAllocated = sum(written.map((w) => w.amountMinor));
-    if (totalAllocated !== order.net_sales_minor) {
-      throw new Error(
-        `allocateOrder: allocated ${totalAllocated} but order ${orderId}'s net_sales_minor is ${order.net_sales_minor} — refusing to commit`,
-      );
-    }
+  const allocated: AllocatedAmount[] = allocateAll(targets);
 
-    await recordAudit(trx, {
-      actorId: actor.actorId,
-      terminalId: actor.terminalId,
-      action: 'order.allocate',
-      entity: 'order',
-      entityId: orderId,
-      after: { count: written.length, totalAllocated },
-    });
+  const now = new Date().toISOString();
+  const written: LineAllocationRow[] = [];
+  for (const a of allocated) {
+    const target = targetLineId.get(a.key);
+    if (!target) throw new Error(`allocateOrder: no line mapping for allocation target "${a.key}"`); // unreachable
+    const row = await trx
+      .insertInto('line_allocation')
+      .values({
+        order_line_id: target.orderLineId,
+        order_line_modifier_id: target.orderLineModifierId,
+        partner_id: a.partnerId,
+        share_bp_snapshot: a.shareBpSnapshot,
+        amount_minor: a.amountMinor,
+        allocation_base_mode: a.allocationBaseMode,
+        created_at: now,
+        reverses_allocation_id: null,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    written.push(toLineAllocationRow(row));
+  }
 
-    return written;
+  // Defense in depth: everything just allocated must sum to the
+  // order's own net sales — the reconciliation the partner-statement
+  // report will surface later, checked here before it's ever wrong.
+  const order = await trx.selectFrom('order').select('net_sales_minor').where('id', '=', orderId).executeTakeFirstOrThrow();
+  const totalAllocated = sum(written.map((w) => w.amountMinor));
+  if (totalAllocated !== order.net_sales_minor) {
+    throw new Error(
+      `allocateOrder: allocated ${totalAllocated} but order ${orderId}'s net_sales_minor is ${order.net_sales_minor} — refusing to commit`,
+    );
+  }
+
+  await recordAudit(trx, {
+    actorId: actor.actorId,
+    terminalId: actor.terminalId,
+    action: 'order.allocate',
+    entity: 'order',
+    entityId: orderId,
+    after: { count: written.length, totalAllocated },
   });
+
+  return written;
 }
 
 function toLineAllocationRow(row: {
@@ -424,46 +438,69 @@ async function reverseOneAllocation(trx: Transaction<Database>, allocationId: nu
  * changed since the original allocation was written.
  */
 export async function reverseLineAllocations(db: Kysely<Database>, orderLineId: number, actor: ActorContext): Promise<LineAllocationRow[]> {
-  return db.transaction().execute(async (trx) => {
-    const originals = await trx
-      .selectFrom('line_allocation')
-      .select('id')
-      .where('order_line_id', '=', orderLineId)
-      .where('reverses_allocation_id', 'is', null)
-      .execute();
+  return db.transaction().execute((trx) => reverseLineAllocationsInTransaction(trx, orderLineId, actor));
+}
 
-    const now = new Date().toISOString();
-    const reversed: LineAllocationRow[] = [];
-    for (const o of originals) {
-      // Skip rows already reversed by an earlier call instead of
-      // failing the whole batch — reverseLineAllocations is safe to
-      // call more than once for the same line.
-      const already = await trx.selectFrom('line_allocation').select('id').where('reverses_allocation_id', '=', o.id).executeTakeFirst();
-      if (already) continue;
-      reversed.push(await reverseOneAllocation(trx, o.id, now));
-    }
+/** Same as `reverseLineAllocations`, composable into a transaction the
+ * caller already holds open — billing's refund flow uses this so
+ * reversing allocations and recording the refund payment happen
+ * atomically together. */
+export async function reverseLineAllocationsInTransaction(
+  trx: Transaction<Database>,
+  orderLineId: number,
+  actor: ActorContext,
+): Promise<LineAllocationRow[]> {
+  const originals = await trx
+    .selectFrom('line_allocation')
+    .select('id')
+    .where('order_line_id', '=', orderLineId)
+    .where('reverses_allocation_id', 'is', null)
+    .execute();
 
-    if (reversed.length > 0) {
-      await recordAudit(trx, {
-        actorId: actor.actorId,
-        terminalId: actor.terminalId,
-        action: 'order_line.reverse_allocations',
-        entity: 'order_line',
-        entityId: orderLineId,
-        after: { count: reversed.length, total: sum(reversed.map((r) => r.amountMinor)) },
-      });
-    }
+  const now = new Date().toISOString();
+  const reversed: LineAllocationRow[] = [];
+  for (const o of originals) {
+    // Skip rows already reversed by an earlier call instead of
+    // failing the whole batch — reverseLineAllocations is safe to
+    // call more than once for the same line.
+    const already = await trx.selectFrom('line_allocation').select('id').where('reverses_allocation_id', '=', o.id).executeTakeFirst();
+    if (already) continue;
+    reversed.push(await reverseOneAllocation(trx, o.id, now));
+  }
 
-    return reversed;
-  });
+  if (reversed.length > 0) {
+    await recordAudit(trx, {
+      actorId: actor.actorId,
+      terminalId: actor.terminalId,
+      action: 'order_line.reverse_allocations',
+      entity: 'order_line',
+      entityId: orderLineId,
+      after: { count: reversed.length, total: sum(reversed.map((r) => r.amountMinor)) },
+    });
+  }
+
+  return reversed;
 }
 
 /** Reverse every allocation for a whole order — a full refund or void
  * after close. */
 export async function reverseOrderAllocations(db: Kysely<Database>, orderId: number, actor: ActorContext): Promise<LineAllocationRow[]> {
-  const lines = await db.selectFrom('order_line').select('id').where('order_id', '=', orderId).execute();
-  const results = await Promise.all(lines.map((l) => reverseLineAllocations(db, l.id, actor)));
-  return results.flat();
+  return db.transaction().execute((trx) => reverseOrderAllocationsInTransaction(trx, orderId, actor));
+}
+
+/** Same as `reverseOrderAllocations`, composable into a transaction the
+ * caller already holds open. */
+export async function reverseOrderAllocationsInTransaction(
+  trx: Transaction<Database>,
+  orderId: number,
+  actor: ActorContext,
+): Promise<LineAllocationRow[]> {
+  const lines = await trx.selectFrom('order_line').select('id').where('order_id', '=', orderId).execute();
+  const results: LineAllocationRow[] = [];
+  for (const line of lines) {
+    results.push(...(await reverseLineAllocationsInTransaction(trx, line.id, actor)));
+  }
+  return results;
 }
 
 // ---------------------------------------------------------------------

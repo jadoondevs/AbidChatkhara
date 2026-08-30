@@ -7,11 +7,11 @@ Pakistan. See `ARCHITECTURE.md` for how it's put together and why, and
 This system is being built incrementally, one milestone per branch, merged
 to `main` as each lands. **Status: platform, the money module, identity
 (users, PIN login, audit log), catalog (menu, prices, modifiers), ordering
-(orders through the pro-forma bill, line/order void), and partners (the
-allocation engine, effective-dated ownership) are done.**
-Billing/payments/printing, service charge, consumption, shifts, reporting,
-and the frontend are not built yet — see
-`ARCHITECTURE.md` for the current module status.
+(orders through the pro-forma bill, line/order void), partners (the
+allocation engine, effective-dated ownership), and billing (payments,
+settlement, invoice numbering, refunds, ESC/POS printing) are done.**
+Service charge, consumption, shifts, reporting, and the frontend are not
+built yet — see `ARCHITECTURE.md` for the current module status.
 
 ## Requirements
 
@@ -69,17 +69,19 @@ a `Paisa`-typed value anywhere outside `packages/shared/src/money` — see
 Configuration is environment-variable based (see `.env.example`), never
 committed to git:
 
-| Variable      | Default              | Meaning                                   |
-| ------------- | --------------------- | ------------------------------------------ |
-| `POS_PORT`    | `4000`                 | HTTP port                                   |
-| `POS_HOST`    | `0.0.0.0`              | Bind address                                |
-| `POS_DB_PATH` | `./data/pos.sqlite`    | SQLite database file                        |
+| Variable           | Default             | Meaning                                              |
+| ------------------ | -------------------- | ----------------------------------------------------- |
+| `POS_PORT`         | `4000`                | HTTP port                                              |
+| `POS_HOST`         | `0.0.0.0`             | Bind address                                           |
+| `POS_DB_PATH`      | `./data/pos.sqlite`   | SQLite database file                                   |
+| `POS_PRINTER_HOST` | unset                 | Receipt printer's IP address on the local network      |
+| `POS_PRINTER_PORT` | `9100`                | Printer's raw ESC/POS TCP port (9100 is the standard "JetDirect" port) |
 
-Printer configuration (network thermal printer IP addresses, cash drawer
-kick settings) is not wired up yet — that lands with the billing/printing
-milestone. It will follow the same pattern: environment-configured or
-stored in an admin-editable table, never hard-coded, and never committed
-to git.
+`POS_PRINTER_HOST` unset is a supported, working state — the server runs
+normally and print routes respond `503` with a clear message instead of
+attempting to connect anywhere. There's no admin screen for this (the
+spec's screen list doesn't have one), so it's environment-configured like
+everything else here rather than a database table.
 
 ## Backup and restore
 

@@ -2,16 +2,21 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { Kysely } from 'kysely';
 import { z } from 'zod';
+import { billingRoutes } from './billing/routes.js';
 import { catalogRoutes } from './catalog/routes.js';
 import { resolveSession } from './identity/auth.js';
 import { identityRoutes } from './identity/routes.js';
 import { orderingRoutes } from './ordering/routes.js';
 import { partnersRoutes } from './partners/routes.js';
 import type { Database } from './platform/db/types.js';
+import type { PrinterTarget } from './platform/printing/client.js';
 
 export interface BuildAppOptions {
   readonly db: Kysely<Database>;
   readonly logger?: boolean;
+  /** null (the default) if no printer is configured — print routes then
+   * respond 503 instead of attempting to connect anywhere. */
+  readonly printer?: PrinterTarget | null;
 }
 
 /**
@@ -47,6 +52,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(catalogRoutes, { db: opts.db });
   await app.register(orderingRoutes, { db: opts.db });
   await app.register(partnersRoutes, { db: opts.db });
+  await app.register(billingRoutes, { db: opts.db, printer: opts.printer ?? null });
 
   // TODO(frontend milestone): register @fastify/static against
   // apps/frontend/dist and fall through to index.html for client-side
