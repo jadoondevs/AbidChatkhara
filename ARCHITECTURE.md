@@ -9,11 +9,13 @@ specific, non-obvious choice, see `docs/decisions/`.
 Built so far: **platform** (money type, event bus, SQLite/Kysely, migrations,
 the durable sync-queue seam), **identity** (users, PIN login, roles, audit
 log), **catalog** (categories, items, effective-dated prices, modifier
-groups/modifiers, availability), and **ordering** (orders, lines, order-level
+groups/modifiers, availability), **ordering** (orders, lines, order-level
 discount proration, the open→billed pro-forma-bill flow, line and order
-void). Everything else — the partner allocation engine,
-billing/payments/printing, service charge, consumption, shifts, reporting,
-and the frontend — is designed for (the module boundaries and seams below
+void), and **partners** (partners, effective-dated ownership shares, the
+pure allocation engine, the append-only allocation ledger with snapshotted-
+share reversal). Everything else — billing/payments/printing, service
+charge, consumption, shifts, reporting, and the frontend — is designed for
+(the module boundaries and seams below
 exist) but not built yet. Each lands as its own milestone; this file's
 "Modules" section says, per module, what exists today.
 
@@ -66,7 +68,7 @@ apps/server/src/
   ordering/       orders, order lines, discounts, lifecycle      [BUILT — open/billed/voided; see below]
   billing/        payments, bill/receipt printing, invoice #s    [not yet built]
   tax/            configurable tax rules (disabled at launch)    [not yet built]
-  partners/       partners, ownership shares, allocation engine  [not yet built]
+  partners/       partners, ownership shares, allocation engine  [BUILT — see below]
   consumption/    staff and owner meals                          [not yet built]
   gratuity/       service charge, waiter attribution              [not yet built]
   shifts/         shift open/close, Z-reports                    [not yet built]
@@ -261,6 +263,62 @@ docs/decisions/005-ordering-stops-at-billed.md.
   doesn't satisfy every linked modifier group's `min_select`/`max_select`
   (the spec's "choose your protein: min 1 max 1"), and rejects a modifier
   that belongs to a group not linked to the item at all.
+
+## Partners and the allocation engine
+
+`apps/server/src/partners`. The spec calls this "the most important code
+in the system" and asks for it to be isolated as a pure function with no
+database or I/O — `partners/engine.ts` is exactly that: `allocateOne`
+takes a base amount and a set of ownership shares and returns amounts,
+nothing else, wrapping the money module's `splitByShares` and re-
+asserting the exact-sum invariant itself (defense in depth — `distribute`
+already guarantees it, but the spec asks for the check at this layer
+too, "never write a partial allocation"). `partners/service.ts` is the
+database-facing orchestration around it: ownership CRUD, and
+`allocateOrder`, which reads an order's lines, looks up ownership at a
+given instant, and writes `line_allocation` rows.
+
+- **`allocateOrder` isn't called from anywhere yet.** Like ordering
+  stopping at "billed" (docs/decisions/005), this milestone builds and
+  exhaustively tests the orchestration without wiring it into a real
+  close transaction — there's no `closed` order to allocate for yet. The
+  billing milestone's close operation will call `allocateOrder` (and, for
+  refunds, `reverseLineAllocations`/`reverseOrderAllocations`) as part of
+  its own transaction; nothing about their shape needs to change to be
+  called that way.
+- **A whole item's ownership split is replaced together**, never one
+  partner's row at a time — `setItemOwnership` takes the complete new
+  split, closes every currently-open row for the item, and inserts the
+  new ones inside one transaction, so "shares sum to exactly 10000" can
+  be checked before anything is written. Same effective-dating pattern
+  as `item_price` (see the Catalog section above), applied to ownership.
+- **Ownership shares are snapshotted onto every allocation** —
+  `line_allocation.share_bp_snapshot` — so a later ownership change, or a
+  refund computed after one, can never alter a historical allocation.
+  See docs/decisions/006.
+- **A modifier with no ownership of its own follows its item's** — its
+  value simply stays inside the line's own allocation base rather than
+  being carved out into a separate `line_allocation` target. A modifier
+  that *does* have its own ownership rows gets its own target, and the
+  item's own base is reduced by exactly that modifier's share so nothing
+  is double-counted. See docs/decisions/004, from the ordering milestone,
+  for why `order_line_modifier` carries its own allocation breakdown in
+  the first place.
+- **The allocation-base mode is a label threaded through, not a branch
+  the engine takes.** `AllocationBaseMode` (today, only
+  `'NET_SALES_EX_TAX'`) is attached to every `AllocationTarget` by the
+  caller and copied onto every output row and onto `line_allocation`
+  itself — the engine never inspects it. A future cost-based mode (once
+  inventory exists) is a caller computing a different base figure and
+  passing a different label; the engine and the shape of a
+  `line_allocation` row are unaffected.
+- **The "nightly integrity job"** the spec asks for alongside write-time
+  enforcement is `checkOwnershipIntegrity`
+  (sweeps every active item's, and every owned modifier's, active shares
+  for a sum that's neither 0 — unconfigured, not an error — nor exactly
+  10000) plus `scheduleOwnershipIntegrityCheck`, which runs it on an
+  interval (default 24h) from `index.ts` and logs any violation found —
+  there's nowhere else for a background finding like this to surface yet.
 
 ## Testing approach
 
