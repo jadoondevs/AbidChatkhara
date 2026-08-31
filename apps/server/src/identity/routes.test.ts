@@ -287,4 +287,45 @@ describe('identity routes — user and credential management', () => {
     expect(res.statusCode).toBe(201);
     expect((await login(app, 'pinuser', '4321')).statusCode).toBe(200);
   });
+
+  it('lets ANY signed-in user read the roster — the floor screen needs names', async () => {
+    const started = await setup();
+    ({ app, ctx } = started);
+    const auth = { authorization: `Bearer ${await tokenFor(app, 'admin', '9999')}` };
+    await app.inject({
+      method: 'POST',
+      url: '/api/users',
+      headers: auth,
+      payload: { name: 'Faisal Ahmed', username: 'faisal', password: '4444', role: 'server' },
+    });
+
+    const serverAuth = { authorization: `Bearer ${await tokenFor(app, 'faisal', '4444')}` };
+    const res = await app.inject({ method: 'GET', url: '/api/roster', headers: serverAuth });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ name: string }[]>().map((entry) => entry.name)).toContain('Admin');
+  });
+
+  it('never puts a username in the roster — that is the admin view’s job', async () => {
+    const started = await setup();
+    ({ app, ctx } = started);
+    const auth = { authorization: `Bearer ${await tokenFor(app, 'manager', '2222')}` };
+
+    const res = await app.inject({ method: 'GET', url: '/api/roster', headers: auth });
+    expect(res.json<Record<string, unknown>[]>().every((entry) => !('username' in entry))).toBe(true);
+  });
+
+  it('leaves deactivated users off the roster — they cannot take new work', async () => {
+    const started = await setup();
+    ({ app, ctx } = started);
+    const auth = { authorization: `Bearer ${await tokenFor(app, 'admin', '9999')}` };
+    await app.inject({ method: 'PATCH', url: `/api/users/${started.manager.id}`, headers: auth, payload: { active: false } });
+
+    const res = await app.inject({ method: 'GET', url: '/api/roster', headers: auth });
+    expect(res.json<{ name: string }[]>().map((entry) => entry.name)).not.toContain('Manager');
+  });
+
+  it('refuses the roster to an unauthenticated request', async () => {
+    ({ app, ctx } = await setup());
+    expect((await app.inject({ method: 'GET', url: '/api/roster' })).statusCode).toBe(401);
+  });
 });

@@ -1,5 +1,8 @@
-import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
+import { useState } from 'react';
+import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
+import { useSettings } from './api/hooks.js';
 import { useAuth } from './auth/AuthContext.tsx';
+import { NewOrderModal } from './components/NewOrderModal.tsx';
 import { BillScreen } from './screens/BillScreen.tsx';
 import { FloorScreen } from './screens/FloorScreen.tsx';
 import { LoginScreen } from './screens/LoginScreen.tsx';
@@ -10,58 +13,85 @@ import { PaymentMethodConfigScreen } from './screens/PaymentMethodConfigScreen.t
 import { PaymentScreen } from './screens/PaymentScreen.tsx';
 import { PeopleConfigScreen } from './screens/PeopleConfigScreen.tsx';
 import { ReportsScreen } from './screens/ReportsScreen.tsx';
+import { SettingsScreen } from './screens/SettingsScreen.tsx';
 import { ShiftScreen } from './screens/ShiftScreen.tsx';
 import { StaffMealScreen } from './screens/StaffMealScreen.tsx';
 
-/** Config and reporting screens are manager+; the order-taking screens
- * are open to any signed-in user, matching how the API itself gates
- * them (the server is the real authority — this only avoids showing a
- * cashier a screen whose every call would 403). */
-function ManagerOnly({ children }: { children: JSX.Element }): JSX.Element {
+/**
+ * Role gates for whole screens. The server is the real authority — every
+ * call these screens make is checked there too — so this only avoids
+ * showing someone a screen whose every request would come back 403.
+ */
+function RoleGate({ minimum, children }: { minimum: 'manager' | 'admin'; children: JSX.Element }): JSX.Element {
   const { hasAtLeastRole } = useAuth();
-  return hasAtLeastRole('manager') ? children : <Navigate to="/" replace />;
+  return hasAtLeastRole(minimum) ? children : <Navigate to="/" replace />;
 }
 
+/** Operational screens everyone signed in can reach, then configuration
+ * behind a role. Grouped so the nav reads as "run the restaurant" and
+ * "set the restaurant up" rather than one undifferentiated row. */
+const OPERATIONS = [
+  { to: '/', label: 'Floor', end: true },
+  { to: '/staff-meal', label: 'Staff', end: false },
+  { to: '/shift', label: 'Shift', end: false },
+] as const;
+
+const MANAGEMENT = [
+  { to: '/reports', label: 'Reports', minimum: 'manager' },
+  { to: '/config/menu', label: 'Menu', minimum: 'manager' },
+  { to: '/config/partners', label: 'Partners', minimum: 'manager' },
+  { to: '/config/payment-methods', label: 'Payment', minimum: 'manager' },
+  { to: '/config/people', label: 'People', minimum: 'manager' },
+  { to: '/settings', label: 'Settings', minimum: 'admin' },
+] as const;
+
 export function App(): JSX.Element {
-  const { session, logout } = useAuth();
+  const { session, logout, hasAtLeastRole } = useAuth();
+  const navigate = useNavigate();
+  const settings = useSettings(session !== null);
+  const [newOrderOpen, setNewOrderOpen] = useState(false);
 
   if (!session) return <LoginScreen />;
+
+  // The restaurant's own name, never a compiled-in one. An install that
+  // has configured nothing falls back to a neutral label rather than
+  // claiming to be someone.
+  const restaurantName = settings.data?.restaurant.name.trim() || 'POS';
 
   return (
     <div className="app">
       <header className="topbar">
-        <strong>POS</strong>
+        <strong className="brand">{restaurantName}</strong>
+
+        {/* New order is reachable from every screen, not just the floor:
+            a customer arriving while a manager is reading a report is
+            the normal case, not an exception. */}
+        <button className="primary new-order-button" onClick={() => setNewOrderOpen(true)}>
+          + New order
+        </button>
+
         <nav>
-          <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
-            Floor
-          </NavLink>
-          <NavLink to="/staff-meal" className={({ isActive }) => (isActive ? 'active' : '')}>
-            Staff meal
-          </NavLink>
-          <NavLink to="/shift" className={({ isActive }) => (isActive ? 'active' : '')}>
-            Shift
-          </NavLink>
-          <NavLink to="/reports" className={({ isActive }) => (isActive ? 'active' : '')}>
-            Reports
-          </NavLink>
-          <NavLink to="/config/menu" className={({ isActive }) => (isActive ? 'active' : '')}>
-            Menu
-          </NavLink>
-          <NavLink to="/config/partners" className={({ isActive }) => (isActive ? 'active' : '')}>
-            Partners
-          </NavLink>
-          <NavLink to="/config/payment-methods" className={({ isActive }) => (isActive ? 'active' : '')}>
-            Payment
-          </NavLink>
-          <NavLink to="/config/people" className={({ isActive }) => (isActive ? 'active' : '')}>
-            People
-          </NavLink>
+          {OPERATIONS.map((link) => (
+            <NavLink key={link.to} to={link.to} end={link.end} className={({ isActive }) => (isActive ? 'active' : '')}>
+              {link.label}
+            </NavLink>
+          ))}
+          <span className="nav-divider" aria-hidden="true" />
+          {MANAGEMENT.filter((link) => hasAtLeastRole(link.minimum)).map((link) => (
+            <NavLink key={link.to} to={link.to} className={({ isActive }) => (isActive ? 'active' : '')}>
+              {link.label}
+            </NavLink>
+          ))}
         </nav>
+
         <span className="spacer" />
-        <span className="muted">
-          {session.name} · {session.role} · {session.terminalId}
+        {/* Name and role are what staff check; the terminal id matters
+            only when reconciling an audit trail, so it lives in the
+            tooltip rather than taking width from the nav. */}
+        <span className="muted who" title={`Terminal ${session.terminalId}`}>
+          {session.name} · {session.role}
         </span>
-        <button className="ghost" onClick={logout}>
+        <button className="ghost sign-out" onClick={logout}>
           Sign out
         </button>
       </header>
@@ -77,46 +107,66 @@ export function App(): JSX.Element {
           <Route
             path="/reports"
             element={
-              <ManagerOnly>
+              <RoleGate minimum="manager">
                 <ReportsScreen />
-              </ManagerOnly>
+              </RoleGate>
             }
           />
           <Route
             path="/config/menu"
             element={
-              <ManagerOnly>
+              <RoleGate minimum="manager">
                 <MenuConfigScreen />
-              </ManagerOnly>
+              </RoleGate>
             }
           />
           <Route
             path="/config/partners"
             element={
-              <ManagerOnly>
+              <RoleGate minimum="manager">
                 <PartnerConfigScreen />
-              </ManagerOnly>
+              </RoleGate>
             }
           />
           <Route
             path="/config/payment-methods"
             element={
-              <ManagerOnly>
+              <RoleGate minimum="manager">
                 <PaymentMethodConfigScreen />
-              </ManagerOnly>
+              </RoleGate>
             }
           />
           <Route
             path="/config/people"
             element={
-              <ManagerOnly>
+              <RoleGate minimum="manager">
                 <PeopleConfigScreen />
-              </ManagerOnly>
+              </RoleGate>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <RoleGate minimum="admin">
+                <SettingsScreen />
+              </RoleGate>
             }
           />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
+
+      {/* One modal, one order-creation path, wherever it was opened from
+          — the alternative is a second copy of this flow per screen. */}
+      {newOrderOpen && (
+        <NewOrderModal
+          onClose={() => setNewOrderOpen(false)}
+          onCreated={(orderId) => {
+            setNewOrderOpen(false);
+            navigate(`/orders/${orderId}`);
+          }}
+        />
+      )}
     </div>
   );
 }

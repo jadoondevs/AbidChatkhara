@@ -2,7 +2,16 @@ import type { Paisa } from '@pos/shared';
 import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 import { api, query, type RequestOptions } from './client.js';
 import type {
+  AppSettings,
+  BillTotals,
   Category,
+  FloorBoard,
+  PaymentAccount,
+  PrinterSettings,
+  ReceiptSettings,
+  RestaurantSettings,
+  Role,
+  RosterEntry,
   ConsumptionReport,
   DailySalesReport,
   ItemMixLine,
@@ -42,8 +51,37 @@ const LIVE_REFETCH_MS = 4000;
 // Identity
 // ---------------------------------------------------------------------
 
-export function useUsers(): UseQueryResult<User[]> {
-  return useQuery({ queryKey: ['users'], queryFn: () => api.get<User[]>('/api/users') });
+export function useUsers(includeInactive = false): UseQueryResult<User[]> {
+  return useQuery({
+    queryKey: ['users', includeInactive],
+    queryFn: () => api.get<User[]>(`/api/users${query({ includeInactive })}`),
+  });
+}
+
+/** Names for the floor board and the waiter picker. Uses the roster
+ * rather than the manager-only user list, so a server signing in does
+ * not fire a 403 on the home screen. */
+export function useRoster(): UseQueryResult<RosterEntry[]> {
+  return useQuery({ queryKey: ['roster'], queryFn: () => api.get<RosterEntry[]>('/api/roster') });
+}
+
+export function useCreateUser(): UseMutationResult<User, Error, { name: string; username: string; password: string; role: Role }> {
+  const invalidate = useInvalidateOnSuccess(['users']);
+  return useMutation({ mutationFn: (body) => api.post<User>('/api/users', body), onSuccess: invalidate });
+}
+
+export function useUpdateUser(): UseMutationResult<
+  User,
+  Error,
+  { id: number; name?: string; username?: string; role?: Role; active?: boolean }
+> {
+  const invalidate = useInvalidateOnSuccess(['users']);
+  return useMutation({ mutationFn: ({ id, ...body }) => api.patch<User>(`/api/users/${id}`, body), onSuccess: invalidate });
+}
+
+export function useSetUserPassword(): UseMutationResult<User, Error, { id: number; password: string }> {
+  const invalidate = useInvalidateOnSuccess(['users']);
+  return useMutation({ mutationFn: ({ id, password }) => api.put<User>(`/api/users/${id}/password`, { password }), onSuccess: invalidate });
 }
 
 // ---------------------------------------------------------------------
@@ -96,6 +134,28 @@ export function useOrders(statuses: OrderStatus[]): UseQueryResult<OrderSummary[
   });
 }
 
+/** The floor board's three lists, split by the server — see the note on
+ * getFloorBoard. One request, one consistent snapshot, so the lists can
+ * never disagree with each other about where an order is. */
+export function useFloorBoard(): UseQueryResult<FloorBoard> {
+  return useQuery({
+    queryKey: ['orders', 'board'],
+    queryFn: () => api.get<FloorBoard>('/api/orders/board'),
+    refetchInterval: LIVE_REFETCH_MS,
+  });
+}
+
+/** What this order WILL total if billed with the given service charge —
+ * computed by the same server code that will do the billing, so the
+ * figure on screen is the figure that prints. */
+export function useBillPreview(orderId: number | null, serviceChargeMinor: Paisa): UseQueryResult<BillTotals> {
+  return useQuery({
+    queryKey: ['bill-preview', orderId, serviceChargeMinor],
+    queryFn: () => api.get<BillTotals>(`/api/orders/${orderId}/bill-preview${query({ serviceChargeMinor })}`),
+    enabled: orderId !== null,
+  });
+}
+
 export function useOrder(orderId: number | null): UseQueryResult<OrderDetail> {
   return useQuery({
     queryKey: ['order', orderId],
@@ -131,6 +191,17 @@ export function useCreateOrder(): UseMutationResult<OrderSummary, Error, CreateO
 
 export function useAddLine(): UseMutationResult<OrderDetail, Error, { orderId: number; itemId: number; qty: number; modifierIds?: number[] }> {
   return useOrderMutation(({ orderId, ...body }) => api.post<OrderDetail>(`/api/orders/${orderId}/lines`, body));
+}
+
+export function useSetLineQty(): UseMutationResult<OrderDetail, Error, { orderId: number; lineId: number; qty: number }> {
+  return useOrderMutation(({ orderId, lineId, qty }) => api.patch<OrderDetail>(`/api/orders/${orderId}/lines/${lineId}/qty`, { qty }));
+}
+
+/** Removing a mis-tap from a bill that has never been printed. The
+ * server refuses once the order has been billed, at which point the UI
+ * falls back to the manager-approved void below. */
+export function useRemoveLine(): UseMutationResult<OrderDetail, Error, { orderId: number; lineId: number }> {
+  return useOrderMutation(({ orderId, lineId }) => api.del<OrderDetail>(`/api/orders/${orderId}/lines/${lineId}`));
 }
 
 export function useVoidLine(): UseMutationResult<OrderDetail, Error, { orderId: number; lineId: number; reason: string; token?: string }> {
@@ -175,10 +246,45 @@ export function usePaymentMethods(includeInactive = false): UseQueryResult<Payme
   });
 }
 
+export function usePaymentAccounts(paymentMethodId?: number, includeInactive = false): UseQueryResult<PaymentAccount[]> {
+  return useQuery({
+    queryKey: ['payment-accounts', paymentMethodId ?? null, includeInactive],
+    queryFn: () => api.get<PaymentAccount[]>(`/api/payment-accounts${query({ paymentMethodId, includeInactive })}`),
+  });
+}
+
+export function useCreatePaymentAccount(): UseMutationResult<
+  PaymentAccount,
+  Error,
+  { paymentMethodId: number; label: string; accountTitle?: string; accountNumber?: string; bankName?: string }
+> {
+  const invalidate = useInvalidateOnSuccess(['payment-accounts']);
+  return useMutation({ mutationFn: (body) => api.post<PaymentAccount>('/api/payment-accounts', body), onSuccess: invalidate });
+}
+
+export function useUpdatePaymentAccount(): UseMutationResult<
+  PaymentAccount,
+  Error,
+  { id: number; label?: string; accountTitle?: string; accountNumber?: string; bankName?: string; active?: boolean }
+> {
+  const invalidate = useInvalidateOnSuccess(['payment-accounts']);
+  return useMutation({
+    mutationFn: ({ id, ...body }) => api.patch<PaymentAccount>(`/api/payment-accounts/${id}`, body),
+    onSuccess: invalidate,
+  });
+}
+
 export function useRecordPayment(): UseMutationResult<
   RecordPaymentResult,
   Error,
-  { orderId: number; paymentMethodId: number; amountMinor: Paisa; referenceNo?: string; tenderedMinor?: Paisa }
+  {
+    orderId: number;
+    paymentMethodId: number;
+    amountMinor: Paisa;
+    referenceNo?: string;
+    paymentAccountId?: number;
+    tenderedMinor?: Paisa;
+  }
 > {
   return useOrderMutation(({ orderId, ...body }) => api.post<RecordPaymentResult>(`/api/orders/${orderId}/payments`, body));
 }
@@ -186,7 +292,7 @@ export function useRecordPayment(): UseMutationResult<
 export function useSettleConsumption(): UseMutationResult<
   SettleConsumptionResult,
   Error,
-  { orderId: number; settlementType?: SettlementType; paymentMethodId?: number; referenceNo?: string }
+  { orderId: number; settlementType?: SettlementType; paymentMethodId?: number; referenceNo?: string; paymentAccountId?: number }
 > {
   return useOrderMutation(({ orderId, ...body }) => api.post<SettleConsumptionResult>(`/api/orders/${orderId}/settle-consumption`, body));
 }
@@ -276,7 +382,21 @@ export function usePayoutSheet(shiftId: number | null): UseQueryResult<WaiterPay
 // Reports
 // ---------------------------------------------------------------------
 
+/**
+ * A report's date filter, in any of the three forms the server accepts
+ * (see reporting/date-range.ts):
+ *
+ *   { date }            one calendar day
+ *   { from, to }        calendar days, INCLUSIVE at both ends
+ *   { fromInclusive, toExclusive }   exact instants
+ *
+ * The screens use `from`/`to`, because that is what the operator types
+ * and what makes "the same day in both boxes" mean that day.
+ */
 export interface DateRange {
+  date?: string;
+  from?: string;
+  to?: string;
   fromInclusive?: string;
   toExclusive?: string;
 }
@@ -407,4 +527,41 @@ export function useCloseShiftMutation(): UseMutationResult<Shift, Error, { shift
     mutationFn: ({ shiftId, countedCashMinor }) => api.post<Shift>(`/api/shifts/${shiftId}/close`, { countedCashMinor }),
     onSuccess: invalidate,
   });
+}
+
+// ---------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------
+
+/**
+ * Restaurant identity and receipt wording. Readable by anyone signed in
+ * — the header on every screen uses the restaurant's own name.
+ *
+ * `enabled` is required, not optional: the App shell calls this above
+ * its own "no session yet" early return, so without it every visit to
+ * the sign-in page would fire one guaranteed-401 request.
+ */
+export function useSettings(enabled: boolean): UseQueryResult<AppSettings> {
+  return useQuery({ queryKey: ['settings'], queryFn: () => api.get<AppSettings>('/api/settings'), enabled });
+}
+
+/** Admin-only, and deliberately a separate call: a network address is
+ * infrastructure, not something a waiter's screen should ever hold. */
+export function usePrinterSettings(enabled: boolean): UseQueryResult<PrinterSettings> {
+  return useQuery({ queryKey: ['settings', 'printer'], queryFn: () => api.get<PrinterSettings>('/api/settings/printer'), enabled });
+}
+
+export function useSaveRestaurantSettings(): UseMutationResult<RestaurantSettings, Error, RestaurantSettings> {
+  const invalidate = useInvalidateOnSuccess(['settings']);
+  return useMutation({ mutationFn: (body) => api.put<RestaurantSettings>('/api/settings/restaurant', body), onSuccess: invalidate });
+}
+
+export function useSaveReceiptSettings(): UseMutationResult<ReceiptSettings, Error, ReceiptSettings> {
+  const invalidate = useInvalidateOnSuccess(['settings']);
+  return useMutation({ mutationFn: (body) => api.put<ReceiptSettings>('/api/settings/receipt', body), onSuccess: invalidate });
+}
+
+export function useSavePrinterSettings(): UseMutationResult<PrinterSettings, Error, PrinterSettings> {
+  const invalidate = useInvalidateOnSuccess(['settings']);
+  return useMutation({ mutationFn: (body) => api.put<PrinterSettings>('/api/settings/printer', body), onSuccess: invalidate });
 }

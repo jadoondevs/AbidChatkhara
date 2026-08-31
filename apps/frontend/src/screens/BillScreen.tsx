@@ -1,8 +1,10 @@
 import { paisa, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useBillOrder, useOrder, usePrintBill, useSetDiscount } from '../api/hooks.js';
+import { useBillOrder, useBillPreview, useOrder, usePrintBill, useSetDiscount } from '../api/hooks.js';
+import type { OrderDetail } from '../api/types.js';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
+import { orderTitle } from './OrderScreen.tsx';
 
 /**
  * Screen 4: order-level discount with reason, service charge entry, the
@@ -34,6 +36,10 @@ export function BillScreen(): JSX.Element {
   const alreadyBilled = detail.status === 'billed';
   const staffMeal = detail.channel !== 'customer';
   const noWaiter = detail.waiterId === null;
+  // A service charge cannot be attributed without a waiter, and the
+  // server refuses one — so the field is disabled rather than offered
+  // and then rejected.
+  const serviceChargeAllowed = !noWaiter && !staffMeal;
 
   const applyDiscount = () => {
     setDiscount.mutate({ orderId, discountMinor, ...(discountReason.trim() ? { reason: discountReason.trim() } : {}) });
@@ -63,7 +69,7 @@ export function BillScreen(): JSX.Element {
   return (
     <div className="col" style={{ maxWidth: 760 }}>
       <h1 style={{ margin: 0 }}>
-        Bill — {detail.tableLabel ?? detail.orderType.replace('_', ' ')} <span className="muted">#{detail.id}</span>
+        Bill — {orderTitle(detail)} <span className="muted">#{detail.id}</span>
       </h1>
 
       <ErrorBanner error={setDiscount.error ?? billOrder.error ?? printError} />
@@ -98,8 +104,12 @@ export function BillScreen(): JSX.Element {
       {!alreadyBilled && (
         <div className="card col">
           <h3 style={{ margin: 0 }}>Service charge</h3>
-          {noWaiter ? (
-            <p className="muted">This order has no waiter, so a service charge can't be attributed — it must stay zero.</p>
+          {!serviceChargeAllowed ? (
+            <p className="muted">
+              {staffMeal
+                ? 'A staff or owner meal carries no service charge.'
+                : "This order has no waiter, so a service charge can't be attributed — it must stay zero."}
+            </p>
           ) : (
             <div style={{ maxWidth: 240 }}>
               <label htmlFor="service-charge">Amount (optional)</label>
@@ -112,38 +122,7 @@ export function BillScreen(): JSX.Element {
         </div>
       )}
 
-      <div className="card">
-        <div className="total-line">
-          <span>Subtotal</span>
-          <Money minor={detail.subtotalMinor} />
-        </div>
-        <div className="total-line">
-          <span>Discount</span>
-          <Money minor={detail.orderDiscountMinor} />
-        </div>
-        <div className="total-line">
-          <span>Net sales</span>
-          <Money minor={detail.netSalesMinor} />
-        </div>
-        <div className="total-line">
-          <span>Tax</span>
-          <Money minor={detail.taxMinor} />
-        </div>
-        <div className="total-line">
-          <span>Service charge {alreadyBilled ? '' : '(on print)'}</span>
-          <Money minor={alreadyBilled ? detail.serviceChargeMinor : serviceChargeMinor} />
-        </div>
-        {alreadyBilled && (
-          <div className="total-line">
-            <span>Rounding</span>
-            <Money minor={detail.roundingAdjustmentMinor} />
-          </div>
-        )}
-        <div className="total-line grand">
-          <span>Total{alreadyBilled ? '' : ' (rounded on print)'}</span>
-          <Money minor={alreadyBilled ? detail.totalMinor : null} />
-        </div>
-      </div>
+      <BillTotalsCard order={detail} serviceChargeMinor={serviceChargeAllowed ? serviceChargeMinor : paisa(0)} alreadyBilled={alreadyBilled} />
 
       <div className="row">
         <button className="ghost big" onClick={() => navigate(`/orders/${orderId}`)}>
@@ -164,6 +143,79 @@ export function BillScreen(): JSX.Element {
           <button onClick={() => navigate('/')}>Back to floor</button>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The bill's figures, including the rounding adjustment and the actual
+ * total — before anything is printed.
+ *
+ * The total is fetched from the server's own bill-preview endpoint,
+ * which runs the same code the bill itself will run. It used to read
+ * "Total (rounded on print) —" with no amount, because rounding was
+ * only applied when the bill was finalised and the screen had no way to
+ * predict it. Recomputing it here in the browser would have been a
+ * second implementation of the money pipeline, free to disagree with
+ * the first; asking the server is the only version that cannot.
+ */
+function BillTotalsCard({
+  order,
+  serviceChargeMinor,
+  alreadyBilled,
+}: {
+  order: OrderDetail;
+  serviceChargeMinor: Paisa;
+  alreadyBilled: boolean;
+}): JSX.Element {
+  const preview = useBillPreview(alreadyBilled ? null : order.id, serviceChargeMinor);
+
+  // Once billed, the stored figures ARE the answer — no prediction
+  // needed, and none should be shown in their place.
+  const totals = alreadyBilled
+    ? {
+        subtotalMinor: order.subtotalMinor,
+        orderDiscountMinor: order.orderDiscountMinor,
+        netSalesMinor: order.netSalesMinor,
+        taxMinor: order.taxMinor,
+        serviceChargeMinor: order.serviceChargeMinor,
+        roundingAdjustmentMinor: order.roundingAdjustmentMinor,
+        totalMinor: order.totalMinor,
+      }
+    : preview.data;
+
+  return (
+    <div className="card">
+      <ErrorBanner error={preview.error} />
+      <div className="total-line">
+        <span>Subtotal</span>
+        <Money minor={totals?.subtotalMinor} />
+      </div>
+      <div className="total-line">
+        <span>Discount</span>
+        <Money minor={totals?.orderDiscountMinor} />
+      </div>
+      <div className="total-line">
+        <span>Net sales</span>
+        <Money minor={totals?.netSalesMinor} />
+      </div>
+      <div className="total-line">
+        <span>Tax</span>
+        <Money minor={totals?.taxMinor} />
+      </div>
+      <div className="total-line">
+        <span>Service charge</span>
+        <Money minor={totals?.serviceChargeMinor} />
+      </div>
+      <div className="total-line">
+        <span>Rounding</span>
+        <Money minor={totals?.roundingAdjustmentMinor} />
+      </div>
+      <div className="total-line grand">
+        <span>Total</span>
+        <Money minor={totals?.totalMinor} />
+      </div>
+      {!alreadyBilled && <p className="muted field-hint">This is the amount that will be printed.</p>}
     </div>
   );
 }

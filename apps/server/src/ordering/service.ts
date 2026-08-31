@@ -186,6 +186,12 @@ export interface OrderLineDetail {
 
 export interface OrderDetail extends OrderSummary {
   readonly lines: OrderLineDetail[]; // see the same note on OrderLineDetail.modifiers above
+  /** Unreversed payments so far, and what is still owed. On the detail
+   * rather than only on the floor board because the payment screen is
+   * reachable directly by URL — a cashier who reloads it must still be
+   * told what is left to collect, not the whole total again. */
+  readonly paidMinor: Paisa;
+  readonly balanceMinor: Paisa;
 }
 
 async function loadLines(
@@ -231,11 +237,22 @@ async function loadLines(
   }));
 }
 
+/** The one way an OrderDetail is assembled, so `paidMinor` and
+ * `balanceMinor` cannot be right in some responses and missing in
+ * others. */
+async function toOrderDetail(
+  executor: Kysely<Database> | Transaction<Database>,
+  row: OrderRow,
+  lines: OrderLineDetail[],
+): Promise<OrderDetail> {
+  const paidMinor = (await paidTotals(executor, [row.id])).get(row.id) ?? paisa(0);
+  return { ...toOrderSummary(row), lines, paidMinor, balanceMinor: sub(row.total_minor, paidMinor) };
+}
+
 export async function getOrder(db: Kysely<Database>, orderId: number): Promise<OrderDetail | null> {
   const row = await db.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirst();
   if (!row) return null;
-  const lines = await loadLines(db, orderId);
-  return { ...toOrderSummary(row), lines };
+  return toOrderDetail(db, row, await loadLines(db, orderId));
 }
 
 export interface ListOrdersOptions {
@@ -331,7 +348,10 @@ export async function getFloorBoard(db: Kysely<Database>, opts: FloorBoardOption
  * way billing itself excludes them, so a refunded order does not read
  * as still paid.
  */
-async function paidTotals(db: Kysely<Database>, orderIds: readonly number[]): Promise<Map<number, Paisa>> {
+async function paidTotals(
+  db: Kysely<Database> | Transaction<Database>,
+  orderIds: readonly number[],
+): Promise<Map<number, Paisa>> {
   const totals = new Map<number, Paisa>();
   if (orderIds.length === 0) return totals;
 
@@ -703,7 +723,7 @@ export async function addLine(db: Kysely<Database>, orderId: number, input: AddL
       });
 
       const mergedOrder = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirstOrThrow();
-      return { ...toOrderSummary(mergedOrder), lines: await loadLines(trx, orderId) };
+      return toOrderDetail(trx, mergedOrder, await loadLines(trx, orderId));
     }
 
     const lineRow = await trx
@@ -755,7 +775,7 @@ export async function addLine(db: Kysely<Database>, orderId: number, input: AddL
 
     const finalOrder = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirstOrThrow();
     const lines = await loadLines(trx, orderId);
-    return { ...toOrderSummary(finalOrder), lines };
+    return toOrderDetail(trx, finalOrder, lines);
   });
 }
 
@@ -866,7 +886,7 @@ async function removeLineInternal(
 
     const finalOrder = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirstOrThrow();
     const lines = await loadLines(trx, orderId);
-    return { ...toOrderSummary(finalOrder), lines };
+    return toOrderDetail(trx, finalOrder, lines);
   });
 }
 
@@ -916,7 +936,7 @@ export async function setLineQty(
 
     const finalOrder = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirstOrThrow();
     const lines = await loadLines(trx, orderId);
-    return { ...toOrderSummary(finalOrder), lines };
+    return toOrderDetail(trx, finalOrder, lines);
   });
 }
 
@@ -971,7 +991,7 @@ export async function setDiscount(db: Kysely<Database>, orderId: number, input: 
 
     const finalOrder = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirstOrThrow();
     const lines = await loadLines(trx, orderId);
-    return { ...toOrderSummary(finalOrder), lines };
+    return toOrderDetail(trx, finalOrder, lines);
   });
 }
 
@@ -1098,7 +1118,7 @@ export async function billOrder(db: Kysely<Database>, orderId: number, input: Bi
     });
 
     const lines = await loadLines(trx, orderId);
-    return { ...toOrderSummary(updated), lines };
+    return toOrderDetail(trx, updated, lines);
   });
 }
 
@@ -1129,7 +1149,7 @@ export async function reopenOrder(db: Kysely<Database>, orderId: number, actor: 
     });
 
     const lines = await loadLines(trx, orderId);
-    return { ...toOrderSummary(updated), lines };
+    return toOrderDetail(trx, updated, lines);
   });
 }
 
@@ -1217,6 +1237,6 @@ export async function voidOrder(db: Kysely<Database>, orderId: number, input: Vo
     eventBus.emit('OrderVoided', { orderId, reason: input.reason, voidedBy: actor.actorId, voidedAt: now });
 
     const lines = await loadLines(trx, orderId);
-    return { ...toOrderSummary(updated), lines };
+    return toOrderDetail(trx, updated, lines);
   });
 }

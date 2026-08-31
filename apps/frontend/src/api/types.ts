@@ -21,12 +21,21 @@ export type SettlementType = 'house_expense' | 'payroll_deduction' | 'partner_pe
 
 export interface LoginResult {
   token: string;
-  user: { id: number; name: string; role: Role };
+  user: { id: number; name: string; username: string; role: Role };
+}
+
+/** Who is on today — names only, readable by anyone signed in. Not the
+ * same as `User`, which is the admin's view and carries usernames. */
+export interface RosterEntry {
+  id: number;
+  name: string;
+  role: Role;
 }
 
 export interface User {
   id: number;
   name: string;
+  username: string;
   role: Role;
   active: boolean;
 }
@@ -54,12 +63,22 @@ export interface ModifierGroup {
   maxSelect: number;
 }
 
+/**
+ * NOTE: there is deliberately no `active` here. The `modifier` table has
+ * no such column and `/api/modifiers` has never returned one — this type
+ * used to claim it anyway, and because it arrived as `undefined`, every
+ * `filter(m => m.active)` in the UI silently discarded every option.
+ * That is what made a required modifier group unsatisfiable: the dialog
+ * showed no choices, and the server then rejected the add.
+ *
+ * A modifier is removed by unlinking its group from the item, or by
+ * deleting the modifier — not by a flag that does not exist.
+ */
 export interface Modifier {
   id: number;
   groupId: number;
   name: string;
   priceDeltaMinor: Paisa;
-  active: boolean;
 }
 
 export interface OrderLineModifier {
@@ -71,6 +90,8 @@ export interface OrderLineModifier {
   netSalesMinor: Paisa;
   allocationBaseMinor: Paisa;
 }
+
+export type VoidKind = 'correction' | 'void';
 
 export interface OrderLine {
   id: number;
@@ -84,6 +105,7 @@ export interface OrderLine {
   voided: boolean;
   voidReason: string | null;
   voidApprovedBy: number | null;
+  voidKind: VoidKind | null;
   modifiers: OrderLineModifier[];
 }
 
@@ -98,6 +120,7 @@ export interface OrderSummary {
   shiftId: number | null;
   openedAt: string;
   billedAt: string | null;
+  firstBilledAt: string | null;
   closedAt: string | null;
   openedBy: number;
   closedBy: number | null;
@@ -113,8 +136,92 @@ export interface OrderSummary {
   version: number;
 }
 
+export interface FloorOrder extends OrderSummary {
+  paidMinor: Paisa;
+  balanceMinor: Paisa;
+}
+
+export interface FloorBoard {
+  open: FloorOrder[];
+  awaitingPayment: FloorOrder[];
+  completed: FloorOrder[];
+}
+
+export interface BillTotals {
+  subtotalMinor: Paisa;
+  orderDiscountMinor: Paisa;
+  netSalesMinor: Paisa;
+  taxMinor: Paisa;
+  serviceChargeMinor: Paisa;
+  roundingAdjustmentMinor: Paisa;
+  totalMinor: Paisa;
+}
+
+export interface PaymentAccount {
+  id: number;
+  paymentMethodId: number;
+  label: string;
+  accountTitle: string | null;
+  accountNumber: string | null;
+  bankName: string | null;
+  active: boolean;
+  sortOrder: number;
+}
+
+export interface RestaurantSettings {
+  name: string;
+  addressLine1: string;
+  addressLine2: string;
+  phone: string;
+  registrationLine: string;
+}
+
+export interface ReceiptSettings {
+  headerName: string;
+  showAddress: boolean;
+  showPhone: boolean;
+  headerNote: string;
+  footerMessage: string;
+  footerNote: string;
+  showOrderNumber: boolean;
+  showTable: boolean;
+  showWaiter: boolean;
+  showPaymentAccounts: boolean;
+  feedLines: number;
+}
+
+export interface PrinterSettings {
+  host: string;
+  port: number;
+  enabled: boolean;
+}
+
+export interface AppSettings {
+  restaurant: RestaurantSettings;
+  receipt: ReceiptSettings;
+}
+
+export interface ConsumptionDetailLine {
+  consumptionRecordId: number;
+  orderId: number;
+  invoiceNo: number | null;
+  personId: number;
+  personName: string;
+  itemName: string;
+  modifierNames: string;
+  qty: number;
+  menuValueMinor: Paisa;
+  chargedMinor: Paisa;
+  mealPolicy: string;
+  settlementType: string | null;
+  settlementStatus: string;
+  consumedAt: string;
+}
+
 export interface OrderDetail extends OrderSummary {
   lines: OrderLine[];
+  paidMinor: Paisa;
+  balanceMinor: Paisa;
 }
 
 export interface PaymentMethod {
@@ -137,6 +244,9 @@ export interface Payment {
   paymentMethodId: number;
   amountMinor: Paisa;
   referenceNo: string | null;
+  paymentAccountId: number | null;
+  tenderedMinor: Paisa | null;
+  changeMinor: Paisa | null;
   receivedBy: number;
   receivedAt: string;
   reversedByPaymentId: number | null;
@@ -145,6 +255,7 @@ export interface Payment {
 export interface RecordPaymentResult {
   payment: Payment;
   changeMinor: Paisa | null;
+  appliedMinor: Paisa;
   orderClosed: boolean;
   order: OrderSummary;
   invoiceNo: number | null;
@@ -228,9 +339,20 @@ export interface ZReport {
   customerSalesMinor: Paisa;
   consumptionMinor: Paisa;
   combinedSalesMinor: Paisa;
+  consumptionUnchargedMinor: Paisa;
+  discountsGivenMinor: Paisa;
+  voidedSalesMinor: Paisa;
   taxCollectedMinor: Paisa;
   serviceChargeCollectedMinor: Paisa;
   roundingAdjustmentMinor: Paisa;
+  openingFloatMinor: Paisa;
+  cashPaymentsMinor: Paisa;
+  cashTenderedMinor: Paisa;
+  changeGivenMinor: Paisa;
+  nonCashPaymentsMinor: Paisa;
+  expectedCashMinor: Paisa;
+  countedCashMinor: Paisa | null;
+  varianceMinor: Paisa | null;
   paymentMethodBreakdown: { paymentMethodId: number; paymentMethodName: string; totalMinor: Paisa }[];
 }
 
@@ -270,6 +392,7 @@ export interface ItemMixLine {
 
 export interface ConsumptionReport {
   records: ConsumptionRecord[];
+  lines: ConsumptionDetailLine[];
   byPerson: { personId: number; personName: string; menuValueMinor: Paisa; chargedMinor: Paisa; settlementMinor: Paisa }[];
 }
 

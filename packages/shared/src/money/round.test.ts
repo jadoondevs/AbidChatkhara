@@ -1,7 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { paisa } from './paisa.js';
-import { roundToRupee } from './round.js';
+import { roundToRupee, roundUpTo } from './round.js';
 
 describe('roundToRupee', () => {
   it('leaves an exact rupee amount unchanged', () => {
@@ -48,5 +48,52 @@ describe('roundToRupee', () => {
       }),
       { numRuns: 2000 },
     );
+  });
+});
+
+describe('roundUpTo', () => {
+  it('leaves an amount that is already a multiple of the step alone', () => {
+    expect(roundUpTo(paisa(500_00), 500_00)).toBe(500_00);
+    expect(roundUpTo(paisa(0), 100_00)).toBe(0);
+  });
+
+  it('rounds up to the next multiple', () => {
+    expect(roundUpTo(paisa(1_800_00), 500_00)).toBe(2_000_00);
+    expect(roundUpTo(paisa(1_800_00), 1000_00)).toBe(2_000_00);
+    expect(roundUpTo(paisa(1_800_00), 100_00)).toBe(1_800_00);
+    expect(roundUpTo(paisa(1_801_00), 100_00)).toBe(1_900_00);
+  });
+
+  it('rounds up by a single paisa when that is all it takes', () => {
+    expect(roundUpTo(paisa(1), 100)).toBe(100);
+    expect(roundUpTo(paisa(99), 100)).toBe(100);
+    expect(roundUpTo(paisa(101), 100)).toBe(200);
+  });
+
+  it('rounds a negative amount towards zero, to the next multiple up', () => {
+    expect(roundUpTo(paisa(-150), 100)).toBe(-100);
+    expect(roundUpTo(paisa(-100), 100)).toBe(-100);
+  });
+
+  it('never returns less than the amount it was given', () => {
+    for (const amount of [0, 1, 99, 100, 12_345, 1_800_00]) {
+      for (const step of [1, 100, 500_00]) {
+        expect(roundUpTo(paisa(amount), step)).toBeGreaterThanOrEqual(amount);
+      }
+    }
+  });
+
+  it('always returns a multiple of the step', () => {
+    for (const amount of [1, 99, 12_345, 1_800_00]) {
+      for (const step of [100, 500_00, 1000_00]) {
+        expect(roundUpTo(paisa(amount), step) % step).toBe(0);
+      }
+    }
+  });
+
+  it('rejects a step that is not a positive integer', () => {
+    expect(() => roundUpTo(paisa(100), 0)).toThrow(/positive integer/);
+    expect(() => roundUpTo(paisa(100), -100)).toThrow(/positive integer/);
+    expect(() => roundUpTo(paisa(100), 1.5)).toThrow(/positive integer/);
   });
 });

@@ -28,3 +28,25 @@ export function roundToRupee(amount: Paisa): RoundedTotal {
   const total = remainder >= 50 ? roundedDown + RUPEE : roundedDown;
   return { total: paisa(total), adjustment: paisa(total - amount) };
 }
+
+/**
+ * The smallest multiple of `step` that is at least `amount` — "what is
+ * the next round note up from this bill?".
+ *
+ * Used by the payment screen to suggest the notes a customer is likely
+ * to hand over for a given total. It lives here rather than in that
+ * screen because it is division on money, and every arithmetic operator
+ * applied to a `Paisa` belongs in this module — the workspace guard
+ * enforces exactly that (see docs/decisions/001).
+ *
+ * `step` is a plain count of paisa, not a `Paisa`: it is a denomination
+ * (100 paisa, 500_00 paisa), not an amount of money in its own right.
+ * Throws on a non-positive step rather than looping or dividing by zero.
+ */
+export function roundUpTo(amount: Paisa, step: number): Paisa {
+  if (!Number.isInteger(step) || step <= 0) {
+    throw new Error(`roundUpTo: step must be a positive integer number of paisa, got ${step}`);
+  }
+  const remainder = ((amount % step) + step) % step;
+  return paisa(remainder === 0 ? amount : amount + (step - remainder));
+}

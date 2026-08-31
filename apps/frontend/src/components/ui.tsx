@@ -36,32 +36,135 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   );
 }
 
-export function PinPad({ value, onChange, maxLength = 8 }: { value: string; onChange: (next: string) => void; maxLength?: number }): JSX.Element {
-  const press = (digit: string) => {
-    if (value.length < maxLength) onChange(value + digit);
-  };
+/**
+ * A masked field with a show/hide toggle, for a PC keyboard.
+ *
+ * This replaced the on-screen PIN pad: staff type their password on the
+ * keyboard in front of them, and the toggle exists because a mistyped
+ * password on a till behind a counter is far more likely than someone
+ * reading it over the cashier's shoulder — and a cashier who cannot see
+ * what they typed just retries blindly. It always starts masked.
+ */
+export function PasswordInput({
+  id,
+  name,
+  value,
+  onChange,
+  autoComplete,
+  autoFocus,
+  placeholder,
+}: {
+  id?: string;
+  name?: string;
+  value: string;
+  onChange: (next: string) => void;
+  autoComplete?: string;
+  autoFocus?: boolean;
+  placeholder?: string;
+}): JSX.Element {
+  const [revealed, setRevealed] = useState(false);
   return (
-    <div className="col">
-      <div
-        className="card mono"
-        style={{ fontSize: 30, letterSpacing: 10, textAlign: 'center', minHeight: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+    <div className="password-field">
+      <input
+        {...(id === undefined ? {} : { id })}
+        {...(name === undefined ? {} : { name })}
+        {...(autoComplete === undefined ? {} : { autoComplete })}
+        {...(placeholder === undefined ? {} : { placeholder })}
+        type={revealed ? 'text' : 'password'}
+        autoFocus={autoFocus ?? false}
+        autoCapitalize="none"
+        spellCheck={false}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <button
+        type="button"
+        className="ghost password-toggle"
+        // Not in the tab order: tabbing from the password field should
+        // reach the submit button, not a visibility toggle.
+        tabIndex={-1}
+        aria-label={revealed ? 'Hide password' : 'Show password'}
+        onClick={() => setRevealed((current) => !current)}
       >
-        {value.replace(/./g, '•') || <span className="muted" style={{ letterSpacing: 0, fontSize: 16 }}>enter PIN</span>}
-      </div>
-      <div className="pinpad">
-        {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
-          <button key={digit} onClick={() => press(digit)}>
-            {digit}
-          </button>
-        ))}
-        <button className="ghost" onClick={() => onChange('')}>
-          Clear
-        </button>
-        <button onClick={() => press('0')}>0</button>
-        <button className="ghost" onClick={() => onChange(value.slice(0, -1))}>
-          ⌫
-        </button>
-      </div>
+        {revealed ? 'Hide' : 'Show'}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * A quantity a cashier can type as well as step.
+ *
+ * The old running bill only had + and −, so setting a line to 10 meant
+ * nine clicks. The typed value is held as text while it is being edited
+ * so a half-typed field isn't clobbered mid-keystroke, and is committed
+ * on blur or Enter — never on every keypress, which would fire a
+ * request per digit. An empty or nonsensical entry reverts to the value
+ * it had rather than being pushed to the server.
+ */
+export function QtyInput({
+  value,
+  onCommit,
+  max = 999,
+  disabled = false,
+  label,
+}: {
+  value: number;
+  onCommit: (next: number) => void;
+  max?: number;
+  disabled?: boolean;
+  label?: string;
+}): JSX.Element {
+  const [text, setText] = useState(String(value));
+  const [lastValue, setLastValue] = useState(value);
+
+  // Follow the value when it changes underneath us (another terminal, or
+  // our own +/− buttons), without fighting what is being typed.
+  if (value !== lastValue) {
+    setLastValue(value);
+    setText(String(value));
+  }
+
+  const commit = () => {
+    const parsed = Number.parseInt(text, 10);
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > max) {
+      setText(String(value));
+      return;
+    }
+    if (parsed !== value) onCommit(parsed);
+  };
+
+  const step = (delta: number) => {
+    const next = Math.min(max, Math.max(1, value + delta));
+    if (next !== value) onCommit(next);
+  };
+
+  return (
+    <div className="qty-input">
+      <button type="button" className="qty-step" disabled={disabled || value <= 1} onClick={() => step(-1)} aria-label="One fewer">
+        −
+      </button>
+      <input
+        className="qty-value mono"
+        inputMode="numeric"
+        disabled={disabled}
+        aria-label={label ?? 'Quantity'}
+        value={text}
+        onChange={(event) => setText(event.target.value.replace(/[^0-9]/g, ''))}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            commit();
+            (event.target as HTMLInputElement).blur();
+          }
+          if (event.key === 'Escape') setText(String(value));
+        }}
+        onFocus={(event) => event.target.select()}
+      />
+      <button type="button" className="qty-step" disabled={disabled || value >= max} onClick={() => step(1)} aria-label="One more">
+        +
+      </button>
     </div>
   );
 }
@@ -75,20 +178,21 @@ export function PinPad({ value, onChange, maxLength = 8 }: { value: string; onCh
  */
 export function ManagerApproval({ action, onApproved, onCancel }: { action: string; onApproved: (token: string) => void; onCancel: () => void }): JSX.Element {
   const { approveAs } = useAuth();
-  const [userId, setUserId] = useState('');
-  const [pin, setPin] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
-  const submit = async () => {
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy || !username.trim() || !password) return;
     setBusy(true);
     setError(null);
     try {
-      const token = await approveAs(Number(userId), pin);
-      onApproved(token);
+      onApproved(await approveAs(username.trim(), password));
     } catch (err) {
       setError(err);
-      setPin('');
+      setPassword('');
     } finally {
       setBusy(false);
     }
@@ -96,17 +200,29 @@ export function ManagerApproval({ action, onApproved, onCancel }: { action: stri
 
   return (
     <Modal title={`Manager approval — ${action}`} onClose={onCancel}>
-      <ErrorBanner error={error} />
-      <div className="col">
-        <div>
-          <label htmlFor="approval-user">Manager user id</label>
-          <input id="approval-user" inputMode="numeric" value={userId} onChange={(event) => setUserId(event.target.value)} />
+      <form onSubmit={(event) => void submit(event)}>
+        <ErrorBanner error={error} />
+        <div className="col">
+          <div>
+            <label htmlFor="approval-username">Manager username</label>
+            <input
+              id="approval-username"
+              autoFocus
+              autoCapitalize="none"
+              spellCheck={false}
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="approval-password">Password</label>
+            <PasswordInput id="approval-password" value={password} onChange={setPassword} />
+          </div>
+          <button className="primary big" type="submit" disabled={busy || !username.trim() || !password}>
+            {busy ? 'Checking…' : 'Approve'}
+          </button>
         </div>
-        <PinPad value={pin} onChange={setPin} />
-        <button className="primary big" disabled={busy || !userId || pin.length < 4} onClick={() => void submit()}>
-          Approve
-        </button>
-      </div>
+      </form>
     </Modal>
   );
 }

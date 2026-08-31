@@ -101,6 +101,32 @@ export async function listUsers(
   return rows.map(toSummary);
 }
 
+export interface RosterEntry {
+  readonly id: number;
+  readonly name: string;
+  readonly role: Role;
+}
+
+/**
+ * Who is on today, by name — what the floor board needs to show
+ * "Faisal" beside a table, and what the new-order dialog needs to fill
+ * its waiter picker.
+ *
+ * Separate from `listUsers` because the two answer different questions.
+ * `listUsers` is the management view: it carries usernames and active
+ * flags, is how an admin administers credentials, and stays manager+.
+ * This is a roster of first-class names, readable by anyone already
+ * signed in — a waiter who cannot see their colleagues' names cannot
+ * take a dine-in order at all, which is what the manager-only list was
+ * quietly causing.
+ *
+ * Inactive users are excluded: they cannot be assigned new work.
+ */
+export async function listRoster(db: Kysely<Database>): Promise<RosterEntry[]> {
+  const rows = await db.selectFrom('user').select(['id', 'name', 'role']).where('active', '=', 1).orderBy('name', 'asc').execute();
+  return rows.map((row) => ({ id: row.id, name: row.name, role: row.role }));
+}
+
 export async function getUser(db: Kysely<Database>, userId: number): Promise<UserSummary | null> {
   const row = await db.selectFrom('user').selectAll().where('id', '=', userId).executeTakeFirst();
   return row ? toSummary(row) : null;

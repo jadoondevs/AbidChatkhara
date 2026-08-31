@@ -8,6 +8,7 @@ import { requireAuth, requireRole } from './require-auth.js';
 import {
   changeUserRole,
   createUser,
+  listRoster,
   listUsers,
   setUserActive,
   setUserPassword,
@@ -115,6 +116,17 @@ export const identityRoutes: FastifyPluginAsync<IdentityPluginOptions> = async (
     async (request, reply) => {
       const actor = requireAuth(request, reply);
       return { id: actor.userId, name: actor.name, username: actor.username, role: actor.role };
+    },
+  );
+
+  // Registered before '/api/users' purely for readability — Fastify
+  // routes on the full path, so order does not matter here.
+  app.get(
+    '/api/roster',
+    { schema: { response: { 200: z.array(userSummarySchema.pick({ id: true, name: true, role: true })) } } },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      return listRoster(db);
     },
   );
 

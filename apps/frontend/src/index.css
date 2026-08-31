@@ -135,14 +135,36 @@ label {
 
 .topbar nav {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+
+/* Below about 1400px the brand, the new-order button, nine nav links and
+   the signed-in user do not fit on one line. Rather than let the nav
+   scroll — which silently hides Settings on a 1280px till, and an admin
+   cannot click what they cannot see — the nav drops to its own full
+   width row. Every destination stays reachable at every width. */
+@media (max-width: 1400px) {
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  .topbar nav {
+    order: 10;
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+  }
+}
+
+.topbar a {
+  white-space: nowrap;
 }
 
 .topbar a {
   color: var(--muted);
   text-decoration: none;
-  padding: 10px 14px;
+  padding: 10px 12px;
   border-radius: var(--radius);
   min-height: var(--tap);
   display: inline-flex;
@@ -214,17 +236,6 @@ label {
   margin-bottom: 12px;
 }
 
-.pinpad {
-  display: grid;
-  grid-template-columns: repeat(3, 96px);
-  gap: 12px;
-}
-
-.pinpad button {
-  min-height: 76px;
-  font-size: 26px;
-  font-weight: 600;
-}
 
 .item-grid {
   display: grid;
@@ -304,16 +315,30 @@ th.num {
 
 .split {
   display: grid;
-  grid-template-columns: 1fr 380px;
+  grid-template-columns: 1fr 400px;
   gap: 16px;
   height: 100%;
+}
+
+@media (max-width: 1200px) {
+  .split {
+    grid-template-columns: 1fr 340px;
+  }
 }
 
 .total-line {
   display: flex;
   justify-content: space-between;
+  gap: 16px;
   padding: 6px 0;
   font-variant-numeric: tabular-nums;
+}
+
+/* An amount never wraps mid-number — "Rs" on one line and "6,850.00" on
+   the next is unreadable, and money is the one thing on these screens
+   that has to be. The label wraps instead. */
+.total-line .mono {
+  white-space: nowrap;
 }
 
 .total-line.grand {
@@ -345,4 +370,392 @@ th.num {
   color: #451a03;
   border-color: transparent;
   font-weight: 700;
+}
+
+/* ---------------------------------------------------------------------
+   Sign in
+   --------------------------------------------------------------------- */
+
+.login-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+}
+
+.login-title {
+  margin: 0;
+  font-size: 26px;
+}
+
+.login-subtitle {
+  margin: 4px 0 16px;
+}
+
+.password-field {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.password-field input {
+  flex: 1;
+  min-width: 0;
+}
+
+.password-toggle {
+  flex: 0 0 auto;
+  min-width: 64px;
+}
+
+/* ---------------------------------------------------------------------
+   Header
+   --------------------------------------------------------------------- */
+
+.topbar .brand {
+  font-size: 16px;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 0 auto;
+}
+
+/* New order sits beside the brand, before the nav, so it is in the same
+   place on every screen and never scrolls out of reach. */
+.new-order-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.nav-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 4px;
+  background: var(--border);
+}
+
+.topbar .who {
+  white-space: nowrap;
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
+.topbar .sign-out {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: 8px 12px;
+  min-height: 40px;
+}
+
+.topbar {
+  gap: 8px;
+}
+
+/* ---------------------------------------------------------------------
+   Floor board
+   --------------------------------------------------------------------- */
+
+.floor-board {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .floor-board {
+    grid-template-columns: 1fr;
+  }
+}
+
+.floor-list-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.floor-list-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.floor-list-header .count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+/* A colour per column, so "which list is this" is answerable at a
+   glance from across the counter rather than by reading the heading. */
+.floor-list-open {
+  border-top: 3px solid var(--accent);
+}
+
+.floor-list-awaiting {
+  border-top: 3px solid var(--warn);
+}
+
+.floor-list-done {
+  border-top: 3px solid var(--success);
+}
+
+.order-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  text-align: left;
+}
+
+.order-row-main,
+.order-row-money {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.order-row-main strong {
+  white-space: nowrap;
+}
+
+.order-row-id {
+  font-size: 12px;
+}
+
+.pill.part-paid {
+  background: var(--warn);
+  color: #451a03;
+  border-color: transparent;
+  font-weight: 700;
+}
+
+.pill.ok {
+  background: var(--success);
+  color: #052e16;
+  border-color: transparent;
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------------------------
+   Order screen
+   --------------------------------------------------------------------- */
+
+.item-tile {
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 4px;
+  text-align: left;
+  padding: 12px;
+}
+
+/* In the flow, not absolutely positioned: an "options" badge floating
+   over the corner sat on top of any item name long enough to reach it,
+   which is most of them. */
+.tile-hint {
+  margin-top: auto;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.running-bill {
+  height: 100%;
+  overflow: auto;
+}
+
+.bill-lines {
+  gap: 0;
+}
+
+/* Two rows per line rather than one: an item name, a quantity stepper,
+   a price and a remove button do not fit side by side in a bill panel
+   at any width a POS screen can spare, and squeezing them produced a
+   name overlapping its own controls. */
+.bill-line {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas:
+    'name  name  name'
+    'qty   money remove';
+  align-items: center;
+  gap: 6px 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.bill-line-name {
+  grid-area: name;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.bill-line .qty-input {
+  grid-area: qty;
+}
+
+.bill-line-money {
+  grid-area: money;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.bill-line-remove {
+  grid-area: remove;
+}
+
+.bill-line-modifiers,
+.line-modifiers {
+  font-size: 12px;
+}
+
+.bill-line-money {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bill-line-remove {
+  padding: 6px 10px;
+  min-height: 36px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.bill-totals {
+  margin-top: auto;
+  padding-top: 12px;
+}
+
+/* A quantity that can be typed, not only stepped. */
+.qty-input {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.qty-step {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.qty-value {
+  width: 52px;
+  min-height: 36px;
+  padding: 4px 6px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------
+   Payment
+   --------------------------------------------------------------------- */
+
+.cash-summary {
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+}
+
+.change-due {
+  font-size: 26px;
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------------------------
+   Settings, reports, shift
+   --------------------------------------------------------------------- */
+
+.settings-panel {
+  max-width: 720px;
+}
+
+.field-hint {
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 14px;
+  color: var(--text);
+  margin: 0;
+}
+
+.checkbox-row input {
+  width: auto;
+  min-height: 0;
+}
+
+.report-filter .tabs {
+  margin-bottom: 0;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.z-report {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .z-report {
+    grid-template-columns: 1fr;
+  }
+}
+
+.z-report .total-line.grand {
+  font-size: 19px;
+}
+
+.z-report section h4 {
+  margin: 16px 0 4px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.z-report section:first-of-type h4 {
+  margin-top: 0;
+}
+
+.total-line.muted {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+.settled-card {
+  max-width: 560px;
 }

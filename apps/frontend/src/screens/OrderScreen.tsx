@@ -1,15 +1,34 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../api/client.js';
-import { useAddLine, useCategories, useItemModifierGroups, useMenu, useModifiers, useOrder, usePeople, useVoidLine } from '../api/hooks.js';
-import type { MenuItem, OrderDetail, OrderLine } from '../api/types.js';
-import { ErrorBanner, Loading, ManagerApproval, Modal, Money } from '../components/ui.tsx';
+import {
+  useAddLine,
+  useCategories,
+  useItemModifierGroups,
+  useMenu,
+  useModifiers,
+  useOrder,
+  usePeople,
+  useRemoveLine,
+  useSetLineQty,
+  useVoidLine,
+} from '../api/hooks.js';
+import type { MenuItem, Modifier, ModifierGroup, OrderDetail, OrderLine } from '../api/types.js';
+import { ErrorBanner, Loading, ManagerApproval, Modal, Money, QtyInput } from '../components/ui.tsx';
 
 /**
- * Screen 3: category tabs, item grid, search, a running bill panel, and
- * quantity/modifier selection. A line void needs manager approval — if
- * the signed-in user isn't one, the void is retried with a manager's
- * own one-shot token rather than making them sign the till over.
+ * Screen 3: an item grid on the left, the running bill on the right.
+ *
+ * The core interaction is one click: tap an item and it lands on the
+ * bill. Tapping it again increments the line (the server merges it —
+ * see ordering's addLine), so the common case of "three of those"
+ * costs three taps and no dialog at all. A dialog appears only when the
+ * item genuinely needs an answer: a modifier group the kitchen requires
+ * a choice from, or one the customer may want options out of.
+ *
+ * The previous version opened a modal for every item, with + and −
+ * buttons for a quantity nobody had asked to change yet. That is a
+ * dialog to confirm a decision the cashier already made by clicking.
  */
 export function OrderScreen(): JSX.Element {
   const { orderId: orderIdParam } = useParams();
@@ -18,10 +37,12 @@ export function OrderScreen(): JSX.Element {
 
   const order = useOrder(orderId);
   const categories = useCategories();
+  const allModifiers = useModifiers();
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const menu = useMenu(categoryId ?? undefined);
-  const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
+  const addLine = useAddLine();
+  const [configuring, setConfiguring] = useState<MenuItem | null>(null);
 
   if (order.isLoading) return <Loading />;
   if (order.error) return <ErrorBanner error={order.error} />;
@@ -32,21 +53,23 @@ export function OrderScreen(): JSX.Element {
   const filtered = (menu.data ?? []).filter((item) => item.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   return (
-    <div className="split">
+    <div className="split order-screen">
       <div className="col" style={{ minWidth: 0 }}>
         {staffMeal && <BeneficiaryBanner order={detail} />}
 
         <div className="row">
           <h1 style={{ margin: 0, flex: 1 }}>
-            {detail.tableLabel ?? detail.orderType.replace('_', ' ')} <span className="muted">#{detail.id}</span>
+            {orderTitle(detail)} <span className="muted">#{detail.id}</span>
           </h1>
           <input
-            style={{ maxWidth: 260 }}
+            style={{ maxWidth: 280 }}
             placeholder="Search items…"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
         </div>
+
+        <ErrorBanner error={addLine.error} />
 
         <div className="tabs">
           <button className={categoryId === null ? 'active' : ''} onClick={() => setCategoryId(null)}>
@@ -64,13 +87,18 @@ export function OrderScreen(): JSX.Element {
         ) : (
           <div className="item-grid">
             {filtered.map((item) => (
-              <button key={item.id} disabled={!item.available || item.priceMinor === null} onClick={() => setSelectedItem(item)}>
-                <strong>{item.name}</strong>
-                <span className="muted">
-                  {item.priceMinor === null ? 'no price set' : <Money minor={item.priceMinor} />}
-                  {!item.available && ' · unavailable'}
-                </span>
-              </button>
+              <ItemButton
+                key={item.id}
+                item={item}
+                busy={addLine.isPending}
+                onPick={(needsChoice) => {
+                  if (needsChoice) {
+                    setConfiguring(item);
+                    return;
+                  }
+                  addLine.mutate({ orderId: detail.id, itemId: item.id, qty: 1 });
+                }}
+              />
             ))}
             {filtered.length === 0 && <p className="muted">No items match.</p>}
           </div>
@@ -79,9 +107,48 @@ export function OrderScreen(): JSX.Element {
 
       <RunningBill order={detail} onBill={() => navigate(`/orders/${detail.id}/bill`)} />
 
-      {selectedItem && <AddLineModal orderId={detail.id} item={selectedItem} onClose={() => setSelectedItem(null)} />}
+      {configuring && (
+        <ModifierPicker
+          orderId={detail.id}
+          item={configuring}
+          allModifiers={allModifiers.data ?? []}
+          onClose={() => setConfiguring(null)}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * One item tile. It has to know whether the item has modifier groups
+ * before it can decide between "add it straight away" and "ask first",
+ * so it loads them itself — the answer is cached per item by the query
+ * client, so a grid of thirty items is thirty cached lookups, not
+ * thirty requests per render.
+ */
+function ItemButton({ item, busy, onPick }: { item: MenuItem; busy: boolean; onPick: (needsChoice: boolean) => void }): JSX.Element {
+  const groups = useItemModifierGroups(item.id);
+  const needsChoice = (groups.data?.length ?? 0) > 0;
+  const unavailable = !item.available || item.priceMinor === null;
+
+  return (
+    <button className="item-tile" disabled={unavailable || busy || groups.isLoading} onClick={() => onPick(needsChoice)}>
+      <strong>{item.name}</strong>
+      <span className="muted">
+        {item.priceMinor === null ? 'no price set' : <Money minor={item.priceMinor} />}
+        {!item.available && ' · unavailable'}
+      </span>
+      {needsChoice && <span className="tile-hint">options</span>}
+    </button>
+  );
+}
+
+/** "Table T4", or the kind of order when there is no table. A table
+ * label is optional now, so a missing one must read as a normal
+ * takeaway rather than as something that failed to load. */
+export function orderTitle(order: { tableLabel: string | null; orderType: string }): string {
+  if (order.tableLabel) return `Table ${order.tableLabel}`;
+  return order.orderType === 'dine_in' ? 'Dine in' : order.orderType === 'takeaway' ? 'Takeaway' : 'Delivery';
 }
 
 function BeneficiaryBanner({ order }: { order: OrderDetail }): JSX.Element {
@@ -95,12 +162,152 @@ function BeneficiaryBanner({ order }: { order: OrderDetail }): JSX.Element {
   );
 }
 
+/**
+ * The modifier dialog, shown only for items that have groups.
+ *
+ * Every mandatory group is PRE-SELECTED with its first option. That is
+ * the actual fix for the spice-level bug: the dialog used to open with
+ * nothing chosen, so a cashier who clicked "Add to order" — the obvious
+ * thing to do — got a server rejection reading `"Spice level" requires
+ * between 1 and 1 selection(s); got 0`. A required choice with a
+ * sensible default is a choice the cashier can confirm or change, not
+ * a trap. The submit button additionally stays disabled, with the
+ * reason spelled out, if a group is somehow still unsatisfied.
+ */
+function ModifierPicker({
+  orderId,
+  item,
+  allModifiers,
+  onClose,
+}: {
+  orderId: number;
+  item: MenuItem;
+  allModifiers: Modifier[];
+  onClose: () => void;
+}): JSX.Element {
+  const addLine = useAddLine();
+  const groups = useItemModifierGroups(item.id);
+  const [qty, setQty] = useState(1);
+  const [selected, setSelected] = useState<number[] | null>(null);
+
+  const optionsFor = (group: ModifierGroup) => allModifiers.filter((modifier) => modifier.groupId === group.id);
+
+  // Defaults, computed once the groups and modifiers have both arrived.
+  if (selected === null && groups.data && allModifiers.length > 0) {
+    const defaults: number[] = [];
+    for (const group of groups.data) {
+      const options = optionsFor(group);
+      for (let i = 0; i < group.minSelect && i < options.length; i += 1) {
+        defaults.push((options[i] as Modifier).id);
+      }
+    }
+    setSelected(defaults);
+  }
+
+  const chosen = selected ?? [];
+
+  const toggle = (modifierId: number, group: ModifierGroup) => {
+    setSelected((current) => {
+      const list = current ?? [];
+      const inGroup = list.filter((id) => allModifiers.find((m) => m.id === id)?.groupId === group.id);
+
+      if (list.includes(modifierId)) {
+        // Never let the cashier deselect their way below a group's
+        // minimum — that is exactly the state the server rejects.
+        if (inGroup.length <= group.minSelect) return list;
+        return list.filter((id) => id !== modifierId);
+      }
+      if (inGroup.length >= group.maxSelect) {
+        // At the group's maximum, a new pick REPLACES the old one, which
+        // is what "choose one" means to anyone using it.
+        return [...list.filter((id) => !inGroup.includes(id)), modifierId];
+      }
+      return [...list, modifierId];
+    });
+  };
+
+  const unsatisfied = (groups.data ?? []).filter((group) => {
+    const count = chosen.filter((id) => allModifiers.find((m) => m.id === id)?.groupId === group.id).length;
+    return count < group.minSelect || count > group.maxSelect;
+  });
+
+  return (
+    <Modal title={item.name} onClose={onClose}>
+      <ErrorBanner error={addLine.error} />
+      <div className="col">
+        {groups.isLoading && <Loading />}
+
+        {groups.data?.map((group) => {
+          const options = optionsFor(group);
+          const required = group.minSelect > 0;
+          return (
+            <div key={group.id}>
+              <label>
+                {group.name}{' '}
+                <span className="muted">
+                  {required ? 'required — ' : 'optional — '}
+                  {group.minSelect === group.maxSelect ? `choose ${group.minSelect}` : `choose ${group.minSelect}–${group.maxSelect}`}
+                </span>
+              </label>
+              <div className="tabs">
+                {options.map((modifier) => (
+                  <button key={modifier.id} className={chosen.includes(modifier.id) ? 'active' : ''} onClick={() => toggle(modifier.id, group)}>
+                    {modifier.name}
+                    {modifier.priceDeltaMinor !== 0 && (
+                      <>
+                        {' '}
+                        <Money minor={modifier.priceDeltaMinor} />
+                      </>
+                    )}
+                  </button>
+                ))}
+                {options.length === 0 && <span className="muted">No options configured.</span>}
+              </div>
+            </div>
+          );
+        })}
+
+        <div>
+          <label>Quantity</label>
+          <QtyInput value={qty} onCommit={setQty} />
+        </div>
+
+        {unsatisfied.length > 0 && (
+          <p className="muted">
+            Choose an option for {unsatisfied.map((group) => group.name).join(', ')} before adding this item.
+          </p>
+        )}
+
+        <button
+          className="primary big"
+          disabled={addLine.isPending || unsatisfied.length > 0}
+          onClick={() => addLine.mutate({ orderId, itemId: item.id, qty, modifierIds: chosen }, { onSuccess: onClose })}
+        >
+          Add to order
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void }): JSX.Element {
+  const setLineQty = useSetLineQty();
+  const removeLine = useRemoveLine();
   const voidLine = useVoidLine();
+  const menu = useMenu();
+  const modifiers = useModifiers();
+
   const [voiding, setVoiding] = useState<{ line: OrderLine; reason: string } | null>(null);
   const [needsApproval, setNeedsApproval] = useState<{ line: OrderLine; reason: string } | null>(null);
 
   const live = order.lines.filter((line) => !line.voided);
+  // Once a bill has been printed, taking a line off it is a void, with a
+  // manager and a reason — before that it is just a mis-tap (see
+  // ordering's lineRemovalRequiresApproval).
+  const printed = order.firstBilledAt !== null;
+
+  const itemName = (itemId: number) => menu.data?.find((item) => item.id === itemId)?.name ?? `item ${itemId}`;
+  const modifierName = (modifierId: number) => modifiers.data?.find((m) => m.id === modifierId)?.name ?? `modifier ${modifierId}`;
 
   const submitVoid = (line: OrderLine, reason: string, token?: string) => {
     voidLine.mutate(
@@ -112,7 +319,7 @@ function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void
         },
         onError: (error) => {
           // 403 means the signed-in user isn't a manager — ask for a
-          // manager's PIN and retry this one call as them.
+          // manager's credentials and retry this one call as them.
           if (error instanceof ApiError && error.isForbidden) {
             setVoiding(null);
             setNeedsApproval({ line, reason });
@@ -122,37 +329,57 @@ function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void
     );
   };
 
+  const forbidden = (error: unknown) => error instanceof ApiError && error.isForbidden;
+
   return (
-    <div className="card col" style={{ height: '100%', overflow: 'auto' }}>
+    <div className="card col running-bill">
       <h2 style={{ margin: 0 }}>Running bill</h2>
-      <ErrorBanner error={voidLine.error instanceof ApiError && voidLine.error.isForbidden ? null : voidLine.error} />
+      <ErrorBanner error={forbidden(voidLine.error) ? null : (setLineQty.error ?? removeLine.error ?? voidLine.error)} />
 
-      {live.length === 0 && <p className="muted">No items yet.</p>}
+      {live.length === 0 && <p className="muted">No items yet. Click an item to add it.</p>}
 
-      <div className="col" style={{ gap: 6 }}>
+      <div className="col bill-lines">
         {live.map((line) => (
-          <div key={line.id} className="row" style={{ alignItems: 'flex-start' }}>
-            <div style={{ flex: 1 }}>
-              <div>
-                {line.qty} × <ItemName itemId={line.itemId} />
-              </div>
+          <div key={line.id} className="bill-line">
+            <div className="bill-line-name">
+              <div>{itemName(line.itemId)}</div>
               {line.modifiers.length > 0 && (
-                <div className="muted" style={{ fontSize: 13 }}>
-                  {line.modifiers.map((modifier) => (
-                    <ModifierName key={modifier.id} modifierId={modifier.modifierId} />
-                  ))}
+                <div className="muted bill-line-modifiers">
+                  {line.modifiers.map((modifier) => modifierName(modifier.modifierId)).join(', ')}
                 </div>
               )}
             </div>
-            <Money minor={line.grossMinor} />
-            <button className="ghost" onClick={() => setVoiding({ line, reason: '' })}>
-              Void
+
+            <QtyInput
+              value={line.qty}
+              disabled={setLineQty.isPending}
+              label={`Quantity of ${itemName(line.itemId)}`}
+              onCommit={(qty) => setLineQty.mutate({ orderId: order.id, lineId: line.id, qty })}
+            />
+
+            <span className="bill-line-money">
+              <Money minor={line.grossMinor} />
+            </span>
+
+            <button
+              className="ghost bill-line-remove"
+              title={printed ? 'Void this line (needs a manager)' : 'Remove this line'}
+              disabled={removeLine.isPending || voidLine.isPending}
+              onClick={() => {
+                if (printed) {
+                  setVoiding({ line, reason: '' });
+                  return;
+                }
+                removeLine.mutate({ orderId: order.id, lineId: line.id });
+              }}
+            >
+              {printed ? 'Void' : 'Remove'}
             </button>
           </div>
         ))}
       </div>
 
-      <div style={{ marginTop: 'auto' }}>
+      <div className="bill-totals">
         <div className="total-line">
           <span>Subtotal</span>
           <Money minor={order.subtotalMinor} />
@@ -175,6 +402,10 @@ function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void
       {voiding && (
         <Modal title="Void line" onClose={() => setVoiding(null)}>
           <div className="col">
+            <p className="muted">
+              This bill has already been printed, so removing {itemName(voiding.line.itemId)} is a void — it needs a manager and a reason,
+              and stays on the record.
+            </p>
             <div>
               <label htmlFor="void-reason">Reason</label>
               <input
@@ -182,9 +413,11 @@ function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void
                 autoFocus
                 value={voiding.reason}
                 onChange={(event) => setVoiding({ ...voiding, reason: event.target.value })}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && voiding.reason.trim()) submitVoid(voiding.line, voiding.reason.trim());
+                }}
               />
             </div>
-            <p className="muted">A line void needs manager approval.</p>
             <button className="danger big" disabled={!voiding.reason.trim()} onClick={() => submitVoid(voiding.line, voiding.reason.trim())}>
               Void line
             </button>
@@ -200,95 +433,5 @@ function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void
         />
       )}
     </div>
-  );
-}
-
-function ItemName({ itemId }: { itemId: number }): JSX.Element {
-  const menu = useMenu();
-  return <>{menu.data?.find((item) => item.id === itemId)?.name ?? `item ${itemId}`}</>;
-}
-
-function ModifierName({ modifierId }: { modifierId: number }): JSX.Element {
-  const modifiers = useModifiers();
-  const modifier = modifiers.data?.find((candidate) => candidate.id === modifierId);
-  return <span style={{ marginRight: 8 }}>+ {modifier?.name ?? `modifier ${modifierId}`}</span>;
-}
-
-function AddLineModal({ orderId, item, onClose }: { orderId: number; item: MenuItem; onClose: () => void }): JSX.Element {
-  const addLine = useAddLine();
-  const groups = useItemModifierGroups(item.id);
-  const allModifiers = useModifiers();
-  const [qty, setQty] = useState(1);
-  const [selected, setSelected] = useState<number[]>([]);
-
-  const toggle = (modifierId: number, group: { maxSelect: number; id: number }) => {
-    setSelected((current) => {
-      if (current.includes(modifierId)) return current.filter((id) => id !== modifierId);
-      const inGroup = current.filter((id) => allModifiers.data?.find((m) => m.id === id)?.groupId === group.id);
-      // Respect the group's own max — the server enforces it too, but a
-      // cashier shouldn't have to discover that by being rejected.
-      if (inGroup.length >= group.maxSelect) return [...current.filter((id) => !inGroup.includes(id)), modifierId];
-      return [...current, modifierId];
-    });
-  };
-
-  return (
-    <Modal title={item.name} onClose={onClose}>
-      <ErrorBanner error={addLine.error} />
-      <div className="col">
-        <div>
-          <label>Quantity</label>
-          <div className="row">
-            <button className="big" onClick={() => setQty((current) => Math.max(1, current - 1))}>
-              −
-            </button>
-            <span className="mono" style={{ fontSize: 28, minWidth: 60, textAlign: 'center' }}>
-              {qty}
-            </span>
-            <button className="big" onClick={() => setQty((current) => current + 1)}>
-              +
-            </button>
-          </div>
-        </div>
-
-        {groups.data?.map((group) => {
-          const options = (allModifiers.data ?? []).filter((modifier) => modifier.groupId === group.id && modifier.active);
-          return (
-            <div key={group.id}>
-              <label>
-                {group.name} — choose {group.minSelect === group.maxSelect ? group.minSelect : `${group.minSelect}–${group.maxSelect}`}
-              </label>
-              <div className="tabs">
-                {options.map((modifier) => (
-                  <button
-                    key={modifier.id}
-                    className={selected.includes(modifier.id) ? 'active' : ''}
-                    onClick={() => toggle(modifier.id, group)}
-                  >
-                    {modifier.name}
-                    {modifier.priceDeltaMinor !== 0 && (
-                      <>
-                        {' '}
-                        <Money minor={modifier.priceDeltaMinor} />
-                      </>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-
-        <button
-          className="primary big"
-          disabled={addLine.isPending}
-          onClick={() =>
-            addLine.mutate({ orderId, itemId: item.id, qty, modifierIds: selected }, { onSuccess: onClose })
-          }
-        >
-          Add to order
-        </button>
-      </div>
-    </Modal>
   );
 }

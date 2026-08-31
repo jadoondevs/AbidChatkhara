@@ -16,7 +16,7 @@ export {
   abs,
 } from './paisa.js';
 export { distribute, splitByShares, prorate, type BasisPointShare } from './distribute.js';
-export { roundToRupee, type RoundedTotal } from './round.js';
+export { roundToRupee, roundUpTo, type RoundedTotal } from './round.js';
 export { proportionalAmount } from './rate.js';
 export { format } from './format.js';
 export { parseRupees, toRupeeInput } from './input.js';

@@ -6,6 +6,7 @@ export interface Session {
   readonly token: string;
   readonly userId: number;
   readonly name: string;
+  readonly username: string;
   readonly role: Role;
   readonly terminalId: string;
 }
@@ -13,13 +14,13 @@ export interface Session {
 interface AuthContextValue {
   readonly session: Session | null;
   readonly terminalId: string;
-  login: (userId: number, pin: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   /** Authenticates a manager for ONE action without switching who is
    * logged in — the manager-approval path behind a line void or an
    * order reopen. Returns that manager's token for the caller to pass to
    * exactly one request. */
-  approveAs: (userId: number, pin: string) => Promise<string>;
+  approveAs: (username: string, password: string) => Promise<string>;
   hasAtLeastRole: (minimum: Role) => boolean;
 }
 
@@ -70,9 +71,16 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
   }, [session]);
 
   const login = useCallback(
-    async (userId: number, pin: string) => {
-      const result = await api.post<LoginResult>('/api/auth/login', { userId, pin, terminalId });
-      const next: Session = { token: result.token, userId: result.user.id, name: result.user.name, role: result.user.role, terminalId };
+    async (username: string, password: string) => {
+      const result = await api.post<LoginResult>('/api/auth/login', { username, password, terminalId });
+      const next: Session = {
+        token: result.token,
+        userId: result.user.id,
+        name: result.user.name,
+        username: result.user.username,
+        role: result.user.role,
+        terminalId,
+      };
       localStorage.setItem(SESSION_KEY, JSON.stringify(next));
       setAuthToken(next.token);
       setSession(next);
@@ -88,8 +96,8 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
   }, []);
 
   const approveAs = useCallback(
-    async (userId: number, pin: string) => {
-      const result = await api.post<LoginResult>('/api/auth/login', { userId, pin, terminalId });
+    async (username: string, password: string) => {
+      const result = await api.post<LoginResult>('/api/auth/login', { username, password, terminalId });
       if (RANK[result.user.role] < RANK.manager) {
         throw new Error(`${result.user.name} is a ${result.user.role}, not a manager`);
       }

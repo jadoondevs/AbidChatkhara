@@ -27,17 +27,40 @@ const REPORTS: { key: ReportKey; label: string; path: string }[] = [
  * CSV-exportable — the export link is the same endpoint with
  * `?format=csv`, so what's on screen and what's downloaded can't drift
  * apart. */
+/** Local calendar day as YYYY-MM-DD — `toISOString` would give the UTC
+ * day, which is a different day for part of every evening in Pakistan. */
+function localDay(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function daysAgo(n: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() - n);
+  return localDay(date);
+}
+
 export function ReportsScreen(): JSX.Element {
   const [active, setActive] = useState<ReportKey>('daily-sales');
-  const [fromInclusive, setFrom] = useState('');
-  const [toExclusive, setTo] = useState('');
+  // Day-granular and INCLUSIVE at both ends, which is what an operator
+  // means by "From 31 August, To 31 August". The old fields were an
+  // exact instant range with an exclusive upper bound, so that entry
+  // returned nothing at all.
+  const [from, setFrom] = useState(localDay(new Date()));
+  const [to, setTo] = useState(localDay(new Date()));
   const [partnerId, setPartnerId] = useState<number | ''>('');
   const partners = usePartners();
 
-  const range: DateRange = {
-    ...(fromInclusive ? { fromInclusive: new Date(fromInclusive).toISOString() } : {}),
-    ...(toExclusive ? { toExclusive: new Date(toExclusive).toISOString() } : {}),
+  const range: DateRange = { ...(from ? { from } : {}), ...(to ? { to } : {}) };
+
+  const setDay = (day: string) => {
+    setFrom(day);
+    setTo(day);
   };
+
+  const isToday = from === localDay(new Date()) && to === from;
+  const isYesterday = from === daysAgo(1) && to === from;
+  const isThisMonth = from === localDay(new Date(new Date().getFullYear(), new Date().getMonth(), 1)) && to === localDay(new Date());
 
   const report = REPORTS.find((candidate) => candidate.key === active);
   const csvHref =
@@ -59,34 +82,68 @@ export function ReportsScreen(): JSX.Element {
         ))}
       </div>
 
-      <div className="card row" style={{ flexWrap: 'wrap' }}>
-        <div>
-          <label htmlFor="from">From</label>
-          <input id="from" type="date" value={fromInclusive} onChange={(event) => setFrom(event.target.value)} />
-        </div>
-        <div>
-          <label htmlFor="to">To (exclusive)</label>
-          <input id="to" type="date" value={toExclusive} onChange={(event) => setTo(event.target.value)} />
-        </div>
-        {active === 'partner-statement' && (
-          <div style={{ minWidth: 220 }}>
-            <label htmlFor="partner">Partner</label>
-            <select id="partner" value={partnerId} onChange={(event) => setPartnerId(event.target.value === '' ? '' : Number(event.target.value))}>
-              <option value="">Select a partner…</option>
-              {partners.data?.map((partner) => (
-                <option key={partner.id} value={partner.id}>
-                  {partner.name}
-                </option>
-              ))}
-            </select>
+      <div className="card col report-filter">
+        <div className="row" style={{ flexWrap: 'wrap' }}>
+          <div className="tabs">
+            <button className={isToday ? 'active' : ''} onClick={() => setDay(localDay(new Date()))}>
+              Today
+            </button>
+            <button className={isYesterday ? 'active' : ''} onClick={() => setDay(daysAgo(1))}>
+              Yesterday
+            </button>
+            <button
+              className={!isToday && !isYesterday && !isThisMonth ? 'active' : ''}
+              onClick={() => {
+                setFrom(daysAgo(6));
+                setTo(localDay(new Date()));
+              }}
+            >
+              Last 7 days
+            </button>
+            <button
+              className={isThisMonth ? 'active' : ''}
+              onClick={() => {
+                setFrom(localDay(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
+                setTo(localDay(new Date()));
+              }}
+            >
+              This month
+            </button>
           </div>
-        )}
-        <span style={{ flex: 1 }} />
-        {csvHref && (
-          <a href={csvHref} download>
-            <button>Export CSV</button>
-          </a>
-        )}
+        </div>
+
+        <div className="row" style={{ flexWrap: 'wrap' }}>
+          <div>
+            <label htmlFor="from">From</label>
+            <input id="from" type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+          </div>
+          <div>
+            <label htmlFor="to">To</label>
+            <input id="to" type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+            <p className="muted field-hint">Both days are included. The same date in both gives one day.</p>
+          </div>
+
+          {active === 'partner-statement' && (
+            <div style={{ minWidth: 220 }}>
+              <label htmlFor="partner">Partner</label>
+              <select id="partner" value={partnerId} onChange={(event) => setPartnerId(event.target.value === '' ? '' : Number(event.target.value))}>
+                <option value="">Select a partner…</option>
+                {partners.data?.map((partner) => (
+                  <option key={partner.id} value={partner.id}>
+                    {partner.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <span style={{ flex: 1 }} />
+          {csvHref && (
+            <a href={csvHref} download>
+              <button>Export CSV</button>
+            </a>
+          )}
+        </div>
       </div>
 
       {active === 'daily-sales' && <DailySales range={range} />}
@@ -309,40 +366,67 @@ function Consumption({ range }: { range: DateRange }): JSX.Element {
                 </td>
               </tr>
             ))}
+            {data.byPerson.length === 0 && (
+              <tr>
+                <td className="muted">Nothing consumed in this period.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
 
+      {/* The point of this report: what was actually eaten, not just a
+          column of totals. One row per item, with the person's share of
+          what they were charged for it. */}
       <div className="card">
-        <h3 style={{ margin: 0 }}>Itemised</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>Person</th>
-              <th>Policy</th>
-              <th className="num">Menu value</th>
-              <th className="num">Charged</th>
-              <th>Settled as</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.records.map((record) => (
-              <tr key={record.id}>
-                <td>{new Date(record.createdAt).toLocaleString()}</td>
-                <td>{record.personName}</td>
-                <td>{record.policySnapshot.mealPolicy.replace('_', ' ')}</td>
-                <td className="num">
-                  <Money minor={record.menuValueMinor} />
-                </td>
-                <td className="num">
-                  <Money minor={record.chargedMinor} />
-                </td>
-                <td>{record.settlementType?.replace('_', ' ') ?? '—'}</td>
+        <h3 style={{ margin: 0 }}>Every item consumed</h3>
+        <p className="muted" style={{ marginTop: 0 }}>
+          The CSV export contains exactly these rows.
+        </p>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Person</th>
+                <th>Item</th>
+                <th className="num">Qty</th>
+                <th className="num">Menu value</th>
+                <th className="num">Charged</th>
+                <th>Policy</th>
+                <th>Settlement</th>
+                <th className="num">Order</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {data.lines.map((line) => (
+                <tr key={`${line.consumptionRecordId}-${line.itemName}-${line.qty}-${line.menuValueMinor}`}>
+                  <td>{new Date(line.consumedAt).toLocaleString()}</td>
+                  <td>{line.personName}</td>
+                  <td>
+                    {line.itemName}
+                    {line.modifierNames && <div className="muted line-modifiers">{line.modifierNames}</div>}
+                  </td>
+                  <td className="num">{line.qty}</td>
+                  <td className="num">
+                    <Money minor={line.menuValueMinor} />
+                  </td>
+                  <td className="num">
+                    <Money minor={line.chargedMinor} />
+                  </td>
+                  <td>{line.mealPolicy.replace(/_/g, ' ')}</td>
+                  <td>{line.settlementType?.replace(/_/g, ' ') ?? '—'}</td>
+                  <td className="num">{line.invoiceNo !== null ? `#${line.invoiceNo}` : `order ${line.orderId}`}</td>
+                </tr>
+              ))}
+              {data.lines.length === 0 && (
+                <tr>
+                  <td className="muted">No items consumed in this period.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

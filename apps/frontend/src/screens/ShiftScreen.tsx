@@ -1,8 +1,8 @@
-import { paisa, type Paisa } from '@pos/shared';
+import { abs, paisa, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { ApiError } from '../api/client.js';
 import { useCloseShiftMutation, useOpenShift, useOpenShiftMutation, usePayoutSheet, useZReport } from '../api/hooks.js';
-import type { BlockingOrder } from '../api/types.js';
+import type { BlockingOrder, ZReport } from '../api/types.js';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 
 /**
@@ -49,7 +49,7 @@ export function ShiftScreen(): JSX.Element {
   const closed = shift.closedAt !== null;
 
   return (
-    <div className="col" style={{ maxWidth: 900 }}>
+    <div className="col" style={{ maxWidth: 1100 }}>
       <h1 style={{ margin: 0 }}>Shift #{shift.id}</h1>
       <p className="muted" style={{ marginTop: 0 }}>
         Opened {new Date(shift.openedAt).toLocaleString()} · float <Money minor={shift.openingCashMinor} />
@@ -128,62 +128,13 @@ export function ShiftScreen(): JSX.Element {
         </div>
       )}
 
-      <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', alignItems: 'start' }}>
-        <div className="card">
-          <h3 style={{ margin: 0 }}>Z-report</h3>
-          {zReport.isLoading && <Loading />}
-          {zReport.data && (
-            <>
-              <div className="total-line">
-                <span>Customer sales</span>
-                <Money minor={zReport.data.customerSalesMinor} />
-              </div>
-              <div className="total-line">
-                <span>Staff &amp; owner consumption</span>
-                <Money minor={zReport.data.consumptionMinor} />
-              </div>
-              <div className="total-line">
-                <span>Combined</span>
-                <Money minor={zReport.data.combinedSalesMinor} />
-              </div>
-              <div className="total-line">
-                <span>Tax collected</span>
-                <Money minor={zReport.data.taxCollectedMinor} />
-              </div>
-              <div className="total-line">
-                <span>Service charge (held, not earned)</span>
-                <Money minor={zReport.data.serviceChargeCollectedMinor} />
-              </div>
-              <div className="total-line">
-                <span>Rounding adjustments</span>
-                <Money minor={zReport.data.roundingAdjustmentMinor} />
-              </div>
-              <h4>By payment method</h4>
-              <table>
-                <tbody>
-                  {zReport.data.paymentMethodBreakdown.map((line) => (
-                    <tr key={line.paymentMethodId}>
-                      <td>{line.paymentMethodName}</td>
-                      <td className="num">
-                        <Money minor={line.totalMinor} />
-                      </td>
-                    </tr>
-                  ))}
-                  {zReport.data.paymentMethodBreakdown.length === 0 && (
-                    <tr>
-                      <td className="muted">No payments yet.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </>
-          )}
-        </div>
+      <div className="z-report">
+        <ZReportCard zReport={zReport.data} loading={zReport.isLoading} />
 
         <div className="card">
           <h3 style={{ margin: 0 }}>Service charge payout</h3>
           <p className="muted" style={{ marginTop: 0 }}>
-            Owed per waiter for this shift — hand over with the Z-report.
+            Money the restaurant is <strong>holding for waiters</strong>, not revenue it earned. Hand it over with the Z-report.
           </p>
           {payout.isLoading && <Loading />}
           <table>
@@ -205,6 +156,151 @@ export function ShiftScreen(): JSX.Element {
           </table>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The Z-report, laid out as the two questions an operator actually has
+ * at close — "how much should be in the drawer?" and "how much did we
+ * count?" — rather than as a list of accounting terms.
+ *
+ * Every figure here is the server's; nothing is re-derived in the
+ * browser. Expected cash in particular is computed the same way the
+ * close computes it, so what this screen shows before closing is what
+ * the close will record.
+ */
+function ZReportCard({ zReport, loading }: { zReport: ZReport | undefined; loading: boolean }): JSX.Element {
+  if (loading) return <Loading />;
+  if (!zReport) return <div className="card" />;
+
+  const counted = zReport.countedCashMinor;
+  const variance = zReport.varianceMinor;
+
+  return (
+    <div className="card col">
+      <h3 style={{ margin: 0 }}>Z-report</h3>
+
+      <section>
+        <h4>The drawer</h4>
+        <div className="total-line">
+          <span>Opening float</span>
+          <Money minor={zReport.openingFloatMinor} />
+        </div>
+        <div className="total-line">
+          <span>Cash taken (applied to bills)</span>
+          <Money minor={zReport.cashPaymentsMinor} />
+        </div>
+        {zReport.changeGivenMinor > 0 && (
+          <>
+            <div className="total-line muted">
+              <span>… cash handed over by customers</span>
+              <Money minor={zReport.cashTenderedMinor} />
+            </div>
+            <div className="total-line muted">
+              <span>… change handed back</span>
+              <Money minor={zReport.changeGivenMinor} />
+            </div>
+          </>
+        )}
+        <div className="total-line grand">
+          <span>Should be in the drawer</span>
+          <Money minor={zReport.expectedCashMinor} />
+        </div>
+        {counted !== null ? (
+          <>
+            <div className="total-line">
+              <span>Counted</span>
+              <Money minor={counted} />
+            </div>
+            <div
+              className="total-line grand"
+              style={{ color: variance === 0 ? 'var(--success)' : 'var(--danger)' }}
+            >
+              <span>{variance === null || variance === 0 ? 'Balanced' : variance > 0 ? 'Over by' : 'Short by'}</span>
+              <Money minor={variance === null ? null : abs(variance)} />
+            </div>
+          </>
+        ) : (
+          <p className="muted field-hint">Count the drawer below to see whether it balances.</p>
+        )}
+      </section>
+
+      <section>
+        <h4>Sales</h4>
+        <div className="total-line">
+          <span>Customer sales</span>
+          <Money minor={zReport.customerSalesMinor} />
+        </div>
+        <div className="total-line">
+          <span>Staff &amp; owner meals (menu value)</span>
+          <Money minor={zReport.consumptionMinor} />
+        </div>
+        {zReport.consumptionUnchargedMinor > 0 && (
+          <div className="total-line muted">
+            <span>… of which the house absorbed</span>
+            <Money minor={zReport.consumptionUnchargedMinor} />
+          </div>
+        )}
+        <div className="total-line grand">
+          <span>Combined</span>
+          <Money minor={zReport.combinedSalesMinor} />
+        </div>
+      </section>
+
+      <section>
+        <h4>Taken off bills</h4>
+        <div className="total-line">
+          <span>Discounts given</span>
+          <Money minor={zReport.discountsGivenMinor} />
+        </div>
+        <div className="total-line">
+          <span>Voided</span>
+          <Money minor={zReport.voidedSalesMinor} />
+        </div>
+        <div className="total-line">
+          <span>Rounding adjustments</span>
+          <Money minor={zReport.roundingAdjustmentMinor} />
+        </div>
+      </section>
+
+      <section>
+        <h4>Collected</h4>
+        <div className="total-line">
+          <span>Tax collected</span>
+          <Money minor={zReport.taxCollectedMinor} />
+        </div>
+        <div className="total-line">
+          <span>Service charge (held for waiters, not revenue)</span>
+          <Money minor={zReport.serviceChargeCollectedMinor} />
+        </div>
+        <div className="total-line">
+          <span>Cash</span>
+          <Money minor={zReport.cashPaymentsMinor} />
+        </div>
+        <div className="total-line">
+          <span>Everything else</span>
+          <Money minor={zReport.nonCashPaymentsMinor} />
+        </div>
+
+        <table>
+          <tbody>
+            {zReport.paymentMethodBreakdown.map((line) => (
+              <tr key={line.paymentMethodId}>
+                <td>{line.paymentMethodName}</td>
+                <td className="num">
+                  <Money minor={line.totalMinor} />
+                </td>
+              </tr>
+            ))}
+            {zReport.paymentMethodBreakdown.length === 0 && (
+              <tr>
+                <td className="muted">No payments yet.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </section>
     </div>
   );
 }

@@ -80,7 +80,11 @@ const orderSummarySchema = z.object({
   version: z.number().int(),
 });
 
-const orderDetailSchema = orderSummarySchema.extend({ lines: z.array(orderLineSchema) });
+const orderDetailSchema = orderSummarySchema.extend({
+  lines: z.array(orderLineSchema),
+  paidMinor: z.number().int(),
+  balanceMinor: z.number().int(),
+});
 
 const floorOrderSchema = orderSummarySchema.extend({
   paidMinor: z.number().int(),

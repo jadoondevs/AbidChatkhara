@@ -1,14 +1,23 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useCreatePerson, usePeople, useUpdatePerson } from '../api/hooks.js';
 import type { MealPolicy, PersonKind } from '../api/types.js';
 import { ErrorBanner, Loading } from '../components/ui.tsx';
 
 const POLICIES: MealPolicy[] = ['free', 'discounted', 'full_price', 'payroll_deduction'];
 
-/** Screen 10: staff and partners, with a meal policy per person. The
+/**
+ * Screen 10: staff and partners, with a meal policy per person. The
  * policy in force at settlement is snapshotted onto that meal's own
  * record, so changing it here never rewrites what someone was already
- * charged (docs/decisions/009). */
+ * charged (docs/decisions/009).
+ *
+ * A "person" here is someone whose MEALS the restaurant tracks — a cook
+ * who never touches the till, a partner who eats here. That is not the
+ * same thing as a login account, which lives in Settings → Users. The
+ * two are deliberately separate: merging them would give every cook a
+ * password and every terminal user a meal policy, and neither is true.
+ */
 export function PeopleConfigScreen(): JSX.Element {
   const people = usePeople(undefined, true);
   const createPerson = useCreatePerson();
@@ -34,6 +43,10 @@ export function PeopleConfigScreen(): JSX.Element {
   return (
     <div className="col" style={{ maxWidth: 1000 }}>
       <h1 style={{ margin: 0 }}>People</h1>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Staff and partners whose meals the restaurant tracks. Login accounts for this POS are separate — they live in{' '}
+        <Link to="/settings">Settings → Users</Link>.
+      </p>
       <ErrorBanner error={createPerson.error ?? updatePerson.error} />
 
       <div className="card">
