@@ -6,7 +6,7 @@ Pakistan. See `ARCHITECTURE.md` for how it's put together and why, and
 
 This system is being built incrementally, one milestone per branch, merged
 to `main` as each lands. **Status: platform, the money module, identity
-(users, PIN login, audit log), catalog (menu, prices, modifiers), ordering
+(users, username/password login, audit log), catalog (menu, prices, modifiers), ordering
 (orders through the pro-forma bill, line/order void), partners (the
 allocation engine, effective-dated ownership), billing (payments,
 settlement, invoice numbering, refunds, ESC/POS printing), gratuity
@@ -46,8 +46,13 @@ npm run build:frontend   # writes apps/frontend/dist
 npm run start            # serves the API and that build on :4000
 ```
 
-Open `http://<server-ip>:4000` on the tablet. Migrations are applied on
+Open `http://<server-ip>:4000` on the till. Migrations are applied on
 startup; `GET /api/health` responds `{"ok":true}`.
+
+Build the frontend **before** starting the server, not after: the server
+indexes `apps/frontend/dist` when it boots, so a rebuild while it is
+running leaves it serving asset filenames that no longer exist (a blank
+page). Restart it after any rebuild.
 
 A freshly-migrated database has no users, so nothing can log in yet. For
 a demo or a test day, seed it:
@@ -60,16 +65,35 @@ That creates an obviously-fictional restaurant: five users, a menu of
 eight items across four categories, three partners (some items
 single-owner, some shared, one modifier owned separately from the item
 it sits on), six people on every different meal policy, and the three
-payment methods. Sign in as user id 1 with PIN `9999`. **Change the
-PINs and the placeholder account details before going live** — they're
-sequential and fake on purpose. The script refuses to run against a
-database that already has users, so it can't quietly double-seed a real
-till.
+payment methods, three payment accounts, and placeholder restaurant
+details. Sign in as `amina` with password `9999`. **Change every
+password and the placeholder account details before going live** —
+they're sequential and fake on purpose. The script refuses to run
+against a database that already has users, so it can't quietly
+double-seed a real till.
 
 For a real restaurant, create the first admin account directly instead
 — see `apps/server/src/identity/service.test.ts` for the pattern
 (`createUser` with `actorId: null`, a system action, is how the very first
-user is created without an existing actor to attribute it to).
+user is created without an existing actor to attribute it to). After
+that, everything else is configured from the app: **Settings** (admin
+only) holds the restaurant's name and address, the receipt wording, the
+printer, the Easypaisa and bank accounts money arrives in, and the login
+accounts themselves.
+
+### Upgrading an existing database
+
+Sign-in changed from "pick your user id, tap a PIN" to a username and a
+password typed on a keyboard. Migration `0011` adds a `username` to
+every existing user, derived from the first word of their name
+(`Amina Qureshi` → `amina`), and **nobody's credential is touched** — the
+PIN they already had is still their password, because a PIN is just a
+short password and the column has always held a salted hash of whatever
+they type. Two people sharing a first name get `name.id` (`ali.3`), and
+an admin can rename anyone from Settings → Users afterwards.
+
+Nothing needs to be done by hand: start the new server against the
+existing database and it migrates on startup, as always.
 
 ### Developing
 
@@ -82,12 +106,13 @@ With no `apps/frontend/dist` present the server runs API-only and every
 non-API path 404s, which is exactly what you want while Vite is serving
 the app itself.
 
-### Installing on the tablet
+### Installing on the till
 
-The frontend is a PWA: open it in Chrome on the tablet and use "Add to
-home screen". It's built for a 10-inch tablet in landscape, and the
-built app shell is cached by a service worker so a reload still works if
-the server blips. API responses are deliberately never cached — a
+The frontend is a PWA: open it in Chrome and use "Install". It is built
+for a normal POS computer with a mouse and a physical keyboard —
+1280×800 and up, laid out so nothing important scrolls out of reach at
+the narrow end. The built app shell is cached by a service worker so a
+reload still works if the server blips. API responses are deliberately never cached — a
 cashier must never be shown a stale order list, or a bill another
 terminal has already settled.
 
@@ -116,15 +141,30 @@ committed to git:
 | `POS_PORT`         | `4000`                | HTTP port                                              |
 | `POS_HOST`         | `0.0.0.0`             | Bind address                                           |
 | `POS_DB_PATH`      | `./data/pos.sqlite`   | SQLite database file                                   |
-| `POS_PRINTER_HOST` | unset                 | Receipt printer's IP address on the local network      |
+| `POS_PRINTER_HOST` | unset                 | Fallback receipt-printer address; **Settings → Printer wins over this** |
 | `POS_PRINTER_PORT` | `9100`                | Printer's raw ESC/POS TCP port (9100 is the standard "JetDirect" port) |
 | `POS_FRONTEND_DIR` | `apps/frontend/dist`  | Built PWA to serve; API-only if it holds no `index.html` |
 
-`POS_PRINTER_HOST` unset is a supported, working state — the server runs
+The printer is normally configured in the app, under **Settings →
+Printer**, which is where an admin can change it without touching the
+machine. `POS_PRINTER_HOST` remains as a fallback for a server that has
+never had one set, and a Settings value always wins — an admin who has
+typed an address into the POS is stating the current truth, and should
+not have to know a stale value exists in a `.env` file. Printing can
+also be switched off there entirely, which is what you want while the
+printer is away for repair: prints then fail immediately with a clear
+message instead of every bill waiting on a connection that will never
+answer.
+
+Neither configured is a supported, working state — the server runs
 normally and print routes respond `503` with a clear message instead of
-attempting to connect anywhere. There's no admin screen for this (the
-spec's screen list doesn't have one), so it's environment-configured like
-everything else here rather than a database table.
+attempting to connect anywhere.
+
+**Restaurant name, address, phone and receipt wording are NOT
+environment variables and are not compiled in.** They live in the
+database, set from Settings, and an installation that has configured
+none prints a ticket with no restaurant identity at all rather than a
+placeholder somebody has to notice and remove.
 
 ## Backup and restore
 

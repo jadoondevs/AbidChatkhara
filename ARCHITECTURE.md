@@ -7,7 +7,7 @@ specific, non-obvious choice, see `docs/decisions/`.
 ## Status
 
 Built so far: **platform** (money type, event bus, SQLite/Kysely, migrations,
-the durable sync-queue seam, ESC/POS printing), **identity** (users, PIN
+the durable sync-queue seam, ESC/POS printing), **identity** (users,
 login, roles, audit log), **catalog** (categories, items, effective-dated
 prices, modifier groups/modifiers, availability), **ordering** (orders,
 lines, order-level discount proration, the open→billed pro-forma-bill flow,
@@ -76,7 +76,7 @@ else:
 
 ```
 apps/server/src/
-  identity/       users, PIN login, roles, audit log            [BUILT]
+  identity/       users, username/password login, roles, audit   [BUILT]
   platform/       event bus, money-adjacent infra, db/migrations,
                   sync-queue, ESC/POS printing                   [BUILT — see below]
   catalog/        items, categories, modifiers, prices           [BUILT]
@@ -161,15 +161,39 @@ integration surface they'll need.
 ## Identity and attribution
 
 Every mutation anywhere in the system is expected to record who did it,
-when, and from which terminal (audit_log — `identity/tables.ts`). PIN login
-(`identity/auth.ts`) issues a bearer token whose *hash* (not the token
-itself) is stored in the `session` table, bound to the terminal it was
-issued from; a Fastify `preHandler` hook resolves that token into
+when, and from which terminal (audit_log — `identity/tables.ts`). Login
+(`identity/auth.ts`) takes a username and a password and issues a bearer
+token whose *hash* (not the token itself) is stored in the `session`
+table, bound to the terminal it was issued from; a Fastify `preHandler` hook resolves that token into
 `request.actor` for every route. A module that needs to attribute a write
 takes an `ActorContext { actorId: number | null; terminalId: string }` —
 `actorId: null` is reserved for a genuine system action with no human actor
 (e.g. the eventual seed script creating the very first admin account,
 which can't attribute itself to a user that doesn't exist yet).
+
+**Credentials.** The stored secret is a salted scrypt hash of whatever
+the user types — a 4-digit PIN carried over from the tablet era, or a
+real password. Both go through one code path (`identity/credentials.ts`)
+and one column, `user.pin_hash`, which keeps its original name because
+renaming it would rewrite every deployed database's schema for a
+cosmetic gain. Usernames are normalised (trimmed, lowercased) on the way
+in and on the way to a lookup, so the unique index on `user.username`
+means what it looks like it means.
+
+A wrong password and an unknown username return the same answer, and
+take the same time: the miss is verified against a throwaway hash rather
+than returning early, so a login form cannot be used to enumerate who
+works here. A credential change is audited as *having happened*, never
+with the old or new value — a hash in the audit log would be an
+offline-crackable copy of every password the restaurant has ever used,
+sitting in the one table nothing is ever deleted from.
+
+**Two rosters, on purpose.** `/api/users` is the admin's view: it
+carries usernames and active flags and is manager+. `/api/roster` is
+names only, readable by anyone signed in, and is what the floor board
+and the waiter picker use — a waiter who cannot see their colleagues'
+names cannot take a dine-in order, which is what a single manager-only
+list was quietly causing.
 
 Roles (`server | cashier | manager | admin`) are ranked
 (`identity/roles.ts`, `hasAtLeastRole`) so a route can require "at least
@@ -582,6 +606,71 @@ turning it on later is a configuration change, never a code change.
   to the historical one" principle as ownership and price
   effective-dating, applied here to activation rather than a value.
 
+## Settings, and what is NOT compiled in
+
+`app_setting` (migration 0012) is one key/value table holding a JSON
+document per setting group — restaurant identity, receipt wording,
+printer. One row per group rather than a column per setting, because the
+set of settings grows every time a restaurant wants one more line on its
+receipt, and each addition would otherwise be a migration. The shape is
+enforced in code instead, by `settings/schema.ts`: one Zod schema per
+group, parsed on write so a malformed value cannot be stored, and parsed
+again on read so a hand-edited row falls back to defaults rather than
+failing a print. A settings read is on the path of every bill, so it must
+never be the thing that fails one. Partial documents are filled in
+field-by-field from the defaults, so adding a setting does not invalidate
+what a restaurant has already saved.
+
+**No restaurant identity is compiled in.** The print templates take a
+`TicketBranding` as input rather than reading settings themselves, which
+keeps them pure functions and lets the printing tests assert on exact
+bytes with no database. An installation that has configured nothing
+prints a ticket with no name, address or phone — not a placeholder
+somebody has to notice and remove.
+
+**The printer is resolved per request, not at boot**
+(`resolvePrinterTarget`): an address configured in Settings wins over the
+`POS_PRINTER_HOST` the server started with, so an admin can move the
+printer without restarting mid-service, and does not have to know that a
+stale value exists in a `.env` file on the machine. Setting
+`enabled: false` disables printing outright, which is what a restaurant
+whose printer is away for repair actually wants — prints fail
+immediately with a clear message instead of every bill stalling on a
+connection that will never answer.
+
+## Payment accounts
+
+`payment_method` has always carried a single `account_title`/
+`account_number`, which is enough to *print* one set of payment
+instructions on a bill and cannot answer "which of our three Easypaisa
+wallets received this transfer?". `payment_account` (migration 0013) is
+that answer: its own row per account, referenced by
+`payment.payment_account_id`.
+
+The two coexist rather than one replacing the other, because they are
+different things. A method's own account fields are the "pay us here"
+line on a pro-forma bill — advertising an account. An account row is the
+record of receipt. Accounts are deactivated, never deleted: a `payment`
+references the one it landed in, and deleting it would orphan that
+answer on every historical payment.
+
+**Cash change** is recorded here too, in `payment.tendered_minor` and
+`payment.change_minor`. `amount_minor` stays exactly what it has always
+been — the amount *applied to the bill* — so sales, partner allocations
+and expected cash are all computed from it and are entirely unaffected
+by change. The tender and the change exist for the audit trail and the
+Z-report's "cash handled" line; nothing financial is derived from them.
+That is why a cash overpayment needed no change to the shift
+reconciliation at all: the drawer nets out to what was applied either
+way.
+
+Cash and non-cash diverge deliberately in `recordPayment`. Cash applies
+what the bill can absorb and returns the rest as change, because an
+Rs 2,000 note for an Rs 1,800 bill is the single most common transaction
+in the restaurant and used to be an outright error. A wallet or bank
+transfer of more than the bill cannot be handed back from the drawer, so
+it stays a rejection the cashier has to resolve deliberately.
+
 ## Shifts
 
 `apps/server/src/shifts` is shift open/close and cash reconciliation
@@ -720,13 +809,34 @@ to keep in sync between two deployments.
   `MoneyInput` parses what staff type with the money module's own
   `parseRupees`, and every figure on screen renders through `format` —
   the same functions the server uses, from `@pos/shared`. The
-  money-arithmetic guard now scans `.tsx` as well as `.ts`, so a stray
+  money-arithmetic guard scans `.tsx` as well as `.ts`, so a stray
   `paisa / 100` in a component fails the suite exactly as it would on
-  the server (this milestone extended the guard; it was previously
-  blind to the frontend's file extension).
+  the server — it caught the payment screen's quick-cash suggestions
+  doing exactly that, which is why `roundUpTo` now lives in the money
+  module rather than in a screen.
+- **Adding an item is one click, and the running bill is editable in
+  place.** Tapping an item adds it; tapping it again increments the same
+  line, because the server merges an identical repeat into it. A dialog
+  appears only for an item with modifier groups, and every mandatory
+  group opens pre-selected with its first option — a required choice
+  needs a default the cashier can confirm or change, not an empty list
+  and a server rejection. Quantity is a real input committed on blur or
+  Enter, so setting a line to 10 is two keystrokes rather than nine
+  clicks.
+- **The floor board's three lists come from one server query.** Open,
+  awaiting payment and completed are derived server-side from
+  `order.status` and the payments recorded against each order
+  (`getFloorBoard`), with what is still owed on a part-paid bill. No
+  screen filters its own copy, so no screen can leave a settled bill
+  sitting in a list of things that still need paying.
+- **The bill total shown before printing is the total that prints.**
+  `previewBillTotals` runs the same `computeBillTotals` that `billOrder`
+  runs, over the same order. Recomputing tax, service charge and
+  rounding in the browser would have been a second implementation of the
+  money pipeline, free to disagree with the first.
 - **Manager approval doesn't sign the till over.** A line void by a
   non-manager gets a 403 from the server; the screen then asks a manager
-  for their own PIN, authenticates them for that one call
+  for their own username and password, authenticates them for that one call
   (`AuthContext.approveAs`), and retries the void with that token —
   which is dropped immediately after. The cashier stays logged in, and
   the audit row records the manager as the approver, which is what the

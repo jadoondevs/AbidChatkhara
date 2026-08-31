@@ -103,13 +103,19 @@ describe('definition of done — a full day, offline', () => {
     await setDiscount(ctx.db, takeaway.id, { discountMinor: paisa(100_00), reason: 'regular customer' }, manager);
     const takeawayBilled = await billOrder(ctx.db, takeaway.id, {}, cashier);
     expect(takeawayBilled.netSalesMinor).toBe(2_000_00);
+    // The cashier keys the note the customer handed over — Rs 2,500 for
+    // a Rs 2,000 bill — rather than working the change out themselves.
+    // Only the bill's own amount is applied; the rest is change, and the
+    // drawer figure below is unaffected by it.
     const takeawaySettled = await recordPayment(
       ctx.db,
       takeaway.id,
-      { paymentMethodId: cash, amountMinor: takeawayBilled.totalMinor, tenderedMinor: paisa(2_500_00) },
+      { paymentMethodId: cash, amountMinor: paisa(2_500_00) },
       cashier,
     );
+    expect(takeawaySettled.appliedMinor).toBe(takeawayBilled.totalMinor);
     expect(takeawaySettled.changeMinor).toBe(500_00);
+    expect(takeawaySettled.payment.amountMinor).toBe(takeawayBilled.totalMinor);
     expect(takeawaySettled.invoiceNo).toBe(2);
 
     // ---- 3. delivery, later refunded in full ----
@@ -188,7 +194,8 @@ describe('definition of done — a full day, offline', () => {
     // Cash in the drawer, by hand:
     //   opening float                        5,000.00
     //   dine-in, cash part of the split      +1,000.00
-    //   takeaway, paid in cash               +2,000.00
+    //   takeaway, Rs 2,500 tendered for a
+    //     Rs 2,000 bill — only the bill lands  +2,000.00
     //   delivery, paid in cash               +1,900.00
     //   delivery refund, cash back out       -1,900.00
     //   owner meal, charged portion          +1,387.50
@@ -200,6 +207,13 @@ describe('definition of done — a full day, offline', () => {
     const closed = await closeShift(ctx.db, shift.id, { countedCashMinor: handComputedCash }, admin);
     expect(closed.expectedCashMinor).toBe(handComputedCash);
     expect(closed.varianceMinor).toBe(0);
+
+    // The Rs 500 handed back is recorded, and is NOT in the drawer
+    // figure — change is neither a sale nor a refund.
+    const zBeforeSales = await getZReport(ctx.db, shift.id);
+    expect(zBeforeSales.changeGivenMinor).toBe(500_00);
+    expect(zBeforeSales.cashTenderedMinor).toBe(paisa(zBeforeSales.cashPaymentsMinor + 500_00));
+    expect(zBeforeSales.expectedCashMinor).toBe(handComputedCash);
 
     // ---- Z-report: service charge separate from sales ----
     const zReport = await getZReport(ctx.db, shift.id);
