@@ -1,4 +1,4 @@
-import { paisaSchema } from '@pos/shared';
+import { paisa, paisaSchema } from '@pos/shared';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { Kysely } from 'kysely';
@@ -10,11 +10,15 @@ import {
   billOrder,
   ConcurrentModificationError,
   createOrder,
+  getFloorBoard,
   getOrder,
   listOrders,
   OrderStateError,
+  previewBillTotals,
+  removeLine,
   reopenOrder,
   setDiscount,
+  setLineQty,
   voidLine,
   voidOrder,
 } from './service.js';
@@ -45,6 +49,7 @@ const orderLineSchema = z.object({
   voided: z.boolean(),
   voidReason: z.string().nullable(),
   voidApprovedBy: z.number().int().nullable(),
+  voidKind: z.enum(['correction', 'void']).nullable(),
   modifiers: z.array(orderLineModifierSchema),
 });
 
@@ -59,6 +64,7 @@ const orderSummarySchema = z.object({
   shiftId: z.number().int().nullable(),
   openedAt: z.string(),
   billedAt: z.string().nullable(),
+  firstBilledAt: z.string().nullable(),
   closedAt: z.string().nullable(),
   openedBy: z.number().int(),
   closedBy: z.number().int().nullable(),
@@ -75,6 +81,28 @@ const orderSummarySchema = z.object({
 });
 
 const orderDetailSchema = orderSummarySchema.extend({ lines: z.array(orderLineSchema) });
+
+const floorOrderSchema = orderSummarySchema.extend({
+  paidMinor: z.number().int(),
+  balanceMinor: z.number().int(),
+});
+
+const floorBoardSchema = z.object({
+  open: z.array(floorOrderSchema),
+  awaitingPayment: z.array(floorOrderSchema),
+  completed: z.array(floorOrderSchema),
+});
+
+const billTotalsSchema = z.object({
+  subtotalMinor: z.number().int(),
+  orderDiscountMinor: z.number().int(),
+  netSalesMinor: z.number().int(),
+  taxMinor: z.number().int(),
+  serviceChargeMinor: z.number().int(),
+  roundingAdjustmentMinor: z.number().int(),
+  totalMinor: z.number().int(),
+});
+
 const errorSchema = z.object({ error: z.string() });
 
 export interface OrderingPluginOptions {
@@ -247,6 +275,76 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
     async (request, reply) => {
       const actor = requireRole(request, reply, 'manager');
       return voidOrder(db, request.params.id, request.body, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  // The floor board's three lists in one call — see getFloorBoard for
+  // why the split is computed here rather than by each screen.
+  app.get(
+    '/api/orders/board',
+    {
+      schema: {
+        querystring: z.object({ completedLimit: z.coerce.number().int().min(0).max(200).optional() }),
+        response: { 200: floorBoardSchema },
+      },
+    },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      return getFloorBoard(db, { completedLimit: request.query.completedLimit });
+    },
+  );
+
+  app.get(
+    '/api/orders/:id/bill-preview',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        querystring: z.object({ serviceChargeMinor: z.coerce.number().int().optional() }),
+        response: { 200: billTotalsSchema },
+      },
+    },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      return previewBillTotals(db, request.params.id, paisa(request.query.serviceChargeMinor ?? 0));
+    },
+  );
+
+  app.patch(
+    '/api/orders/:id/lines/:lineId/qty',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int(), lineId: z.coerce.number().int() }),
+        body: z.object({ qty: z.number().int().positive() }),
+        response: { 200: orderDetailSchema },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireAuth(request, reply);
+      return setLineQty(db, request.params.id, request.params.lineId, request.body, {
+        actorId: actor.userId,
+        terminalId: actor.terminalId,
+      });
+    },
+  );
+
+  // Removing a mis-tapped line from a bill that has never been printed.
+  // Deliberately NOT manager-gated: the service refuses the moment the
+  // order has been billed, at which point the caller has to come back
+  // through the void route above with a manager and a reason.
+  app.delete(
+    '/api/orders/:id/lines/:lineId',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int(), lineId: z.coerce.number().int() }),
+        response: { 200: orderDetailSchema },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireAuth(request, reply);
+      return removeLine(db, request.params.id, request.params.lineId, {
+        actorId: actor.userId,
+        terminalId: actor.terminalId,
+      });
     },
   );
 };

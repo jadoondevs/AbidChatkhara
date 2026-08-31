@@ -26,6 +26,23 @@ export interface PaymentTable {
   received_by: number;
   received_at: string;
   reversed_by_payment_id: number | null;
+  payment_account_id: number | null;
+  /** Cash only: handed over, and handed back. Never used to derive a
+   * financial figure — see migration 0013. */
+  tendered_minor: Paisa | null;
+  change_minor: Paisa | null;
+}
+
+export interface PaymentAccountTable {
+  id: Generated<number>;
+  payment_method_id: number;
+  label: string;
+  account_title: string | null;
+  account_number: string | null;
+  bank_name: string | null;
+  active: number;
+  sort_order: number;
+  created_at: string;
 }
 
 export interface InvoiceCounterTable {
@@ -36,5 +53,6 @@ export interface InvoiceCounterTable {
 export interface BillingTables {
   payment_method: PaymentMethodTable;
   payment: PaymentTable;
+  payment_account: PaymentAccountTable;
   invoice_counter: InvoiceCounterTable;
 }

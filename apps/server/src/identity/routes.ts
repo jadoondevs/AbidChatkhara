@@ -5,16 +5,29 @@ import type { Kysely } from 'kysely';
 import type { Database } from '../platform/db/types.js';
 import { login, logout } from './auth.js';
 import { requireAuth, requireRole } from './require-auth.js';
-import { changeUserRole, createUser, listUsers, setUserActive } from './service.js';
+import {
+  changeUserRole,
+  createUser,
+  listUsers,
+  setUserActive,
+  setUserPassword,
+  updateUser,
+  UsernameTakenError,
+} from './service.js';
+import { MAX_SECRET_LENGTH, MIN_SECRET_LENGTH } from './credentials.js';
 
 const roleSchema = z.enum(['server', 'cashier', 'manager', 'admin']);
 
 const userSummarySchema = z.object({
   id: z.number().int(),
   name: z.string(),
+  username: z.string(),
   role: roleSchema,
   active: z.boolean(),
 });
+
+const usernameSchema = z.string().min(3).max(32);
+const passwordSchema = z.string().min(MIN_SECRET_LENGTH).max(MAX_SECRET_LENGTH);
 
 const errorSchema = z.object({ error: z.string() });
 
@@ -30,13 +43,25 @@ export interface IdentityPluginOptions {
 export const identityRoutes: FastifyPluginAsync<IdentityPluginOptions> = async (fastify, { db }) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
+  // A taken username is a 409 the admin can act on, not a 500. Every
+  // other domain rule here (a bad username shape, too short a password)
+  // is a plain Error from the service and stays a 400-family failure
+  // carrying its own sentence.
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof UsernameTakenError) {
+      reply.code(409).send({ error: error.message });
+      return;
+    }
+    throw error;
+  });
+
   app.post(
     '/api/auth/login',
     {
       schema: {
         body: z.object({
-          userId: z.number().int().positive(),
-          pin: z.string().min(4).max(8),
+          username: usernameSchema,
+          password: passwordSchema,
           terminalId: z.string().min(1),
         }),
         response: {
@@ -53,7 +78,12 @@ export const identityRoutes: FastifyPluginAsync<IdentityPluginOptions> = async (
       }
       return {
         token: result.token,
-        user: { id: result.session.userId, name: result.session.name, role: result.session.role },
+        user: {
+          id: result.session.userId,
+          name: result.session.name,
+          username: result.session.username,
+          role: result.session.role,
+        },
       };
     },
   );
@@ -74,7 +104,7 @@ export const identityRoutes: FastifyPluginAsync<IdentityPluginOptions> = async (
     { schema: { response: { 200: userSummarySchema.omit({ active: true }) } } },
     async (request, reply) => {
       const actor = requireAuth(request, reply);
-      return { id: actor.userId, name: actor.name, role: actor.role };
+      return { id: actor.userId, name: actor.name, username: actor.username, role: actor.role };
     },
   );
 
@@ -98,10 +128,11 @@ export const identityRoutes: FastifyPluginAsync<IdentityPluginOptions> = async (
       schema: {
         body: z.object({
           name: z.string().min(1),
-          pin: z.string().min(4).max(8),
+          username: usernameSchema,
+          password: passwordSchema,
           role: roleSchema,
         }),
-        response: { 201: userSummarySchema },
+        response: { 201: userSummarySchema, 409: errorSchema },
       },
     },
     async (request, reply) => {
@@ -141,6 +172,47 @@ export const identityRoutes: FastifyPluginAsync<IdentityPluginOptions> = async (
     async (request, reply) => {
       const actor = requireRole(request, reply, 'admin');
       return changeUserRole(db, request.params.id, request.body.role, {
+        actorId: actor.userId,
+        terminalId: actor.terminalId,
+      });
+    },
+  );
+
+  app.patch(
+    '/api/users/:id',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        body: z.object({
+          name: z.string().min(1).optional(),
+          username: usernameSchema.optional(),
+          role: roleSchema.optional(),
+          active: z.boolean().optional(),
+        }),
+        response: { 200: userSummarySchema, 409: errorSchema },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'admin');
+      return updateUser(db, request.params.id, request.body, {
+        actorId: actor.userId,
+        terminalId: actor.terminalId,
+      });
+    },
+  );
+
+  app.put(
+    '/api/users/:id/password',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        body: z.object({ password: passwordSchema }),
+        response: { 200: userSummarySchema },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'admin');
+      return setUserPassword(db, request.params.id, request.body.password, {
         actorId: actor.userId,
         terminalId: actor.terminalId,
       });

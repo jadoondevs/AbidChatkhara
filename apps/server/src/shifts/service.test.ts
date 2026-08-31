@@ -18,7 +18,7 @@ describe('shifts/service', () => {
 
   async function setupBase() {
     ctx = createTestDb();
-    const admin = await createUser(ctx.db, { name: 'Admin', pin: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+    const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     const actor = { actorId: admin.id, terminalId: 'till-1' };
 
     const category = await createCategory(ctx.db, { name: 'Mains' }, actor);
@@ -100,6 +100,24 @@ describe('shifts/service', () => {
       expect(closed.countedCashMinor).toBe(3_000_00);
     });
 
+    it('counts only the cash that stayed in the drawer when change was given', async () => {
+      const { actor, item, cash } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      const billed = await billOrder(ctx.db, order.id, {}, actor);
+
+      // Customer hands over Rs 500 more than the bill and takes the
+      // change away with them: the drawer is up by the bill, not by the
+      // note.
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: paisa(billed.totalMinor + 500_00) }, actor);
+
+      const closed = await closeShift(ctx.db, shift.id, { countedCashMinor: billed.totalMinor }, actor);
+      expect(closed.expectedCashMinor).toBe(billed.totalMinor);
+      expect(closed.varianceMinor).toBe(0);
+    });
+
     it('a cash refund reduces expected cash the same way the original payment increased it', async () => {
       const { actor, item, cash } = await setupBase();
       const shift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
@@ -149,7 +167,7 @@ describe('shifts/service', () => {
       const shift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
 
       // A dine_in customer order, with a waiter and a service charge, paid in cash.
-      const waiter = await createUser(ctx.db, { name: 'Bilal', pin: '1111', role: 'server' }, actor);
+      const waiter = await createUser(ctx.db, { name: 'Bilal', username: 'bilal', password: '1111', role: 'server' }, actor);
       const customerOrder = await createOrder(ctx.db, { orderType: 'dine_in', tableLabel: 'T1', waiterId: waiter.id }, actor);
       await addLine(ctx.db, customerOrder.id, { itemId: item.id, qty: 1 }, actor);
       const billedCustomer = await billOrder(ctx.db, customerOrder.id, { serviceChargeMinor: paisa(50_00) }, actor);

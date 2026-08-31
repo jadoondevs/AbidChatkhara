@@ -34,7 +34,7 @@ describe('catalog/service', () => {
 
   async function setupActor() {
     ctx = createTestDb();
-    const admin = await createUser(ctx.db, { name: 'Admin', pin: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+    const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     return { actorId: admin.id, terminalId: 't1' };
   }
 

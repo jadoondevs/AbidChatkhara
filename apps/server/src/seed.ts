@@ -42,13 +42,13 @@ export async function seed(db: Kysely<Database>): Promise<SeedResult> {
 
   // The very first user has no actor to attribute it to — the one
   // legitimate `actorId: null` case in the system (see identity/).
-  const admin = await createUser(db, { name: 'Amina Qureshi', pin: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+  const admin = await createUser(db, { name: 'Amina Qureshi', username: 'amina.qureshi', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
   const actor = { actorId: admin.id, terminalId: 'seed' };
 
-  const manager = await createUser(db, { name: 'Danish Raza', pin: '2222', role: 'manager' }, actor);
-  const cashier = await createUser(db, { name: 'Sana Iqbal', pin: '3333', role: 'cashier' }, actor);
-  const waiterOne = await createUser(db, { name: 'Faisal Ahmed', pin: '4444', role: 'server' }, actor);
-  const waiterTwo = await createUser(db, { name: 'Hina Malik', pin: '5555', role: 'server' }, actor);
+  const manager = await createUser(db, { name: 'Danish Raza', username: 'danish.raza', password: '2222', role: 'manager' }, actor);
+  const cashier = await createUser(db, { name: 'Sana Iqbal', username: 'sana.iqbal', password: '3333', role: 'cashier' }, actor);
+  const waiterOne = await createUser(db, { name: 'Faisal Ahmed', username: 'faisal.ahmed', password: '4444', role: 'server' }, actor);
+  const waiterTwo = await createUser(db, { name: 'Hina Malik', username: 'hina.malik', password: '5555', role: 'server' }, actor);
 
   // ---- partners ----
   const alia = await createPartner(db, 'Alia Holdings', actor);

@@ -186,6 +186,171 @@ export async function updatePaymentMethod(
 }
 
 // ---------------------------------------------------------------------
+// Payment accounts
+// ---------------------------------------------------------------------
+
+export interface PaymentAccountSummary {
+  readonly id: number;
+  readonly paymentMethodId: number;
+  readonly label: string;
+  readonly accountTitle: string | null;
+  readonly accountNumber: string | null;
+  readonly bankName: string | null;
+  readonly active: boolean;
+  readonly sortOrder: number;
+}
+
+interface PaymentAccountRow {
+  id: number;
+  payment_method_id: number;
+  label: string;
+  account_title: string | null;
+  account_number: string | null;
+  bank_name: string | null;
+  active: number;
+  sort_order: number;
+}
+
+function toPaymentAccountSummary(row: PaymentAccountRow): PaymentAccountSummary {
+  return {
+    id: row.id,
+    paymentMethodId: row.payment_method_id,
+    label: row.label,
+    accountTitle: row.account_title,
+    accountNumber: row.account_number,
+    bankName: row.bank_name,
+    active: row.active === 1,
+    sortOrder: row.sort_order,
+  };
+}
+
+export interface CreatePaymentAccountInput {
+  readonly paymentMethodId: number;
+  readonly label: string;
+  readonly accountTitle?: string | undefined;
+  readonly accountNumber?: string | undefined;
+  readonly bankName?: string | undefined;
+  readonly sortOrder?: number | undefined;
+}
+
+export async function createPaymentAccount(
+  db: Kysely<Database>,
+  input: CreatePaymentAccountInput,
+  actor: ActorContext,
+): Promise<PaymentAccountSummary> {
+  const method = await db.selectFrom('payment_method').select('id').where('id', '=', input.paymentMethodId).executeTakeFirst();
+  if (!method) throw new Error(`payment method ${input.paymentMethodId} not found`);
+  if (!input.label.trim()) throw new Error('a payment account needs a label');
+
+  const row = await db
+    .insertInto('payment_account')
+    .values({
+      payment_method_id: input.paymentMethodId,
+      label: input.label.trim(),
+      account_title: input.accountTitle ?? null,
+      account_number: input.accountNumber ?? null,
+      bank_name: input.bankName ?? null,
+      active: 1,
+      sort_order: input.sortOrder ?? 0,
+      created_at: new Date().toISOString(),
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  const summary = toPaymentAccountSummary(row);
+  await recordAudit(db, {
+    actorId: actor.actorId,
+    terminalId: actor.terminalId,
+    action: 'payment_account.create',
+    entity: 'payment_account',
+    entityId: row.id,
+    after: summary,
+  });
+  return summary;
+}
+
+export async function listPaymentAccounts(
+  db: Kysely<Database>,
+  opts: { paymentMethodId?: number | undefined; includeInactive?: boolean | undefined } = {},
+): Promise<PaymentAccountSummary[]> {
+  let query = db.selectFrom('payment_account').selectAll();
+  if (opts.paymentMethodId !== undefined) query = query.where('payment_method_id', '=', opts.paymentMethodId);
+  if (!opts.includeInactive) query = query.where('active', '=', 1);
+  const rows = await query.orderBy('sort_order', 'asc').orderBy('label', 'asc').execute();
+  return rows.map(toPaymentAccountSummary);
+}
+
+export interface UpdatePaymentAccountInput {
+  readonly label?: string | undefined;
+  readonly accountTitle?: string | undefined;
+  readonly accountNumber?: string | undefined;
+  readonly bankName?: string | undefined;
+  readonly active?: boolean | undefined;
+  readonly sortOrder?: number | undefined;
+}
+
+/**
+ * Deactivating rather than deleting is the only option offered: a
+ * `payment` row references the account it landed in, so a deleted
+ * account would orphan the answer to "where did this money go?" on
+ * every historical payment.
+ */
+export async function updatePaymentAccount(
+  db: Kysely<Database>,
+  id: number,
+  input: UpdatePaymentAccountInput,
+  actor: ActorContext,
+): Promise<PaymentAccountSummary> {
+  const before = await db.selectFrom('payment_account').selectAll().where('id', '=', id).executeTakeFirst();
+  if (!before) throw new Error(`payment account ${id} not found`);
+
+  const after = await db
+    .updateTable('payment_account')
+    .set({
+      ...(input.label !== undefined ? { label: input.label.trim() } : {}),
+      ...(input.accountTitle !== undefined ? { account_title: input.accountTitle } : {}),
+      ...(input.accountNumber !== undefined ? { account_number: input.accountNumber } : {}),
+      ...(input.bankName !== undefined ? { bank_name: input.bankName } : {}),
+      ...(input.active !== undefined ? { active: input.active ? 1 : 0 } : {}),
+      ...(input.sortOrder !== undefined ? { sort_order: input.sortOrder } : {}),
+    })
+    .where('id', '=', id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  await recordAudit(db, {
+    actorId: actor.actorId,
+    terminalId: actor.terminalId,
+    action: 'payment_account.update',
+    entity: 'payment_account',
+    entityId: id,
+    before: toPaymentAccountSummary(before),
+    after: toPaymentAccountSummary(after),
+  });
+  return toPaymentAccountSummary(after);
+}
+
+/**
+ * Validate the account a payment claims to have landed in: it must
+ * exist, be active, and belong to the method being paid with. Passing
+ * none is always allowed — a restaurant that has configured no accounts
+ * must still be able to take money, and cash has no account at all.
+ */
+async function resolvePaymentAccount(
+  trx: Transaction<Database>,
+  paymentMethodId: number,
+  paymentAccountId: number | undefined,
+): Promise<number | null> {
+  if (paymentAccountId === undefined) return null;
+  const account = await trx.selectFrom('payment_account').selectAll().where('id', '=', paymentAccountId).executeTakeFirst();
+  if (!account || account.active !== 1) throw new Error(`payment account ${paymentAccountId} not found or inactive`);
+  if (account.payment_method_id !== paymentMethodId) {
+    throw new OrderStateError(`account "${account.label}" does not belong to the payment method being used`);
+  }
+  return account.id;
+}
+
+// ---------------------------------------------------------------------
 // Invoice numbering
 // ---------------------------------------------------------------------
 
@@ -219,6 +384,9 @@ export interface PaymentSummary {
   readonly paymentMethodId: number;
   readonly amountMinor: Paisa;
   readonly referenceNo: string | null;
+  readonly paymentAccountId: number | null;
+  readonly tenderedMinor: Paisa | null;
+  readonly changeMinor: Paisa | null;
   readonly receivedBy: number;
   readonly receivedAt: string;
   readonly reversedByPaymentId: number | null;
@@ -230,6 +398,9 @@ interface PaymentRow {
   payment_method_id: number;
   amount_minor: Paisa;
   reference_no: string | null;
+  payment_account_id: number | null;
+  tendered_minor: Paisa | null;
+  change_minor: Paisa | null;
   received_by: number;
   received_at: string;
   reversed_by_payment_id: number | null;
@@ -242,6 +413,9 @@ function toPaymentSummary(row: PaymentRow): PaymentSummary {
     paymentMethodId: row.payment_method_id,
     amountMinor: row.amount_minor,
     referenceNo: row.reference_no,
+    paymentAccountId: row.payment_account_id,
+    tenderedMinor: row.tendered_minor,
+    changeMinor: row.change_minor,
     receivedBy: row.received_by,
     receivedAt: row.received_at,
     reversedByPaymentId: row.reversed_by_payment_id,
@@ -256,16 +430,29 @@ async function unreversedPayments(trx: Transaction<Database>, orderId: number): 
 
 export interface RecordPaymentInput {
   readonly paymentMethodId: number;
+  /** For cash, what the customer handed over — the amount actually
+   * applied to the bill is capped at the balance and the rest is
+   * change. For every other method, exactly what is being applied. */
   readonly amountMinor: Paisa;
   readonly referenceNo?: string | undefined;
-  /** Cash only: what the customer physically handed over, for change —
-   * never persisted, only used to compute `changeMinor` in the response. */
+  /** Which configured wallet/bank account received this money. Optional:
+   * cash has no account, and a restaurant that has configured none can
+   * still take payments. */
+  readonly paymentAccountId?: number | undefined;
+  /** Cash only, and only when the cashier keyed the tendered note
+   * separately from the amount being applied. Defaults to
+   * `amountMinor`. */
   readonly tenderedMinor?: Paisa | undefined;
 }
 
 export interface RecordPaymentResult {
   readonly payment: PaymentSummary;
+  /** Cash handed back. Null for a non-cash payment; zero when the
+   * customer paid exactly. */
   readonly changeMinor: Paisa | null;
+  /** What actually went onto the bill — less than what was tendered
+   * whenever there was change. */
+  readonly appliedMinor: Paisa;
   readonly orderClosed: boolean;
   readonly order: OrderSummary;
   readonly invoiceNo: number | null;
@@ -300,17 +487,34 @@ export async function recordPayment(
 
     const method = await trx.selectFrom('payment_method').selectAll().where('id', '=', input.paymentMethodId).executeTakeFirst();
     if (!method || method.active !== 1) throw new Error(`payment method ${input.paymentMethodId} not found or inactive`);
-    if ((method.kind === 'wallet' || method.kind === 'bank_transfer') && !input.referenceNo?.trim()) {
-      throw new OrderStateError(`a reference number is required for ${method.kind} payments`);
-    }
     if (input.amountMinor <= 0) throw new Error('payment amount must be positive');
+
+    const paymentAccountId = await resolvePaymentAccount(trx, method.id, input.paymentAccountId);
 
     const priorPayments = await unreversedPayments(trx, orderId);
     const paidSoFar = sum(priorPayments.map((p) => p.amount_minor));
     const remaining = sub(order.total_minor, paidSoFar);
-    if (input.amountMinor > remaining) {
+
+    // Cash overpayment is change, not an error: a customer paying an
+    // Rs 1,800 bill with an Rs 2,000 note is the single most common
+    // transaction in the restaurant. Only what the bill can absorb is
+    // applied to it — sales, partner allocations and expected cash all
+    // read `amount_minor`, so change never inflates any of them.
+    //
+    // Every other method is different in kind: an Easypaisa transfer of
+    // more than the bill cannot be handed back from the drawer, so it
+    // stays a rejection the cashier has to resolve deliberately.
+    const isCash = method.kind === 'cash';
+    const tenderedMinor = isCash ? (input.tenderedMinor ?? input.amountMinor) : null;
+    if (tenderedMinor !== null && tenderedMinor < input.amountMinor) {
+      throw new OrderStateError(`cash tendered (${tenderedMinor}) is less than the ${input.amountMinor} being applied to the bill`);
+    }
+    if (!isCash && input.amountMinor > remaining) {
       throw new OrderStateError(`payment of ${input.amountMinor} exceeds the remaining balance of ${remaining}`);
     }
+
+    const appliedMinor = isCash && input.amountMinor > remaining ? remaining : input.amountMinor;
+    const changeMinor = tenderedMinor === null ? null : sub(tenderedMinor, appliedMinor);
 
     const now = new Date().toISOString();
     const paymentRow = await trx
@@ -318,8 +522,11 @@ export async function recordPayment(
       .values({
         order_id: orderId,
         payment_method_id: input.paymentMethodId,
-        amount_minor: input.amountMinor,
-        reference_no: input.referenceNo ?? null,
+        amount_minor: appliedMinor,
+        reference_no: input.referenceNo?.trim() ? input.referenceNo.trim() : null,
+        payment_account_id: paymentAccountId,
+        tendered_minor: tenderedMinor,
+        change_minor: changeMinor,
         received_by: actor.actorId,
         received_at: now,
         reversed_by_payment_id: null,
@@ -342,7 +549,7 @@ export async function recordPayment(
       paymentMethodId: input.paymentMethodId,
     });
 
-    const newPaidTotal = add(paidSoFar, input.amountMinor);
+    const newPaidTotal = add(paidSoFar, appliedMinor);
     const nowFullyPaid = newPaidTotal === order.total_minor;
 
     let closedOrder: OrderSummary = {
@@ -356,6 +563,7 @@ export async function recordPayment(
       shiftId: order.shift_id,
       openedAt: order.opened_at,
       billedAt: order.billed_at,
+      firstBilledAt: order.first_billed_at,
       closedAt: order.closed_at,
       openedBy: order.opened_by,
       closedBy: order.closed_by,
@@ -384,12 +592,10 @@ export async function recordPayment(
       eventBus.emit('OrderClosed', { orderId, invoiceNo, closedAt: now, closedBy: actor.actorId });
     }
 
-    const changeMinor =
-      method.kind === 'cash' && input.tenderedMinor !== undefined ? sub(input.tenderedMinor, input.amountMinor) : null;
-
     return {
       payment: toPaymentSummary(paymentRow),
       changeMinor,
+      appliedMinor,
       orderClosed: nowFullyPaid,
       order: closedOrder,
       invoiceNo,
@@ -408,6 +614,7 @@ export interface SettleConsumptionInput {
    * free/payroll_deduction meal, where nothing is collected at the till. */
   readonly paymentMethodId?: number | undefined;
   readonly referenceNo?: string | undefined;
+  readonly paymentAccountId?: number | undefined;
 }
 
 export interface SettleConsumptionResult {
@@ -465,9 +672,7 @@ export async function settleConsumption(
       }
       const method = await trx.selectFrom('payment_method').selectAll().where('id', '=', input.paymentMethodId).executeTakeFirst();
       if (!method || method.active !== 1) throw new Error(`payment method ${input.paymentMethodId} not found or inactive`);
-      if ((method.kind === 'wallet' || method.kind === 'bank_transfer') && !input.referenceNo?.trim()) {
-        throw new OrderStateError(`a reference number is required for ${method.kind} payments`);
-      }
+      const paymentAccountId = await resolvePaymentAccount(trx, method.id, input.paymentAccountId);
 
       paymentRow = await trx
         .insertInto('payment')
@@ -475,7 +680,12 @@ export async function settleConsumption(
           order_id: orderId,
           payment_method_id: input.paymentMethodId,
           amount_minor: chargedMinor,
-          reference_no: input.referenceNo ?? null,
+          reference_no: input.referenceNo?.trim() ? input.referenceNo.trim() : null,
+          payment_account_id: paymentAccountId,
+          // A staff meal is settled for exactly what is owed — there is
+          // no tendering step and so never any change.
+          tendered_minor: null,
+          change_minor: null,
           received_by: actor.actorId,
           received_at: now,
           reversed_by_payment_id: null,
@@ -587,6 +797,9 @@ export async function refundOrder(db: Kysely<Database>, orderId: number, input: 
         payment_method_id: originalPayment.payment_method_id,
         amount_minor: paisa(-amountToRefund),
         reference_no: null,
+        payment_account_id: originalPayment.payment_account_id,
+        tendered_minor: null,
+        change_minor: null,
         received_by: actor.actorId,
         received_at: now,
         reversed_by_payment_id: null,

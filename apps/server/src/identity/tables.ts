@@ -4,6 +4,13 @@ import type { Role } from './roles.js';
 export interface UserTable {
   id: Generated<number>;
   name: string;
+  /** Unique login name. Nullable at the database layer only because
+   * SQLite's ALTER TABLE cannot add a NOT NULL column without a
+   * default; migration 0011 backfills every existing row and
+   * identity/service.ts never writes a null. */
+  username: string | null;
+  /** Salted scrypt hash of the sign-in secret — a PIN or a password;
+   * the column keeps its original name (see migration 0011). */
   pin_hash: string;
   role: Role;
   /** SQLite has no boolean type; 0/1. */

@@ -13,7 +13,7 @@ describe('identity/service', () => {
     ctx = createTestDb();
     const admin = await createUser(
       ctx.db,
-      { name: 'Ayesha', pin: '1234', role: 'admin' },
+      { name: 'Ayesha', username: 'ayesha', password: '1234', role: 'admin' },
       { actorId: null, terminalId: 'seed' },
     );
     expect(admin).toMatchObject({ name: 'Ayesha', role: 'admin', active: true });
@@ -27,9 +27,9 @@ describe('identity/service', () => {
 
   it('lists only active users by default, all users with includeInactive', async () => {
     ctx = createTestDb();
-    const admin = await createUser(ctx.db, { name: 'Admin', pin: '1111', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+    const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '1111', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     const actor = { actorId: admin.id, terminalId: 't1' };
-    const server = await createUser(ctx.db, { name: 'Bilal', pin: '2222', role: 'server' }, actor);
+    const server = await createUser(ctx.db, { name: 'Bilal', username: 'bilal', password: '2222', role: 'server' }, actor);
     await setUserActive(ctx.db, server.id, false, actor);
 
     const active = await listUsers(ctx.db);
@@ -41,9 +41,9 @@ describe('identity/service', () => {
 
   it('setUserActive records before/after and toggles active', async () => {
     ctx = createTestDb();
-    const admin = await createUser(ctx.db, { name: 'Admin', pin: '1111', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+    const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '1111', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     const actor = { actorId: admin.id, terminalId: 't1' };
-    const server = await createUser(ctx.db, { name: 'Chand', pin: '3333', role: 'server' }, actor);
+    const server = await createUser(ctx.db, { name: 'Chand', username: 'chand', password: '3333', role: 'server' }, actor);
 
     const deactivated = await setUserActive(ctx.db, server.id, false, actor);
     expect(deactivated.active).toBe(false);
@@ -59,9 +59,9 @@ describe('identity/service', () => {
 
   it('changeUserRole updates the role and records the change', async () => {
     ctx = createTestDb();
-    const admin = await createUser(ctx.db, { name: 'Admin', pin: '1111', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+    const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '1111', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     const actor = { actorId: admin.id, terminalId: 't1' };
-    const server = await createUser(ctx.db, { name: 'Dilshad', pin: '4444', role: 'server' }, actor);
+    const server = await createUser(ctx.db, { name: 'Dilshad', username: 'dilshad', password: '4444', role: 'server' }, actor);
 
     const promoted = await changeUserRole(ctx.db, server.id, 'cashier', actor);
     expect(promoted.role).toBe('cashier');
@@ -72,7 +72,7 @@ describe('identity/service', () => {
 
   it('setUserActive throws for an unknown user', async () => {
     ctx = createTestDb();
-    const admin = await createUser(ctx.db, { name: 'Admin', pin: '1111', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+    const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '1111', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     await expect(setUserActive(ctx.db, 9999, false, { actorId: admin.id, terminalId: 't1' })).rejects.toThrow(/not found/);
   });
 });

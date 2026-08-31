@@ -9,9 +9,9 @@ import { createTestDb } from '../platform/db/test-helpers.js';
 
 async function setup() {
   const ctx = createTestDb();
-  const admin = await createUser(ctx.db, { name: 'Admin', pin: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+  const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
   const seedActor = { actorId: admin.id, terminalId: 'seed' };
-  const server = await createUser(ctx.db, { name: 'Server', pin: '1234', role: 'server' }, seedActor);
+  const server = await createUser(ctx.db, { name: 'Server', username: 'server', password: '1234', role: 'server' }, seedActor);
 
   const category = await createCategory(ctx.db, { name: 'Mains' }, seedActor);
   const item = await createItem(ctx.db, { categoryId: category.id, name: 'Karahi' }, seedActor);
@@ -23,8 +23,8 @@ async function setup() {
   return { ctx, app, admin, server, item };
 }
 
-async function loginAs(app: FastifyInstance, userId: number, pin: string): Promise<string> {
-  const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { userId, pin, terminalId: 'till-1' } });
+async function loginAs(app: FastifyInstance, username: string, password: string): Promise<string> {
+  const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username, password, terminalId: 'till-1' } });
   return (res.json() as { token: string }).token;
 }
 
@@ -40,8 +40,8 @@ describe('consumption routes', () => {
   it('rejects a server from creating a person, allows a manager; reads are open to any authenticated staff', async () => {
     const started = await setup();
     ({ app, ctx } = started);
-    const serverToken = await loginAs(app, started.server.id, '1234');
-    const adminToken = await loginAs(app, started.admin.id, '9999');
+    const serverToken = await loginAs(app, started.server.username, '1234');
+    const adminToken = await loginAs(app, started.admin.username, '9999');
 
     const deniedRes = await app.inject({
       method: 'POST',
@@ -66,7 +66,7 @@ describe('consumption routes', () => {
   it('the full staff-meal flow: create order with a beneficiary, bill, settle via the payment route, appears in consumption-records', async () => {
     const started = await setup();
     ({ app, ctx } = started);
-    const adminToken = await loginAs(app, started.admin.id, '9999');
+    const adminToken = await loginAs(app, started.admin.username, '9999');
 
     const personRes = await app.inject({
       method: 'POST',

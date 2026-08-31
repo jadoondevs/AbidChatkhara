@@ -26,7 +26,7 @@ describe('partners/service', () => {
 
   async function setupBase() {
     ctx = createTestDb();
-    const admin = await createUser(ctx.db, { name: 'Admin', pin: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+    const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     const actor = { actorId: admin.id, terminalId: 'seed' };
 
     const alice = await createPartner(ctx.db, 'Alice', actor);

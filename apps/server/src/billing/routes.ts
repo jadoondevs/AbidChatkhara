@@ -7,8 +7,19 @@ import { requireAuth, requireRole } from '../identity/require-auth.js';
 import { ConcurrentModificationError, OrderStateError } from '../ordering/service.js';
 import type { Database } from '../platform/db/types.js';
 import { PrintError, type PrinterTarget } from '../platform/printing/client.js';
+import { getSetting, resolvePrinterTarget } from '../settings/service.js';
 import { printBill, printReceipt } from './printing.js';
-import { createPaymentMethod, listPaymentMethods, recordPayment, refundOrder, settleConsumption, updatePaymentMethod } from './service.js';
+import {
+  createPaymentAccount,
+  createPaymentMethod,
+  listPaymentAccounts,
+  listPaymentMethods,
+  recordPayment,
+  refundOrder,
+  settleConsumption,
+  updatePaymentAccount,
+  updatePaymentMethod,
+} from './service.js';
 
 const settlementTypeSchema = z.enum(['house_expense', 'payroll_deduction', 'partner_personal']);
 
@@ -39,6 +50,7 @@ const orderSummarySchema = z.object({
   shiftId: z.number().int().nullable(),
   openedAt: z.string(),
   billedAt: z.string().nullable(),
+  firstBilledAt: z.string().nullable(),
   closedAt: z.string().nullable(),
   openedBy: z.number().int(),
   closedBy: z.number().int().nullable(),
@@ -54,6 +66,17 @@ const orderSummarySchema = z.object({
   version: z.number().int(),
 });
 
+const paymentAccountSchema = z.object({
+  id: z.number().int(),
+  paymentMethodId: z.number().int(),
+  label: z.string(),
+  accountTitle: z.string().nullable(),
+  accountNumber: z.string().nullable(),
+  bankName: z.string().nullable(),
+  active: z.boolean(),
+  sortOrder: z.number().int(),
+});
+
 const paymentResultSchema = z.object({
   payment: z.object({
     id: z.number().int(),
@@ -61,11 +84,15 @@ const paymentResultSchema = z.object({
     paymentMethodId: z.number().int(),
     amountMinor: z.number().int(),
     referenceNo: z.string().nullable(),
+    paymentAccountId: z.number().int().nullable(),
+    tenderedMinor: z.number().int().nullable(),
+    changeMinor: z.number().int().nullable(),
     receivedBy: z.number().int(),
     receivedAt: z.string(),
     reversedByPaymentId: z.number().int().nullable(),
   }),
   changeMinor: z.number().int().nullable(),
+  appliedMinor: z.number().int(),
   orderClosed: z.boolean(),
   order: orderSummarySchema,
   invoiceNo: z.number().int().nullable(),
@@ -107,6 +134,16 @@ export interface BillingPluginOptions {
 
 export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fastify, { db, printer }) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
+
+  /**
+   * Resolved per request, not once at boot: an admin changing the
+   * printer address in Settings must take effect on the next print,
+   * without restarting the server in the middle of service.
+   */
+  const currentPrinter = async (): Promise<PrinterTarget | null> =>
+    resolvePrinterTarget(await getSetting(db, 'printer'), printer);
+
+  const NO_PRINTER = 'no printer configured — set one in Settings, or POS_PRINTER_HOST on the server';
 
   // Same pattern as ordering/routes.ts: domain errors map to specific,
   // cashier-actionable HTTP statuses, scoped to this plugin only.
@@ -194,6 +231,73 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
     },
   );
 
+  // ---- payment accounts ----
+
+  app.get(
+    '/api/payment-accounts',
+    {
+      schema: {
+        querystring: z.object({
+          paymentMethodId: z.coerce.number().int().optional(),
+          includeInactive: z.coerce.boolean().optional(),
+        }),
+        response: { 200: z.array(paymentAccountSchema) },
+      },
+    },
+    async (request, reply) => {
+      // Readable by anyone signed in: the payment screen has to show the
+      // cashier which account to select, and an account label plus the
+      // number already printed on the customer's own bill is not a
+      // secret from the person taking the money.
+      requireAuth(request, reply);
+      return listPaymentAccounts(db, request.query);
+    },
+  );
+
+  app.post(
+    '/api/payment-accounts',
+    {
+      schema: {
+        body: z.object({
+          paymentMethodId: z.number().int(),
+          label: z.string().min(1),
+          accountTitle: z.string().optional(),
+          accountNumber: z.string().optional(),
+          bankName: z.string().optional(),
+          sortOrder: z.number().int().optional(),
+        }),
+        response: { 201: paymentAccountSchema },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'admin');
+      reply.code(201);
+      return createPaymentAccount(db, request.body, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  app.patch(
+    '/api/payment-accounts/:id',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        body: z.object({
+          label: z.string().min(1).optional(),
+          accountTitle: z.string().optional(),
+          accountNumber: z.string().optional(),
+          bankName: z.string().optional(),
+          active: z.boolean().optional(),
+          sortOrder: z.number().int().optional(),
+        }),
+        response: { 200: paymentAccountSchema },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'admin');
+      return updatePaymentAccount(db, request.params.id, request.body, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
   // ---- payments and closing ----
 
   app.post(
@@ -205,6 +309,7 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
           paymentMethodId: z.number().int(),
           amountMinor: paisaSchema,
           referenceNo: z.string().optional(),
+          paymentAccountId: z.number().int().optional(),
           tenderedMinor: paisaSchema.optional(),
         }),
         response: { 201: paymentResultSchema },
@@ -228,6 +333,7 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
           settlementType: settlementTypeSchema.optional(),
           paymentMethodId: z.number().int().optional(),
           referenceNo: z.string().optional(),
+          paymentAccountId: z.number().int().optional(),
         }),
         response: { 201: settleConsumptionResultSchema },
       },
@@ -268,11 +374,12 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
     },
     async (request, reply) => {
       requireAuth(request, reply);
-      if (!printer) {
+      const target = await currentPrinter();
+      if (!target) {
         reply.code(503);
-        return { error: 'no printer configured (set POS_PRINTER_HOST)' };
+        return { error: NO_PRINTER };
       }
-      await printBill(db, request.params.id, printer);
+      await printBill(db, request.params.id, target);
       return { ok: true as const };
     },
   );
@@ -287,11 +394,12 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
     },
     async (request, reply) => {
       requireAuth(request, reply);
-      if (!printer) {
+      const target = await currentPrinter();
+      if (!target) {
         reply.code(503);
-        return { error: 'no printer configured (set POS_PRINTER_HOST)' };
+        return { error: NO_PRINTER };
       }
-      await printReceipt(db, request.params.id, printer);
+      await printReceipt(db, request.params.id, target);
       return { ok: true as const };
     },
   );

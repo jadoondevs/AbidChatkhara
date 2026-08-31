@@ -18,9 +18,9 @@ describe('gratuity/service', () => {
 
   async function setupBase() {
     ctx = createTestDb();
-    const admin = await createUser(ctx.db, { name: 'Admin', pin: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+    const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     const actor = { actorId: admin.id, terminalId: 'till-1' };
-    const waiter = await createUser(ctx.db, { name: 'Bilal', pin: '1111', role: 'server' }, actor);
+    const waiter = await createUser(ctx.db, { name: 'Bilal', username: 'bilal', password: '1111', role: 'server' }, actor);
 
     const category = await createCategory(ctx.db, { name: 'Mains' }, actor);
     const item = await createItem(ctx.db, { categoryId: category.id, name: 'Karahi' }, actor);
@@ -132,7 +132,7 @@ describe('gratuity/service', () => {
   describe('waiterPayoutTotals', () => {
     it('sums each waiter\'s entries, net of any reversal', async () => {
       const { actor, item, waiter, cash } = await setupBase();
-      const otherWaiter = await createUser(ctx.db, { name: 'Ahmed', pin: '2222', role: 'server' }, actor);
+      const otherWaiter = await createUser(ctx.db, { name: 'Ahmed', username: 'ahmed', password: '2222', role: 'server' }, actor);
 
       await closedOrderWithServiceCharge(item, waiter.id, cash.id, actor, paisa(50_00));
       await closedOrderWithServiceCharge(item, waiter.id, cash.id, actor, paisa(30_00));

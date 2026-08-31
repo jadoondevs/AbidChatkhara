@@ -6,18 +6,18 @@ import { createTestDb } from '../platform/db/test-helpers.js';
 
 async function setup() {
   const ctx = createTestDb();
-  const admin = await createUser(ctx.db, { name: 'Admin', pin: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+  const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
   const server = await createUser(
     ctx.db,
-    { name: 'Server', pin: '1234', role: 'server' },
+    { name: 'Server', username: 'server', password: '1234', role: 'server' },
     { actorId: admin.id, terminalId: 'seed' },
   );
   const app = await buildApp({ db: ctx.db, logger: false });
   return { ctx, app, admin, server };
 }
 
-async function loginAs(app: FastifyInstance, userId: number, pin: string): Promise<string> {
-  const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { userId, pin, terminalId: 'till-1' } });
+async function loginAs(app: FastifyInstance, username: string, password: string): Promise<string> {
+  const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username, password, terminalId: 'till-1' } });
   return (res.json() as { token: string }).token;
 }
 
@@ -39,7 +39,7 @@ describe('catalog routes', () => {
   it('lets any authenticated staff read the menu, but only a manager+ create a category', async () => {
     const started = await setup();
     ({ app, ctx } = started);
-    const serverToken = await loginAs(app, started.server.id, '1234');
+    const serverToken = await loginAs(app, started.server.username, '1234');
 
     const readRes = await app.inject({ method: 'GET', url: '/api/categories', headers: { authorization: `Bearer ${serverToken}` } });
     expect(readRes.statusCode).toBe(200);
@@ -56,7 +56,7 @@ describe('catalog routes', () => {
   it('drives a full create-category -> create-item -> set-price -> menu flow over HTTP', async () => {
     const started = await setup();
     ({ app, ctx } = started);
-    const token = await loginAs(app, started.admin.id, '9999');
+    const token = await loginAs(app, started.admin.username, '9999');
     const auth = { authorization: `Bearer ${token}` };
 
     const categoryRes = await app.inject({ method: 'POST', url: '/api/categories', headers: auth, payload: { name: 'Mains' } });

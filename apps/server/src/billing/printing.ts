@@ -1,8 +1,10 @@
-import { format, type Paisa } from '@pos/shared';
+import { format, paisa, sum, type Paisa } from '@pos/shared';
 import type { Kysely } from 'kysely';
 import { ReceiptBuilder } from '../platform/printing/escpos.js';
 import { sendToPrinter, type PrinterTarget } from '../platform/printing/client.js';
 import type { Database } from '../platform/db/types.js';
+import { getAllSettings } from '../settings/service.js';
+import type { ReceiptSettings, RestaurantSettings } from '../settings/schema.js';
 
 const RECEIPT_WIDTH = 42; // characters — a standard 80mm thermal printer at font A
 
@@ -13,15 +15,37 @@ export interface TicketLine {
   readonly lineTotalMinor: Paisa;
 }
 
+export interface PaymentOptionAccount {
+  readonly label: string;
+  readonly accountNumber: string | null;
+}
+
 export interface PaymentOption {
   readonly displayName: string;
   readonly accountTitle: string | null;
   readonly accountNumber: string | null;
   readonly bankName: string | null;
   readonly instructionsLine: string | null;
+  /** Every configured account a customer could actually send money to
+   * for this method — a restaurant with three Easypaisa wallets prints
+   * all three. */
+  readonly accounts: readonly PaymentOptionAccount[];
+}
+
+/**
+ * The restaurant's own identity and receipt wording, as configured in
+ * Settings. Passed IN to the renderers rather than read by them: the
+ * renderers stay pure functions of their input, which is what lets the
+ * printing tests assert on exact bytes without a database.
+ */
+export interface TicketBranding {
+  readonly restaurant: RestaurantSettings;
+  readonly receipt: ReceiptSettings;
 }
 
 export interface BillTicketData {
+  readonly branding: TicketBranding;
+  readonly orderId: number;
   readonly tableLabel: string | null;
   readonly orderType: string;
   readonly waiterName: string | null;
@@ -29,8 +53,11 @@ export interface BillTicketData {
   readonly subtotalMinor: Paisa;
   readonly discountMinor: Paisa;
   readonly discountReason: string | null;
+  readonly taxMinor: Paisa;
   readonly serviceChargeMinor: Paisa;
+  readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
+  readonly printedAt: string;
   readonly paymentOptions: readonly PaymentOption[];
 }
 
@@ -40,16 +67,56 @@ function twoColumn(left: string, right: string, width: number = RECEIPT_WIDTH): 
 }
 
 /**
+ * The restaurant's own name and contact details at the top of a ticket
+ * — every line of it configurable, none of it compiled in. A
+ * restaurant that has configured nothing gets no header at all rather
+ * than a placeholder name it would have to notice and remove.
+ */
+function printHeader(b: ReceiptBuilder, branding: TicketBranding): void {
+  const { restaurant, receipt } = branding;
+  const name = receipt.headerName.trim() || restaurant.name.trim();
+
+  b.align('center');
+  if (name) b.doubleSize(true).line(name).doubleSize(false);
+  if (receipt.showAddress) {
+    if (restaurant.addressLine1.trim()) b.line(restaurant.addressLine1.trim());
+    if (restaurant.addressLine2.trim()) b.line(restaurant.addressLine2.trim());
+  }
+  if (receipt.showPhone && restaurant.phone.trim()) b.line(restaurant.phone.trim());
+  if (restaurant.registrationLine.trim()) b.line(restaurant.registrationLine.trim());
+  if (receipt.headerNote.trim()) b.line(receipt.headerNote.trim());
+  b.align('left');
+}
+
+function printFooter(b: ReceiptBuilder, branding: TicketBranding): void {
+  const { receipt } = branding;
+  b.align('center').feed(1);
+  if (receipt.footerMessage.trim()) b.line(receipt.footerMessage.trim());
+  if (receipt.footerNote.trim()) b.line(receipt.footerNote.trim());
+  b.align('left');
+  b.feed(receipt.feedLines).cut();
+}
+
+/**
  * The pro-forma bill (spec's billing stage 1) — "clearly marked as a
  * bill, not a receipt": no invoice number (it doesn't have one yet —
  * see docs/decisions/007), and headed "BILL" in large type so nobody
  * mistakes it for the restaurant's record copy.
  */
 export function renderBillTicket(data: BillTicketData): Buffer {
-  const b = new ReceiptBuilder().init().align('center').doubleSize(true).line('BILL').doubleSize(false).line('(not a receipt)').align('left').rule();
+  const b = new ReceiptBuilder().init();
+  printHeader(b, data.branding);
+  b.align('center').doubleSize(true).line('BILL').doubleSize(false).line('(not a receipt)').align('left').rule();
 
-  b.line(data.tableLabel ? `Table: ${data.tableLabel}` : `Order type: ${data.orderType}`);
-  if (data.waiterName) b.line(`Waiter: ${data.waiterName}`);
+  if (data.branding.receipt.showOrderNumber) b.line(`Order: #${data.orderId}`);
+  b.line(`Date: ${data.printedAt}`);
+  // A table label is optional (a counter sale has none), so the order
+  // type is shown as well as, not instead of, the table — an operator
+  // reading a stack of bills needs to know a table-less one is takeaway
+  // rather than assume the label failed to print.
+  if (data.branding.receipt.showTable && data.tableLabel) b.line(`Table: ${data.tableLabel}`);
+  b.line(`Order type: ${data.orderType}`);
+  if (data.branding.receipt.showWaiter && data.waiterName) b.line(`Waiter: ${data.waiterName}`);
   b.rule();
 
   for (const line of data.lines) {
@@ -62,11 +129,13 @@ export function renderBillTicket(data: BillTicketData): Buffer {
   if (data.discountMinor > 0) {
     b.line(twoColumn(`Discount${data.discountReason ? ` (${data.discountReason})` : ''}`, `-${format(data.discountMinor)}`));
   }
+  if (data.taxMinor > 0) b.line(twoColumn('Tax', format(data.taxMinor)));
   if (data.serviceChargeMinor > 0) b.line(twoColumn('Service charge', format(data.serviceChargeMinor)));
+  if (data.roundingAdjustmentMinor !== 0) b.line(twoColumn('Rounding', format(data.roundingAdjustmentMinor)));
   b.rule();
   b.bold(true).line(twoColumn('TOTAL', format(data.totalMinor))).bold(false);
 
-  if (data.paymentOptions.length > 0) {
+  if (data.branding.receipt.showPaymentAccounts && data.paymentOptions.length > 0) {
     b.rule();
     b.line('Payment options:');
     for (const option of data.paymentOptions) {
@@ -75,10 +144,13 @@ export function renderBillTicket(data: BillTicketData): Buffer {
       if (option.accountNumber) b.line(`    ${option.accountNumber}`);
       if (option.bankName) b.line(`    ${option.bankName}`);
       if (option.instructionsLine) b.line(`    ${option.instructionsLine}`);
+      for (const account of option.accounts) {
+        b.line(`    ${account.label}${account.accountNumber ? `: ${account.accountNumber}` : ''}`);
+      }
     }
   }
 
-  b.feed(3).cut();
+  printFooter(b, data.branding);
   return b.build();
 }
 
@@ -86,9 +158,12 @@ export interface PaymentLine {
   readonly methodName: string;
   readonly amountMinor: Paisa;
   readonly referenceNo: string | null;
+  readonly accountLabel: string | null;
 }
 
 export interface ReceiptTicketData {
+  readonly branding: TicketBranding;
+  readonly orderId: number;
   readonly invoiceNo: number;
   readonly closedAt: string;
   readonly tableLabel: string | null;
@@ -102,6 +177,10 @@ export interface ReceiptTicketData {
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
   readonly payments: readonly PaymentLine[];
+  /** Total cash handed over and handed back across this order's cash
+   * payments; null when none were cash. */
+  readonly cashTenderedMinor: Paisa | null;
+  readonly changeGivenMinor: Paisa | null;
   /** Kicks the cash drawer only when true — spec: "Open the cash drawer
    * only when a cash payment was recorded." */
   readonly cashPaymentReceived: boolean;
@@ -110,19 +189,15 @@ export interface ReceiptTicketData {
 /** The final receipt (spec's billing stage 2) — the restaurant's record
  * copy, carrying the invoice number this bill only gets once it closes. */
 export function renderReceiptTicket(data: ReceiptTicketData): Buffer {
-  const b = new ReceiptBuilder()
-    .init()
-    .align('center')
-    .doubleSize(true)
-    .line('RECEIPT')
-    .doubleSize(false)
-    .line(`Invoice #${data.invoiceNo}`)
-    .align('left')
-    .rule();
+  const b = new ReceiptBuilder().init();
+  printHeader(b, data.branding);
+  b.align('center').doubleSize(true).line('RECEIPT').doubleSize(false).line(`Invoice #${data.invoiceNo}`).align('left').rule();
 
   b.line(`Date: ${data.closedAt}`);
-  b.line(data.tableLabel ? `Table: ${data.tableLabel}` : `Order type: ${data.orderType}`);
-  if (data.waiterName) b.line(`Waiter: ${data.waiterName}`);
+  if (data.branding.receipt.showOrderNumber) b.line(`Order: #${data.orderId}`);
+  if (data.branding.receipt.showTable && data.tableLabel) b.line(`Table: ${data.tableLabel}`);
+  b.line(`Order type: ${data.orderType}`);
+  if (data.branding.receipt.showWaiter && data.waiterName) b.line(`Waiter: ${data.waiterName}`);
   b.rule();
 
   for (const line of data.lines) {
@@ -143,10 +218,16 @@ export function renderReceiptTicket(data: ReceiptTicketData): Buffer {
   b.line('Paid via:');
   for (const payment of data.payments) {
     b.line(twoColumn(`  ${payment.methodName}${payment.referenceNo ? ` (${payment.referenceNo})` : ''}`, format(payment.amountMinor)));
+    if (payment.accountLabel) b.line(`    to ${payment.accountLabel}`);
+  }
+  // Only ever shown, never used to derive a total: `amountMinor` above
+  // is what the bill actually received (see migration 0013).
+  if (data.cashTenderedMinor !== null && data.changeGivenMinor !== null && data.changeGivenMinor > 0) {
+    b.line(twoColumn('  Cash tendered', format(data.cashTenderedMinor)));
+    b.line(twoColumn('  Change', format(data.changeGivenMinor)));
   }
 
-  b.align('center').feed(1).line('Thank you').align('left');
-  b.feed(3).cut();
+  printFooter(b, data.branding);
   if (data.cashPaymentReceived) b.kickDrawer();
   return b.build();
 }
@@ -184,13 +265,28 @@ async function loadTicketLines(db: Kysely<Database>, orderId: number): Promise<T
   }));
 }
 
+/** The configured branding both renderers need, fetched once. */
+async function loadBranding(db: Kysely<Database>): Promise<TicketBranding> {
+  const settings = await getAllSettings(db);
+  return { restaurant: settings.restaurant, receipt: settings.receipt };
+}
+
 export async function buildBillTicketData(db: Kysely<Database>, orderId: number): Promise<BillTicketData> {
   const order = await db.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirstOrThrow();
   const waiter = order.waiter_id ? await db.selectFrom('user').select('name').where('id', '=', order.waiter_id).executeTakeFirst() : undefined;
   const lines = await loadTicketLines(db, orderId);
   const methods = await db.selectFrom('payment_method').selectAll().where('active', '=', 1).where('print_on_bill', '=', 1).orderBy('sort_order', 'asc').execute();
+  const accounts = await db
+    .selectFrom('payment_account')
+    .selectAll()
+    .where('active', '=', 1)
+    .orderBy('sort_order', 'asc')
+    .orderBy('label', 'asc')
+    .execute();
 
   return {
+    branding: await loadBranding(db),
+    orderId: order.id,
     tableLabel: order.table_label,
     orderType: order.order_type,
     waiterName: waiter?.name ?? null,
@@ -198,14 +294,20 @@ export async function buildBillTicketData(db: Kysely<Database>, orderId: number)
     subtotalMinor: order.subtotal_minor,
     discountMinor: order.order_discount_minor,
     discountReason: order.discount_reason,
+    taxMinor: order.tax_minor,
     serviceChargeMinor: order.service_charge_minor,
+    roundingAdjustmentMinor: order.rounding_adjustment_minor,
     totalMinor: order.total_minor,
+    printedAt: order.billed_at ?? new Date().toISOString(),
     paymentOptions: methods.map((m) => ({
       displayName: m.display_name,
       accountTitle: m.account_title,
       accountNumber: m.account_number,
       bankName: m.bank_name,
       instructionsLine: m.instructions_line,
+      accounts: accounts
+        .filter((a) => a.payment_method_id === m.id)
+        .map((a) => ({ label: a.label, accountNumber: a.account_number })),
     })),
   };
 }
@@ -221,13 +323,26 @@ export async function buildReceiptTicketData(db: Kysely<Database>, orderId: numb
   const paymentRows = await db
     .selectFrom('payment')
     .innerJoin('payment_method', 'payment_method.id', 'payment.payment_method_id')
-    .select(['payment_method.display_name as methodName', 'payment_method.kind as kind', 'payment.amount_minor as amountMinor', 'payment.reference_no as referenceNo'])
+    .leftJoin('payment_account', 'payment_account.id', 'payment.payment_account_id')
+    .select([
+      'payment_method.display_name as methodName',
+      'payment_method.kind as kind',
+      'payment.amount_minor as amountMinor',
+      'payment.reference_no as referenceNo',
+      'payment.tendered_minor as tenderedMinor',
+      'payment.change_minor as changeMinor',
+      'payment_account.label as accountLabel',
+    ])
     .where('payment.order_id', '=', orderId)
     .where('payment.reversed_by_payment_id', 'is', null)
     .orderBy('payment.received_at', 'asc')
     .execute();
 
+  const cashRows = paymentRows.filter((p) => p.kind === 'cash' && p.tenderedMinor !== null);
+
   return {
+    branding: await loadBranding(db),
+    orderId: order.id,
     invoiceNo: order.invoice_no,
     closedAt: order.closed_at,
     tableLabel: order.table_label,
@@ -240,7 +355,14 @@ export async function buildReceiptTicketData(db: Kysely<Database>, orderId: numb
     serviceChargeMinor: order.service_charge_minor,
     roundingAdjustmentMinor: order.rounding_adjustment_minor,
     totalMinor: order.total_minor,
-    payments: paymentRows.map((p) => ({ methodName: p.methodName, amountMinor: p.amountMinor, referenceNo: p.referenceNo })),
+    payments: paymentRows.map((p) => ({
+      methodName: p.methodName,
+      amountMinor: p.amountMinor,
+      referenceNo: p.referenceNo,
+      accountLabel: p.accountLabel ?? null,
+    })),
+    cashTenderedMinor: cashRows.length > 0 ? sum(cashRows.map((p) => p.tenderedMinor as Paisa)) : null,
+    changeGivenMinor: cashRows.length > 0 ? sum(cashRows.map((p) => p.changeMinor ?? paisa(0))) : null,
     cashPaymentReceived: paymentRows.some((p) => p.kind === 'cash'),
   };
 }

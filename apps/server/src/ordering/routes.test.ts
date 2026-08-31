@@ -8,9 +8,9 @@ import { createTestDb } from '../platform/db/test-helpers.js';
 
 async function setup() {
   const ctx = createTestDb();
-  const admin = await createUser(ctx.db, { name: 'Admin', pin: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+  const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
   const catalogActor = { actorId: admin.id, terminalId: 'seed' };
-  const server = await createUser(ctx.db, { name: 'Server', pin: '1234', role: 'server' }, catalogActor);
+  const server = await createUser(ctx.db, { name: 'Server', username: 'server', password: '1234', role: 'server' }, catalogActor);
 
   const category = await createCategory(ctx.db, { name: 'Mains' }, catalogActor);
   const item = await createItem(ctx.db, { categoryId: category.id, name: 'Karahi' }, catalogActor);
@@ -20,8 +20,8 @@ async function setup() {
   return { ctx, app, admin, server, item };
 }
 
-async function loginAs(app: FastifyInstance, userId: number, pin: string): Promise<string> {
-  const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { userId, pin, terminalId: 'till-1' } });
+async function loginAs(app: FastifyInstance, username: string, password: string): Promise<string> {
+  const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username, password, terminalId: 'till-1' } });
   return (res.json() as { token: string }).token;
 }
 
@@ -43,7 +43,7 @@ describe('ordering routes', () => {
   it('drives a full open -> add line -> bill flow over HTTP, then reprints identically', async () => {
     const started = await setup();
     ({ app, ctx } = started);
-    const token = await loginAs(app, started.server.id, '1234');
+    const token = await loginAs(app, started.server.username, '1234');
     const auth = { authorization: `Bearer ${token}` };
 
     const createRes = await app.inject({ method: 'POST', url: '/api/orders', headers: auth, payload: { orderType: 'takeaway' } });
@@ -71,8 +71,8 @@ describe('ordering routes', () => {
   it('rejects a line void from a server, allows it from a manager', async () => {
     const started = await setup();
     ({ app, ctx } = started);
-    const serverToken = await loginAs(app, started.server.id, '1234');
-    const adminToken = await loginAs(app, started.admin.id, '9999');
+    const serverToken = await loginAs(app, started.server.username, '1234');
+    const adminToken = await loginAs(app, started.admin.username, '9999');
 
     const createRes = await app.inject({
       method: 'POST',
@@ -110,7 +110,7 @@ describe('ordering routes', () => {
   it('maps an invalid state transition to 422, not a generic 500', async () => {
     const started = await setup();
     ({ app, ctx } = started);
-    const token = await loginAs(app, started.admin.id, '9999');
+    const token = await loginAs(app, started.admin.username, '9999');
     const auth = { authorization: `Bearer ${token}` };
 
     const createRes = await app.inject({ method: 'POST', url: '/api/orders', headers: auth, payload: { orderType: 'takeaway' } });
@@ -125,7 +125,7 @@ describe('ordering routes', () => {
   it('lists orders filtered by status via the floor view query', async () => {
     const started = await setup();
     ({ app, ctx } = started);
-    const token = await loginAs(app, started.admin.id, '9999');
+    const token = await loginAs(app, started.admin.username, '9999');
     const auth = { authorization: `Bearer ${token}` };
 
     await app.inject({ method: 'POST', url: '/api/orders', headers: auth, payload: { orderType: 'takeaway' } });

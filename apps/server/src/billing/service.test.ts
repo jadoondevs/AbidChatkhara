@@ -7,7 +7,17 @@ import { addLine, billOrder, createOrder, getOrder, OrderStateError } from '../o
 import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createTestDb } from '../platform/db/test-helpers.js';
 import { eventBus } from '../platform/events/bus.js';
-import { createPaymentMethod, listPaymentMethods, recordPayment, refundOrder, settleConsumption, updatePaymentMethod } from './service.js';
+import {
+  createPaymentAccount,
+  createPaymentMethod,
+  listPaymentAccounts,
+  listPaymentMethods,
+  recordPayment,
+  refundOrder,
+  settleConsumption,
+  updatePaymentAccount,
+  updatePaymentMethod,
+} from './service.js';
 
 describe('billing/service', () => {
   let ctx: ReturnType<typeof createTestDb>;
@@ -18,7 +28,7 @@ describe('billing/service', () => {
 
   async function setupBase() {
     ctx = createTestDb();
-    const admin = await createUser(ctx.db, { name: 'Admin', pin: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+    const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     const actor = { actorId: admin.id, terminalId: 'till-1' };
 
     const category = await createCategory(ctx.db, { name: 'Mains' }, actor);
@@ -99,20 +109,136 @@ describe('billing/service', () => {
       expect(result.payment.amountMinor).toBe(billed.totalMinor); // only the applied amount is stored
     });
 
-    it('requires a reference number for wallet and bank_transfer payments', async () => {
+    it('takes a wallet payment with no reference number — a reference is optional', async () => {
       const { actor, item, easypaisa } = await setupBase();
       const billed = await billedOrder(item, actor);
-      await expect(recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor }, actor)).rejects.toThrow(
-        /reference number is required/,
-      );
+
+      const result = await recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor }, actor);
+      expect(result.orderClosed).toBe(true);
+      expect(result.payment.referenceNo).toBeNull();
     });
 
-    it('rejects a payment that would exceed the remaining balance', async () => {
+    it('keeps a reference number when one is given, and treats a blank one as none', async () => {
+      const { actor, item, easypaisa } = await setupBase();
+
+      const withRef = await billedOrder(item, actor);
+      const kept = await recordPayment(
+        ctx.db,
+        withRef.id,
+        { paymentMethodId: easypaisa.id, amountMinor: withRef.totalMinor, referenceNo: '  TX-1234 ' },
+        actor,
+      );
+      expect(kept.payment.referenceNo).toBe('TX-1234');
+
+      const blankRef = await billedOrder(item, actor);
+      const blank = await recordPayment(
+        ctx.db,
+        blankRef.id,
+        { paymentMethodId: easypaisa.id, amountMinor: blankRef.totalMinor, referenceNo: '   ' },
+        actor,
+      );
+      expect(blank.payment.referenceNo).toBeNull();
+    });
+
+    it('rejects a NON-CASH payment that would exceed the remaining balance', async () => {
+      const { actor, item, easypaisa } = await setupBase();
+      const billed = await billedOrder(item, actor);
+      await expect(
+        recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: paisa(billed.totalMinor + 1) }, actor),
+      ).rejects.toThrow(/exceeds the remaining balance/);
+    });
+
+    // ---- cash change (the Rs 2,000 note for an Rs 1,800 bill) ----
+
+    it('applies only the balance and returns the rest as change when cash exceeds the bill', async () => {
+      const { actor, item, cash } = await setupBase();
+      const billed = await billedOrder(item, actor);
+      const overBy = paisa(200_00);
+
+      const result = await recordPayment(
+        ctx.db,
+        billed.id,
+        { paymentMethodId: cash.id, amountMinor: paisa(billed.totalMinor + overBy) },
+        actor,
+      );
+
+      expect(result.appliedMinor).toBe(billed.totalMinor);
+      expect(result.changeMinor).toBe(overBy);
+      expect(result.orderClosed).toBe(true);
+      // The stored payment — what sales, allocations and expected cash
+      // are all computed from — is the applied amount, never the tender.
+      expect(result.payment.amountMinor).toBe(billed.totalMinor);
+      expect(result.payment.tenderedMinor).toBe(paisa(billed.totalMinor + overBy));
+      expect(result.payment.changeMinor).toBe(overBy);
+    });
+
+    it('gives zero change on an exact cash payment', async () => {
+      const { actor, item, cash } = await setupBase();
+      const billed = await billedOrder(item, actor);
+
+      const result = await recordPayment(ctx.db, billed.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
+      expect(result.changeMinor).toBe(0);
+      expect(result.appliedMinor).toBe(billed.totalMinor);
+      expect(result.orderClosed).toBe(true);
+    });
+
+    it('computes change from an explicitly-tendered note as well as from an over-keyed amount', async () => {
+      const { actor, item, cash } = await setupBase();
+      const billed = await billedOrder(item, actor);
+
+      const result = await recordPayment(
+        ctx.db,
+        billed.id,
+        { paymentMethodId: cash.id, amountMinor: billed.totalMinor, tenderedMinor: paisa(billed.totalMinor + 500_00) },
+        actor,
+      );
+      expect(result.appliedMinor).toBe(billed.totalMinor);
+      expect(result.changeMinor).toBe(500_00);
+    });
+
+    it('rejects a tender smaller than the amount being applied', async () => {
       const { actor, item, cash } = await setupBase();
       const billed = await billedOrder(item, actor);
       await expect(
-        recordPayment(ctx.db, billed.id, { paymentMethodId: cash.id, amountMinor: paisa(billed.totalMinor + 1) }, actor),
-      ).rejects.toThrow(/exceeds the remaining balance/);
+        recordPayment(
+          ctx.db,
+          billed.id,
+          { paymentMethodId: cash.id, amountMinor: billed.totalMinor, tenderedMinor: paisa(billed.totalMinor - 100) },
+          actor,
+        ),
+      ).rejects.toThrow(/less than/);
+    });
+
+    it('leaves an order awaiting payment after a partial cash payment, with no change', async () => {
+      const { actor, item, cash } = await setupBase();
+      const billed = await billedOrder(item, actor);
+      const part = paisa(100_00);
+
+      const result = await recordPayment(ctx.db, billed.id, { paymentMethodId: cash.id, amountMinor: part }, actor);
+      expect(result.orderClosed).toBe(false);
+      expect(result.appliedMinor).toBe(part);
+      expect(result.changeMinor).toBe(0);
+      expect(result.order.status).toBe('billed');
+    });
+
+    it('gives change only on the final payment of a split, against the remaining balance', async () => {
+      const { actor, item, cash } = await setupBase();
+      const billed = await billedOrder(item, actor);
+      const first = paisa(100_00);
+
+      await recordPayment(ctx.db, billed.id, { paymentMethodId: cash.id, amountMinor: first }, actor);
+      // Second tender covers the rest with Rs 50 to spare.
+      const remaining = paisa(billed.totalMinor - first);
+      const result = await recordPayment(
+        ctx.db,
+        billed.id,
+        { paymentMethodId: cash.id, amountMinor: paisa(remaining + 50_00) },
+        actor,
+      );
+
+      expect(result.appliedMinor).toBe(remaining);
+      expect(result.changeMinor).toBe(50_00);
+      expect(result.orderClosed).toBe(true);
     });
 
     it('rejects paying an order that is still open (not yet billed)', async () => {
@@ -315,6 +441,77 @@ describe('billing/service', () => {
       const { order: closedOrder } = await recordPayment(ctx.db, billed.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
       await refundOrder(ctx.db, closedOrder.id, { reason: 'a' }, actor);
       await expect(refundOrder(ctx.db, closedOrder.id, { reason: 'b' }, actor)).rejects.toThrow(/nothing to refund/);
+    });
+  });
+
+  describe('payment accounts', () => {
+    it('records which configured account received a non-cash payment', async () => {
+      const { actor, item, easypaisa } = await setupBase();
+      const account = await createPaymentAccount(
+        ctx.db,
+        { paymentMethodId: easypaisa.id, label: 'Counter wallet', accountNumber: '0000-0000000' },
+        actor,
+      );
+      const billed = await billedOrder(item, actor);
+
+      const result = await recordPayment(
+        ctx.db,
+        billed.id,
+        { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor, paymentAccountId: account.id },
+        actor,
+      );
+      expect(result.payment.paymentAccountId).toBe(account.id);
+    });
+
+    it('refuses an account that belongs to a different payment method', async () => {
+      const { actor, item, cash, easypaisa } = await setupBase();
+      const account = await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Counter wallet' }, actor);
+      const billed = await billedOrder(item, actor);
+
+      await expect(
+        recordPayment(
+          ctx.db,
+          billed.id,
+          { paymentMethodId: cash.id, amountMinor: billed.totalMinor, paymentAccountId: account.id },
+          actor,
+        ),
+      ).rejects.toThrow(/does not belong to the payment method/);
+    });
+
+    it('refuses a deactivated account', async () => {
+      const { actor, item, easypaisa } = await setupBase();
+      const account = await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Old wallet' }, actor);
+      await updatePaymentAccount(ctx.db, account.id, { active: false }, actor);
+      const billed = await billedOrder(item, actor);
+
+      await expect(
+        recordPayment(
+          ctx.db,
+          billed.id,
+          { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor, paymentAccountId: account.id },
+          actor,
+        ),
+      ).rejects.toThrow(/not found or inactive/);
+    });
+
+    it('takes a payment with no account selected at all', async () => {
+      const { actor, item, easypaisa } = await setupBase();
+      const billed = await billedOrder(item, actor);
+      const result = await recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor }, actor);
+      expect(result.payment.paymentAccountId).toBeNull();
+    });
+
+    it('lists only the active accounts for a method, and every account when asked', async () => {
+      const { actor, easypaisa } = await setupBase();
+      const live = await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Counter wallet' }, actor);
+      const retired = await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Old wallet' }, actor);
+      await updatePaymentAccount(ctx.db, retired.id, { active: false }, actor);
+
+      const active = await listPaymentAccounts(ctx.db, { paymentMethodId: easypaisa.id });
+      expect(active.map((a) => a.id)).toEqual([live.id]);
+
+      const all = await listPaymentAccounts(ctx.db, { paymentMethodId: easypaisa.id, includeInactive: true });
+      expect(all).toHaveLength(2);
     });
   });
 });

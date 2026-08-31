@@ -9,9 +9,9 @@ import { createTestDb } from '../platform/db/test-helpers.js';
 
 async function setup() {
   const ctx = createTestDb();
-  const admin = await createUser(ctx.db, { name: 'Admin', pin: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+  const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
   const catalogActor = { actorId: admin.id, terminalId: 'seed' };
-  const server = await createUser(ctx.db, { name: 'Server', pin: '1234', role: 'server' }, catalogActor);
+  const server = await createUser(ctx.db, { name: 'Server', username: 'server', password: '1234', role: 'server' }, catalogActor);
   const category = await createCategory(ctx.db, { name: 'Mains' }, catalogActor);
   const item = await createItem(ctx.db, { categoryId: category.id, name: 'Karahi' }, catalogActor);
   await setItemPrice(ctx.db, item.id, paisa(500_00), catalogActor);
@@ -27,8 +27,8 @@ async function setup() {
   return { ctx, app, admin, server, item, partner };
 }
 
-async function loginAs(app: FastifyInstance, userId: number, pin: string): Promise<string> {
-  const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { userId, pin, terminalId: 'till-1' } });
+async function loginAs(app: FastifyInstance, username: string, password: string): Promise<string> {
+  const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username, password, terminalId: 'till-1' } });
   return (res.json() as { token: string }).token;
 }
 
@@ -44,7 +44,7 @@ describe('billing routes', () => {
   it('drives a full order -> bill -> pay -> closed flow over HTTP', async () => {
     const started = await setup();
     ({ app, ctx } = started);
-    const token = await loginAs(app, started.admin.id, '9999');
+    const token = await loginAs(app, started.admin.username, '9999');
     const auth = { authorization: `Bearer ${token}` };
 
     const methodRes = await app.inject({ method: 'POST', url: '/api/payment-methods', headers: auth, payload: { code: 'cash', displayName: 'Cash', kind: 'cash' } });
@@ -72,7 +72,7 @@ describe('billing routes', () => {
   it('maps a double-close attempt to a clean 422, not a 500', async () => {
     const started = await setup();
     ({ app, ctx } = started);
-    const token = await loginAs(app, started.admin.id, '9999');
+    const token = await loginAs(app, started.admin.username, '9999');
     const auth = { authorization: `Bearer ${token}` };
 
     const methodRes = await app.inject({ method: 'POST', url: '/api/payment-methods', headers: auth, payload: { code: 'cash', displayName: 'Cash', kind: 'cash' } });
@@ -95,8 +95,8 @@ describe('billing routes', () => {
   it('rejects a refund from a server, allows one from a manager', async () => {
     const started = await setup();
     ({ app, ctx } = started);
-    const adminToken = await loginAs(app, started.admin.id, '9999');
-    const serverToken = await loginAs(app, started.server.id, '1234');
+    const adminToken = await loginAs(app, started.admin.username, '9999');
+    const serverToken = await loginAs(app, started.server.username, '1234');
     const authAdmin = { authorization: `Bearer ${adminToken}` };
 
     const methodRes = await app.inject({ method: 'POST', url: '/api/payment-methods', headers: authAdmin, payload: { code: 'cash', displayName: 'Cash', kind: 'cash' } });
@@ -123,7 +123,7 @@ describe('billing routes', () => {
   it('print routes respond 503 when no printer is configured', async () => {
     const started = await setup();
     ({ app, ctx } = started);
-    const token = await loginAs(app, started.admin.id, '9999');
+    const token = await loginAs(app, started.admin.username, '9999');
     const auth = { authorization: `Bearer ${token}` };
     const orderRes = await app.inject({ method: 'POST', url: '/api/orders', headers: auth, payload: { orderType: 'takeaway' } });
     const order = orderRes.json() as { id: number };

@@ -4,6 +4,8 @@ import type { Generated } from 'kysely';
 export type OrderType = 'dine_in' | 'takeaway' | 'delivery';
 export type OrderChannel = 'customer' | 'staff_meal' | 'owner_meal';
 export type OrderStatus = 'open' | 'billed' | 'closed' | 'voided';
+/** Why a line is no longer on the bill — see migration 0014. */
+export type VoidKind = 'correction' | 'void';
 
 export interface OrderTable {
   id: Generated<number>;
@@ -16,6 +18,9 @@ export interface OrderTable {
   shift_id: number | null;
   opened_at: string;
   billed_at: string | null;
+  /** Set the first time this order was billed, never cleared — unlike
+   * `billed_at`, which a reopen clears (see migration 0014). */
+  first_billed_at: string | null;
   closed_at: string | null;
   opened_by: number;
   closed_by: number | null;
@@ -44,6 +49,7 @@ export interface OrderLineTable {
   voided: number;
   void_reason: string | null;
   void_approved_by: number | null;
+  void_kind: VoidKind | null;
 }
 
 export interface OrderLineModifierTable {

@@ -27,9 +27,9 @@ describe('reporting/service', () => {
 
   async function setupBase() {
     ctx = createTestDb();
-    const admin = await createUser(ctx.db, { name: 'Admin', pin: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+    const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     const actor = { actorId: admin.id, terminalId: 'till-1' };
-    const waiter = await createUser(ctx.db, { name: 'Bilal', pin: '1111', role: 'server' }, actor);
+    const waiter = await createUser(ctx.db, { name: 'Bilal', username: 'bilal', password: '1111', role: 'server' }, actor);
 
     const category = await createCategory(ctx.db, { name: 'Mains' }, actor);
     const item = await createItem(ctx.db, { categoryId: category.id, name: 'Karahi' }, actor);
@@ -193,11 +193,17 @@ describe('reporting/service', () => {
 
   describe('voidAndDiscountReport', () => {
     it('lists line voids, order voids, and non-zero discounts, attributed to their actor', async () => {
-      const { actor, item, waiter } = await setupBase();
+      const { actor, category, item, waiter } = await setupBase();
+
+      // Two DIFFERENT items, so voiding one leaves the other paying for
+      // the discount below — a repeat tap of the same item would merge
+      // into one line (see ordering's addLine).
+      const secondItem = await createItem(ctx.db, { categoryId: category.id, name: 'Pulao' }, actor);
+      await setItemPrice(ctx.db, secondItem.id, paisa(1000_00), actor);
 
       const order1 = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
-      await addLine(ctx.db, order1.id, { itemId: item.id, qty: 1 }, actor);
       const detail = await addLine(ctx.db, order1.id, { itemId: item.id, qty: 1 }, actor);
+      await addLine(ctx.db, order1.id, { itemId: secondItem.id, qty: 1 }, actor);
       const lineId = detail.lines[0]!.id;
       await voidLine(ctx.db, order1.id, lineId, { reason: 'wrong item' }, actor);
       await setDiscount(ctx.db, order1.id, { discountMinor: paisa(50_00), reason: 'loyal customer' }, actor);
@@ -227,7 +233,7 @@ describe('reporting/service', () => {
 
     it('filters by actorId', async () => {
       const { actor, item } = await setupBase();
-      const other = await createUser(ctx.db, { name: 'Manager', pin: '5555', role: 'manager' }, actor);
+      const other = await createUser(ctx.db, { name: 'Manager', username: 'manager', password: '5555', role: 'manager' }, actor);
       const otherActor = { actorId: other.id, terminalId: 'till-2' };
 
       const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);

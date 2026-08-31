@@ -9,10 +9,10 @@ import { createTestDb } from './platform/db/test-helpers.js';
 
 async function setup() {
   const ctx = createTestDb();
-  const admin = await createUser(ctx.db, { name: 'Admin', pin: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+  const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
   const server = await createUser(
     ctx.db,
-    { name: 'Server', pin: '1234', role: 'server' },
+    { name: 'Server', username: 'server', password: '1234', role: 'server' },
     { actorId: admin.id, terminalId: 'seed' },
   );
   const app = await buildApp({ db: ctx.db, logger: false });
@@ -42,24 +42,24 @@ describe('app', () => {
     const loginRes = await app.inject({
       method: 'POST',
       url: '/api/auth/login',
-      payload: { userId: started.server.id, pin: '1234', terminalId: 'till-1' },
+      payload: { username: started.server.username, password: '1234', terminalId: 'till-1' },
     });
     expect(loginRes.statusCode).toBe(200);
-    const { token, user } = loginRes.json() as { token: string; user: { id: number; name: string; role: string } };
-    expect(user).toEqual({ id: started.server.id, name: 'Server', role: 'server' });
+    const { token, user } = loginRes.json() as { token: string; user: { id: number; name: string; username: string; role: string } };
+    expect(user).toEqual({ id: started.server.id, name: 'Server', username: 'server', role: 'server' });
 
     const meRes = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { authorization: `Bearer ${token}` } });
     expect(meRes.statusCode).toBe(200);
-    expect(meRes.json()).toEqual({ id: started.server.id, name: 'Server', role: 'server' });
+    expect(meRes.json()).toEqual({ id: started.server.id, name: 'Server', username: 'server', role: 'server' });
   });
 
-  it('rejects login with the wrong PIN', async () => {
+  it('rejects login with the wrong password', async () => {
     const started = await setup();
     ({ app, ctx } = started);
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/login',
-      payload: { userId: started.server.id, pin: '0000', terminalId: 'till-1' },
+      payload: { username: started.server.username, password: '0000', terminalId: 'till-1' },
     });
     expect(res.statusCode).toBe(401);
   });
@@ -76,7 +76,7 @@ describe('app', () => {
     const loginRes = await app.inject({
       method: 'POST',
       url: '/api/auth/login',
-      payload: { userId: started.server.id, pin: '1234', terminalId: 'till-1' },
+      payload: { username: started.server.username, password: '1234', terminalId: 'till-1' },
     });
     const { token } = loginRes.json() as { token: string };
 
@@ -91,7 +91,7 @@ describe('app', () => {
     const loginRes = await app.inject({
       method: 'POST',
       url: '/api/auth/login',
-      payload: { userId: started.admin.id, pin: '9999', terminalId: 'till-1' },
+      payload: { username: started.admin.username, password: '9999', terminalId: 'till-1' },
     });
     const { token } = loginRes.json() as { token: string };
 
@@ -99,7 +99,7 @@ describe('app', () => {
       method: 'POST',
       url: '/api/users',
       headers: { authorization: `Bearer ${token}` },
-      payload: { name: 'Ehsan', pin: '5555', role: 'cashier' },
+      payload: { name: 'Ehsan', username: 'ehsan', password: '5555', role: 'cashier' },
     });
     expect(createRes.statusCode).toBe(201);
     expect(createRes.json()).toMatchObject({ name: 'Ehsan', role: 'cashier', active: true });
@@ -107,7 +107,7 @@ describe('app', () => {
 
   it('rejects a malformed login body with a 400, not a 500', async () => {
     ({ app, ctx } = await setup());
-    const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { userId: 'not-a-number' } });
+    const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 42 } });
     expect(res.statusCode).toBe(400);
   });
 

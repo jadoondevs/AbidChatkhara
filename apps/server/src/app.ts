@@ -13,14 +13,18 @@ import { partnersRoutes } from './partners/routes.js';
 import type { Database } from './platform/db/types.js';
 import type { PrinterTarget } from './platform/printing/client.js';
 import { reportingRoutes } from './reporting/routes.js';
+import { settingsRoutes } from './settings/routes.js';
 import { shiftsRoutes } from './shifts/routes.js';
 import { taxRoutes } from './tax/routes.js';
 
 export interface BuildAppOptions {
   readonly db: Kysely<Database>;
   readonly logger?: boolean;
-  /** null (the default) if no printer is configured — print routes then
-   * respond 503 instead of attempting to connect anywhere. */
+  /** The printer this server booted with (POS_PRINTER_HOST). Used only
+   * as a fallback: an address configured in Settings wins, so an admin
+   * can move the printer without touching the machine's environment —
+   * see settings/service.ts's resolvePrinterTarget. null on both, and
+   * print routes respond 503 instead of connecting anywhere. */
   readonly printer?: PrinterTarget | null;
   /** Absolute path to the built PWA (apps/frontend/dist). Omitted in
    * tests and whenever the frontend hasn't been built — the API then
@@ -67,6 +71,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(taxRoutes, { db: opts.db });
   await app.register(shiftsRoutes, { db: opts.db });
   await app.register(reportingRoutes, { db: opts.db });
+  await app.register(settingsRoutes, { db: opts.db });
   await app.register(billingRoutes, { db: opts.db, printer: opts.printer ?? null });
 
   // The built PWA, served by this same process (spec: "a single process
