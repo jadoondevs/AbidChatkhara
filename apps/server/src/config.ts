@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PrinterTarget } from './platform/printing/client.js';
@@ -12,6 +13,11 @@ export interface ServerConfig {
    * everything else here, not a database table. Printing simply doesn't
    * happen (a clear error, not a crash) until this is set. */
   readonly printer: PrinterTarget | null;
+  /** Where the built PWA lives, or null when it hasn't been built — the
+   * server then runs API-only rather than failing to start, so `npm run
+   * dev:server` alongside `npm run dev:frontend` works with no build
+   * step at all. */
+  readonly frontendDir: string | null;
 }
 
 /**
@@ -20,11 +26,15 @@ export interface ServerConfig {
  * would live, and none of that belongs in git (see .gitignore).
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+  const defaultFrontendDir = fileURLToPath(new URL('../../frontend/dist', import.meta.url));
+  const frontendDir = env.POS_FRONTEND_DIR ?? defaultFrontendDir;
+
   return {
     port: Number(env.POS_PORT ?? 4000),
     host: env.POS_HOST ?? '0.0.0.0',
     dbPath: env.POS_DB_PATH ?? path.resolve(process.cwd(), 'data', 'pos.sqlite'),
     migrationsDir: fileURLToPath(new URL('./platform/db/migrations', import.meta.url)),
     printer: env.POS_PRINTER_HOST ? { host: env.POS_PRINTER_HOST, port: Number(env.POS_PRINTER_PORT ?? 9100) } : null,
+    frontendDir: existsSync(path.join(frontendDir, 'index.html')) ? frontendDir : null,
   };
 }

@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fastify/static": "^8.3.0",
     "@pos/shared": "*",
     "better-sqlite3": "^11.7.0",
     "fastify": "^5.2.0",

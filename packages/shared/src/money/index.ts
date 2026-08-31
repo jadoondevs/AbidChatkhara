@@ -19,4 +19,5 @@ export { distribute, splitByShares, prorate, type BasisPointShare } from './dist
 export { roundToRupee, type RoundedTotal } from './round.js';
 export { proportionalAmount } from './rate.js';
 export { format } from './format.js';
+export { parseRupees, toRupeeInput } from './input.js';
 export { paisaSchema } from './schema.js';

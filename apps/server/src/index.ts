@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   }
 
   const db = createDb(sqlite);
-  const app = await buildApp({ db, printer: config.printer });
+  const app = await buildApp({ db, printer: config.printer, frontendDir: config.frontendDir });
   scheduleOwnershipIntegrityCheck(db);
 
   await app.listen({ port: config.port, host: config.host });
