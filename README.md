@@ -17,9 +17,10 @@ credit), tax (configurable rules, shipped with none active), shifts
 (open/close, cash reconciliation, Z-report, waiter payout sheet),
 reporting (all six spec-required reports, each CSV-exportable), and the
 frontend (an installable React PWA covering all twelve screens) are
-done.** What remains is the definition-of-done pass — a seed script and
-the end-to-end scenarios. See `ARCHITECTURE.md` for the current module
-status.
+done, and the definition-of-done pass is complete** — a seed script,
+plus an executable full-day test that runs the spec's whole scenario
+offline and checks every closing figure it names. See `ARCHITECTURE.md`
+for how it's put together.
 
 ## Requirements
 
@@ -48,9 +49,24 @@ npm run start            # serves the API and that build on :4000
 Open `http://<server-ip>:4000` on the tablet. Migrations are applied on
 startup; `GET /api/health` responds `{"ok":true}`.
 
-There is no seed script yet (that lands with the Definition-of-Done
-milestone), so a freshly-migrated database has no users. To create the
-first admin account for local testing, use the identity service directly
+A freshly-migrated database has no users, so nothing can log in yet. For
+a demo or a test day, seed it:
+
+```bash
+npm run seed          # honours POS_DB_PATH, same as the server
+```
+
+That creates an obviously-fictional restaurant: five users, a menu of
+eight items across four categories, three partners (some items
+single-owner, some shared, one modifier owned separately from the item
+it sits on), six people on every different meal policy, and the three
+payment methods. Sign in as user id 1 with PIN `9999`. **Change the
+PINs and the placeholder account details before going live** — they're
+sequential and fake on purpose. The script refuses to run against a
+database that already has users, so it can't quietly double-seed a real
+till.
+
+For a real restaurant, create the first admin account directly instead
 — see `apps/server/src/identity/service.test.ts` for the pattern
 (`createUser` with `actorId: null`, a system action, is how the very first
 user is created without an existing actor to attribute it to).

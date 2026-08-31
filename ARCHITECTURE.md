@@ -28,10 +28,11 @@ shift, a Z-report, and the waiter payout sheet), **reporting** (all
 six spec-required reports, CSV-exportable, built on the other modules'
 own read seams rather than re-deriving their figures), and the
 **frontend** (an installable React PWA covering all twelve screens,
-served by this same server process). The server-side system is complete;
-what remains is the definition-of-done pass — a seed script and the
-end-to-end scenarios the spec lists. This file's "Modules" section says,
-per module, what exists today.
+served by this same server process). The system is complete: a seed
+script populates a demo restaurant, and
+`apps/server/src/definition-of-done.test.ts` runs the spec's entire day
+end to end — offline, against a real printer socket — checking every
+closing figure the definition of done names.
 
 ## Why local-first and single-writer
 
@@ -779,3 +780,27 @@ to keep in sync between two deployments.
 - **Integration tests** build the real Fastify app (`buildApp`) against a
   real (in-memory) SQLite database and drive it through `app.inject()` —
   no mocking of the database or the HTTP layer.
+- **The definition-of-done test**
+  (`apps/server/src/definition-of-done.test.ts`) runs the spec's whole
+  day as one executable scenario against a seeded database: open the
+  shift; a dine-in order with a waiter, a service charge and a line
+  voided by a manager; a takeaway with an order-level discount; a
+  delivery that is later refunded; a staff meal and an owner meal on
+  different policies; a payment split across cash and Easypaisa; the
+  bill printed, then paid, then the receipt printed; then close the
+  shift and read the Z-report and every partner statement. Then it
+  checks the four figures the spec insists on: allocations sum exactly
+  to net sales, every partner statement's reconciliation variance is
+  exactly zero, expected cash matches a figure computed by hand in a
+  comment beside the assertion, and the service charge shows separately
+  as held-not-earned rather than inside sales. A second test proves
+  that enabling a tax rule changes tax and totals while leaving every
+  partner's allocation byte-for-byte identical.
+  Printing is not stubbed: the test opens a real TCP socket and the
+  ESC/POS bytes genuinely go down it, so the print steps are exercised
+  rather than skipped.
+- **The concurrency and double-close scenarios** the spec calls out
+  separately live in `billing/service.test.ts`, where they belong —
+  four tables billed and settled out of order with gap-free invoice
+  numbers, and two simultaneous settlements of one order where exactly
+  one wins.
