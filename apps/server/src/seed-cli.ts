@@ -23,11 +23,12 @@ async function main(): Promise<void> {
 
   /* eslint-disable no-console -- a CLI's whole output is its console */
   console.log(`Seeded ${config.dbPath}`);
-  console.log(`  users:           ${Object.keys(result.users).length} (admin PIN 9999 — change before going live)`);
+  console.log(`  users:           ${Object.keys(result.users).length} (sign in as "${result.usernames.admin}" / 9999 — change before going live)`);
   console.log(`  partners:        ${Object.keys(result.partners).length}`);
   console.log(`  menu items:      ${Object.keys(result.items).length}`);
   console.log(`  people:          ${Object.keys(result.people).length}`);
   console.log(`  payment methods: ${Object.keys(result.paymentMethods).length}`);
+  console.log(`  payment accounts:${Object.keys(result.paymentAccounts).length}`);
   /* eslint-enable no-console */
 
   sqlite.close();

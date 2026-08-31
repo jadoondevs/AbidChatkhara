@@ -1,4 +1,4 @@
-import { add, paisa, sub, sum, type Paisa } from '@pos/shared';
+import { add, paisa, prorate, sub, sum, type Paisa } from '@pos/shared';
 import type { Kysely } from 'kysely';
 import { listConsumptionRecords, type ConsumptionRecordSummary } from '../consumption/service.js';
 import { waiterPayoutTotals, type WaiterPayoutLine } from '../gratuity/service.js';
@@ -310,16 +310,129 @@ export interface ConsumptionPersonSubtotal {
 
 export interface ConsumptionReport {
   readonly records: readonly ConsumptionRecordSummary[];
+  /** One row per consumed item — see ConsumptionDetailLine. */
+  readonly lines: readonly ConsumptionDetailLine[];
   readonly byPerson: readonly ConsumptionPersonSubtotal[];
+}
+
+/**
+ * One row per ITEM consumed: who ate it, what it was, how many, what it
+ * was worth on the menu and what they were actually charged for it.
+ *
+ * The per-order `consumption_record` answers "what did this meal cost
+ * the house", which is the accounting question. It cannot answer "what
+ * did Rashid actually eat", which is the question a manager reviewing
+ * staff meals is asking — that needs the order's own lines. So the
+ * charged amount is split across the meal's lines in proportion to
+ * their menu value, using the same largest-remainder distribution the
+ * rest of the system uses, and the per-line parts therefore still sum
+ * exactly to what the record says was charged.
+ */
+export interface ConsumptionDetailLine {
+  readonly consumptionRecordId: number;
+  readonly orderId: number;
+  readonly invoiceNo: number | null;
+  readonly personId: number;
+  readonly personName: string;
+  readonly itemName: string;
+  readonly modifierNames: string;
+  readonly qty: number;
+  readonly menuValueMinor: Paisa;
+  readonly chargedMinor: Paisa;
+  readonly mealPolicy: string;
+  readonly settlementType: string | null;
+  /** 'settled' once the meal has an order that closed; a record only
+   * exists at settlement, so this is 'settled' in practice and exists to
+   * make that explicit on the report rather than leave it implied. */
+  readonly settlementStatus: string;
+  readonly consumedAt: string;
+}
+
+async function consumptionDetailLines(
+  db: Kysely<Database>,
+  records: readonly ConsumptionRecordSummary[],
+): Promise<ConsumptionDetailLine[]> {
+  if (records.length === 0) return [];
+  const orderIds = records.map((r) => r.orderId);
+
+  const lineRows = await db
+    .selectFrom('order_line')
+    .innerJoin('item', 'item.id', 'order_line.item_id')
+    .innerJoin('order', 'order.id', 'order_line.order_id')
+    .select([
+      'order_line.id as lineId',
+      'order_line.order_id as orderId',
+      'order_line.qty as qty',
+      'order_line.net_sales_minor as menuValueMinor',
+      'item.name as itemName',
+      'order.invoice_no as invoiceNo',
+      'order.closed_at as closedAt',
+    ])
+    .where('order_line.order_id', 'in', orderIds)
+    .where('order_line.voided', '=', 0)
+    .orderBy('order_line.id', 'asc')
+    .execute();
+
+  const modifierRows = lineRows.length
+    ? await db
+        .selectFrom('order_line_modifier')
+        .innerJoin('modifier', 'modifier.id', 'order_line_modifier.modifier_id')
+        .select(['order_line_modifier.order_line_id as lineId', 'modifier.name as name'])
+        .where(
+          'order_line_modifier.order_line_id',
+          'in',
+          lineRows.map((l) => l.lineId),
+        )
+        .execute()
+    : [];
+
+  const detail: ConsumptionDetailLine[] = [];
+  for (const record of records) {
+    const lines = lineRows.filter((l) => l.orderId === record.orderId);
+    if (lines.length === 0) continue;
+
+    // Largest-remainder again, so the per-item charged amounts add back
+    // up to exactly what the person was charged for the meal.
+    const chargedParts = prorate(
+      record.chargedMinor,
+      lines.map((l) => l.menuValueMinor),
+    );
+
+    lines.forEach((line, i) => {
+      detail.push({
+        consumptionRecordId: record.id,
+        orderId: record.orderId,
+        invoiceNo: line.invoiceNo,
+        personId: record.personId,
+        personName: record.personName,
+        itemName: line.itemName,
+        modifierNames: modifierRows
+          .filter((m) => m.lineId === line.lineId)
+          .map((m) => m.name)
+          .join(', '),
+        qty: line.qty,
+        menuValueMinor: line.menuValueMinor,
+        chargedMinor: chargedParts[i] as Paisa,
+        mealPolicy: record.policySnapshot.mealPolicy,
+        settlementType: record.settlementType,
+        settlementStatus: line.closedAt === null ? 'pending' : 'settled',
+        consumedAt: record.createdAt,
+      });
+    });
+  }
+  return detail;
 }
 
 /** Spec: "per person, itemised, menu value versus charged." Built
  * directly on consumption's own listConsumptionRecords (the itemised
  * list) plus a per-person rollup — reporting doesn't re-derive
  * consumption's own figures from `order`/`consumption_record` rows a
- * second time. */
+ * second time. `lines` adds the item-level breakdown on top, which is
+ * what makes the report readable as "what was actually eaten" rather
+ * than only as a column of totals. */
 export async function consumptionReport(db: Kysely<Database>, opts: DateRangeOptions & { personId?: number | undefined } = {}): Promise<ConsumptionReport> {
   const records = await listConsumptionRecords(db, opts);
+  const lines = await consumptionDetailLines(db, records);
 
   const byPersonMap = new Map<number, { personName: string; menuValue: Paisa[]; charged: Paisa[]; settlement: Paisa[] }>();
   for (const record of records) {
@@ -339,7 +452,7 @@ export async function consumptionReport(db: Kysely<Database>, opts: DateRangeOpt
     }))
     .sort((a, b) => a.personName.localeCompare(b.personName));
 
-  return { records, byPerson };
+  return { records, lines, byPerson };
 }
 
 // ---------------------------------------------------------------------

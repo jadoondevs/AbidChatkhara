@@ -6,6 +6,7 @@ import { waiterPayoutTotals } from '../gratuity/service.js';
 import { requireRole } from '../identity/require-auth.js';
 import type { Database } from '../platform/db/types.js';
 import { toCsv } from './csv.js';
+import { dateFilterSchema, resolveDateRange } from './date-range.js';
 import {
   allocationReconciliation,
   consumptionReport,
@@ -16,9 +17,13 @@ import {
   voidAndDiscountReport,
 } from './service.js';
 
-const dateRangeQuerySchema = z.object({
-  fromInclusive: z.string().optional(),
-  toExclusive: z.string().optional(),
+/**
+ * Every report takes the same date filter — a single `date`, an
+ * inclusive `from`/`to` day pair, or exact `fromInclusive`/`toExclusive`
+ * instants. See reporting/date-range.ts for what each means and why the
+ * day forms exist at all.
+ */
+const dateRangeQuerySchema = dateFilterSchema.extend({
   format: z.enum(['json', 'csv']).optional(),
 });
 
@@ -33,10 +38,19 @@ const dateRangeQuerySchema = z.object({
  * pragmatic choice that keeps one export path for every report instead
  * of a second, nested CSV format.
  */
-function sendReport(reply: FastifyReply, format: 'json' | 'csv' | undefined, payload: unknown): unknown {
+function sendReport(
+  reply: FastifyReply,
+  format: 'json' | 'csv' | undefined,
+  payload: unknown,
+  /** What to export when the flattened top-level object would lose the
+   * detail that makes the report worth exporting — the consumption
+   * report's per-item lines, say, which are an array inside the object
+   * and would otherwise be JSON-encoded into a single cell. */
+  csvRows?: readonly Record<string, unknown>[],
+): unknown {
   if (format !== 'csv') return payload;
 
-  const rows = Array.isArray(payload) ? (payload as Record<string, unknown>[]) : [payload as Record<string, unknown>];
+  const rows = csvRows ?? (Array.isArray(payload) ? (payload as Record<string, unknown>[]) : [payload as Record<string, unknown>]);
   const columns = rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>) : [];
   reply.header('content-type', 'text/csv; charset=utf-8');
   return toCsv(rows, columns);
@@ -60,7 +74,7 @@ export const reportingRoutes: FastifyPluginAsync<ReportingPluginOptions> = async
 
   app.get('/api/reports/daily-sales', { schema: { querystring: dateRangeQuerySchema } }, async (request, reply) => {
     requireRole(request, reply, 'manager');
-    const report = await dailySalesReport(db, request.query);
+    const report = await dailySalesReport(db, { ...request.query, ...resolveDateRange(request.query) });
     return sendReport(reply, request.query.format, report);
   });
 
@@ -69,7 +83,7 @@ export const reportingRoutes: FastifyPluginAsync<ReportingPluginOptions> = async
     { schema: { params: z.object({ id: z.coerce.number().int() }), querystring: dateRangeQuerySchema } },
     async (request, reply) => {
       requireRole(request, reply, 'manager');
-      const statement = await partnerStatement(db, request.params.id, request.query);
+      const statement = await partnerStatement(db, request.params.id, resolveDateRange(request.query));
       return sendReport(reply, request.query.format, statement);
     },
   );
@@ -79,20 +93,20 @@ export const reportingRoutes: FastifyPluginAsync<ReportingPluginOptions> = async
     { schema: { params: z.object({ id: z.coerce.number().int(), itemId: z.coerce.number().int() }), querystring: dateRangeQuerySchema } },
     async (request, reply) => {
       requireRole(request, reply, 'manager');
-      const bills = await partnerItemBills(db, request.params.id, request.params.itemId, request.query);
+      const bills = await partnerItemBills(db, request.params.id, request.params.itemId, resolveDateRange(request.query));
       return sendReport(reply, request.query.format, bills);
     },
   );
 
   app.get('/api/reports/allocation-reconciliation', { schema: { querystring: dateRangeQuerySchema } }, async (request, reply) => {
     requireRole(request, reply, 'manager');
-    const reconciliation = await allocationReconciliation(db, request.query);
+    const reconciliation = await allocationReconciliation(db, { ...request.query, ...resolveDateRange(request.query) });
     return sendReport(reply, request.query.format, reconciliation);
   });
 
   app.get('/api/reports/item-mix', { schema: { querystring: dateRangeQuerySchema } }, async (request, reply) => {
     requireRole(request, reply, 'manager');
-    const lines = await itemMixReport(db, request.query);
+    const lines = await itemMixReport(db, { ...request.query, ...resolveDateRange(request.query) });
     return sendReport(reply, request.query.format, lines);
   });
 
@@ -101,8 +115,12 @@ export const reportingRoutes: FastifyPluginAsync<ReportingPluginOptions> = async
     { schema: { querystring: dateRangeQuerySchema.extend({ personId: z.coerce.number().int().optional() }) } },
     async (request, reply) => {
       requireRole(request, reply, 'manager');
-      const report = await consumptionReport(db, request.query);
-      return sendReport(reply, request.query.format, report);
+      const report = await consumptionReport(db, { ...request.query, ...resolveDateRange(request.query) });
+      // The CSV is the per-item detail, not the summary object: a
+      // spreadsheet of "who ate what" is the entire reason to export
+      // this report, and it is the one thing a flattened summary row
+      // would bury inside a JSON-encoded cell.
+      return sendReport(reply, request.query.format, report, report.lines as unknown as Record<string, unknown>[]);
     },
   );
 
@@ -111,7 +129,7 @@ export const reportingRoutes: FastifyPluginAsync<ReportingPluginOptions> = async
     { schema: { querystring: dateRangeQuerySchema.extend({ shiftId: z.coerce.number().int().optional() }) } },
     async (request, reply) => {
       requireRole(request, reply, 'manager');
-      const lines = await waiterPayoutTotals(db, request.query);
+      const lines = await waiterPayoutTotals(db, { ...request.query, ...resolveDateRange(request.query) });
       return sendReport(reply, request.query.format, lines);
     },
   );
@@ -121,7 +139,7 @@ export const reportingRoutes: FastifyPluginAsync<ReportingPluginOptions> = async
     { schema: { querystring: dateRangeQuerySchema.extend({ actorId: z.coerce.number().int().optional() }) } },
     async (request, reply) => {
       requireRole(request, reply, 'manager');
-      const entries = await voidAndDiscountReport(db, request.query);
+      const entries = await voidAndDiscountReport(db, { ...request.query, ...resolveDateRange(request.query) });
       return sendReport(reply, request.query.format, entries);
     },
   );

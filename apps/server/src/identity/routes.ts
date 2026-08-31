@@ -14,7 +14,7 @@ import {
   updateUser,
   UsernameTakenError,
 } from './service.js';
-import { MAX_SECRET_LENGTH, MIN_SECRET_LENGTH } from './credentials.js';
+import { MAX_SECRET_LENGTH, MIN_SECRET_LENGTH, USERNAME_PATTERN } from './credentials.js';
 
 const roleSchema = z.enum(['server', 'cashier', 'manager', 'admin']);
 
@@ -26,7 +26,17 @@ const userSummarySchema = z.object({
   active: z.boolean(),
 });
 
-const usernameSchema = z.string().min(3).max(32);
+// The same rule identity/credentials.ts enforces, applied here too so a
+// malformed username is a 400 with a message about the username rather
+// than a 500 from deeper in. Case is normalised on the way in, so the
+// pattern is matched against the lowercased form.
+const usernameSchema = z
+  .string()
+  .min(3)
+  .max(32)
+  .refine((value) => USERNAME_PATTERN.test(value.trim().toLowerCase()), {
+    message: 'username must be letters, digits, dot, dash or underscore, starting and ending with a letter or digit',
+  });
 const passwordSchema = z.string().min(MIN_SECRET_LENGTH).max(MAX_SECRET_LENGTH);
 
 const errorSchema = z.object({ error: z.string() });

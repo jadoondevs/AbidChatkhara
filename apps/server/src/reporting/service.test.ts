@@ -191,6 +191,126 @@ describe('reporting/service', () => {
     });
   });
 
+  describe('consumptionReport — per-item detail', () => {
+    it('names every item consumed, with its quantity, menu value and charged share', async () => {
+      const { actor, category, item, partner } = await setupBase();
+      const person = await createPerson(ctx.db, { name: 'Rashid', kind: 'staff', mealPolicy: 'free' }, actor);
+
+      const drink = await createItem(ctx.db, { categoryId: category.id, name: 'Fresh lime' }, actor);
+      await setItemPrice(ctx.db, drink.id, paisa(200_00), actor);
+      await setItemOwnership(ctx.db, drink.id, [{ partnerId: partner.id, shareBp: 10_000 }], actor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: person.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 2 }, actor);
+      await addLine(ctx.db, order.id, { itemId: drink.id, qty: 1 }, actor);
+      await billOrder(ctx.db, order.id, {}, actor);
+      await settleConsumption(ctx.db, order.id, { settlementType: 'house_expense' }, actor);
+
+      const report = await consumptionReport(ctx.db);
+      expect(report.lines).toHaveLength(2);
+
+      const karahi = report.lines.find((l) => l.itemName === 'Karahi');
+      expect(karahi).toMatchObject({
+        personName: 'Rashid',
+        qty: 2,
+        menuValueMinor: 2000_00,
+        chargedMinor: 0,
+        mealPolicy: 'free',
+        settlementType: 'house_expense',
+        settlementStatus: 'settled',
+      });
+      expect(karahi?.orderId).toBe(order.id);
+
+      const lime = report.lines.find((l) => l.itemName === 'Fresh lime');
+      expect(lime).toMatchObject({ qty: 1, menuValueMinor: 200_00, chargedMinor: 0 });
+    });
+
+    it('splits what the person was charged across the items, adding back up exactly', async () => {
+      const { actor, category, item, partner } = await setupBase();
+      const person = await createPerson(ctx.db, { name: 'Nadia', kind: 'staff', mealPolicy: 'discounted', mealDiscountBp: 5_000 }, actor);
+      const cash = (await createPaymentMethod(ctx.db, { code: 'cash3', displayName: 'Cash3', kind: 'cash' }, actor)).id;
+
+      const drink = await createItem(ctx.db, { categoryId: category.id, name: 'Fresh lime' }, actor);
+      await setItemPrice(ctx.db, drink.id, paisa(333_33), actor);
+      await setItemOwnership(ctx.db, drink.id, [{ partnerId: partner.id, shareBp: 10_000 }], actor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: person.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      await addLine(ctx.db, order.id, { itemId: drink.id, qty: 1 }, actor);
+      await billOrder(ctx.db, order.id, {}, actor);
+      await settleConsumption(ctx.db, order.id, { paymentMethodId: cash, settlementType: 'house_expense' }, actor);
+
+      const report = await consumptionReport(ctx.db);
+      const record = report.records[0]!;
+      const chargedAcrossItems = sum(report.lines.map((l) => l.chargedMinor));
+      // No paisa invented, none lost — the same guarantee the rest of
+      // the money pipeline gives.
+      expect(chargedAcrossItems).toBe(record.chargedMinor);
+      expect(sum(report.lines.map((l) => l.menuValueMinor))).toBe(record.menuValueMinor);
+    });
+
+    it('records the modifiers chosen, so the detail is what was actually eaten', async () => {
+      const { actor, category, partner } = await setupBase();
+      const person = await createPerson(ctx.db, { name: 'Rashid', kind: 'staff', mealPolicy: 'free' }, actor);
+
+      const karahi = await createItem(ctx.db, { categoryId: category.id, name: 'Chicken Karahi' }, actor);
+      await setItemPrice(ctx.db, karahi.id, paisa(1_850_00), actor);
+      await setItemOwnership(ctx.db, karahi.id, [{ partnerId: partner.id, shareBp: 10_000 }], actor);
+      const group = await createModifierGroup(ctx.db, { name: 'Spice level', minSelect: 1, maxSelect: 1 }, actor);
+      const hot = await createModifier(ctx.db, { groupId: group.id, name: 'Extra hot', priceDeltaMinor: paisa(0) }, actor);
+      await linkModifierGroup(ctx.db, karahi.id, group.id, actor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: person.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: karahi.id, qty: 1, modifierIds: [hot.id] }, actor);
+      await billOrder(ctx.db, order.id, {}, actor);
+      await settleConsumption(ctx.db, order.id, { settlementType: 'house_expense' }, actor);
+
+      const report = await consumptionReport(ctx.db);
+      expect(report.lines[0]?.modifierNames).toBe('Extra hot');
+    });
+
+    it('excludes a voided line from the detail', async () => {
+      const { actor, category, item, partner } = await setupBase();
+      const person = await createPerson(ctx.db, { name: 'Rashid', kind: 'staff', mealPolicy: 'free' }, actor);
+
+      const drink = await createItem(ctx.db, { categoryId: category.id, name: 'Fresh lime' }, actor);
+      await setItemPrice(ctx.db, drink.id, paisa(200_00), actor);
+      await setItemOwnership(ctx.db, drink.id, [{ partnerId: partner.id, shareBp: 10_000 }], actor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: person.id }, actor);
+      const added = await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      await addLine(ctx.db, order.id, { itemId: drink.id, qty: 1 }, actor);
+      await voidLine(ctx.db, order.id, added.lines[0]!.id, { reason: 'wrong item' }, actor);
+      await billOrder(ctx.db, order.id, {}, actor);
+      await settleConsumption(ctx.db, order.id, { settlementType: 'house_expense' }, actor);
+
+      const report = await consumptionReport(ctx.db);
+      expect(report.lines.map((l) => l.itemName)).toEqual(['Fresh lime']);
+    });
+
+    it('filters the detail to one person', async () => {
+      const { actor, item } = await setupBase();
+      const rashid = await createPerson(ctx.db, { name: 'Rashid', kind: 'staff', mealPolicy: 'free' }, actor);
+      const nadia = await createPerson(ctx.db, { name: 'Nadia', kind: 'staff', mealPolicy: 'free' }, actor);
+
+      for (const person of [rashid, nadia]) {
+        const order = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: person.id }, actor);
+        await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+        await billOrder(ctx.db, order.id, {}, actor);
+        await settleConsumption(ctx.db, order.id, { settlementType: 'house_expense' }, actor);
+      }
+
+      const report = await consumptionReport(ctx.db, { personId: rashid.id });
+      expect(report.lines.map((l) => l.personName)).toEqual(['Rashid']);
+    });
+
+    it('returns no detail lines when nothing was consumed', async () => {
+      await setupBase();
+      const report = await consumptionReport(ctx.db);
+      expect(report.lines).toEqual([]);
+    });
+  });
+
   describe('voidAndDiscountReport', () => {
     it('lists line voids, order voids, and non-zero discounts, attributed to their actor', async () => {
       const { actor, category, item, waiter } = await setupBase();

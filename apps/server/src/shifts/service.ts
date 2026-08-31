@@ -1,4 +1,4 @@
-import { add, sub, sum, type Paisa } from '@pos/shared';
+import { add, paisa, sub, sum, type Paisa } from '@pos/shared';
 import type { Kysely, Transaction } from 'kysely';
 import { recordAudit } from '../identity/audit.js';
 import type { OrderStatus, OrderType } from '../ordering/tables.js';
@@ -231,12 +231,33 @@ export interface ZReport {
    * consumption on its own line directly beneath it". */
   readonly consumptionMinor: Paisa;
   readonly combinedSalesMinor: Paisa;
+  /** Menu value of staff/owner meals that nobody was charged for — the
+   * part of `consumptionMinor` the house absorbed. */
+  readonly consumptionUnchargedMinor: Paisa;
+  readonly discountsGivenMinor: Paisa;
+  /** Menu value taken off bills by voided lines and voided orders —
+   * what was rung up and then removed, which is the number a manager
+   * scans a Z-report for. */
+  readonly voidedSalesMinor: Paisa;
   readonly taxCollectedMinor: Paisa;
   /** Service charge actually collected as part of a real payment —
    * money held for waiters, never revenue (docs/decisions/008); shown
    * here as cash held, not earned, per the spec. */
   readonly serviceChargeCollectedMinor: Paisa;
   readonly roundingAdjustmentMinor: Paisa;
+  /** The cash drawer, spelled out: what it started with, what came in,
+   * what was counted, and the difference. `changeGivenMinor` is shown
+   * for completeness — it is already netted out of `cashPaymentsMinor`,
+   * which records what was applied to bills rather than what customers
+   * handed over. */
+  readonly openingFloatMinor: Paisa;
+  readonly cashPaymentsMinor: Paisa;
+  readonly cashTenderedMinor: Paisa;
+  readonly changeGivenMinor: Paisa;
+  readonly nonCashPaymentsMinor: Paisa;
+  readonly expectedCashMinor: Paisa;
+  readonly countedCashMinor: Paisa | null;
+  readonly varianceMinor: Paisa | null;
   // Not `readonly` (unlike the fields above): this is serialized straight
   // through a Zod response schema at the HTTP layer, and Zod's inferred
   // array type there is mutable — a readonly array isn't assignable to
@@ -259,14 +280,49 @@ export async function getZReport(db: Kysely<Database>, shiftId: number): Promise
 
   const orders = await db
     .selectFrom('order')
-    .select(['id', 'channel', 'status', 'net_sales_minor', 'tax_minor', 'service_charge_minor', 'rounding_adjustment_minor'])
+    .select([
+      'id',
+      'channel',
+      'status',
+      'subtotal_minor',
+      'order_discount_minor',
+      'net_sales_minor',
+      'tax_minor',
+      'service_charge_minor',
+      'rounding_adjustment_minor',
+    ])
     .where('shift_id', '=', shiftId)
     .execute();
 
-  const customerSalesMinor = sum(orders.filter((o) => o.channel === 'customer').map((o) => o.net_sales_minor));
-  const consumptionMinor = sum(orders.filter((o) => o.channel !== 'customer').map((o) => o.net_sales_minor));
-  const taxCollectedMinor = sum(orders.map((o) => o.tax_minor));
-  const roundingAdjustmentMinor = sum(orders.map((o) => o.rounding_adjustment_minor));
+  const customerSalesMinor = sum(orders.filter((o) => o.channel === 'customer' && o.status !== 'voided').map((o) => o.net_sales_minor));
+  const consumptionMinor = sum(orders.filter((o) => o.channel !== 'customer' && o.status !== 'voided').map((o) => o.net_sales_minor));
+  const taxCollectedMinor = sum(orders.filter((o) => o.status !== 'voided').map((o) => o.tax_minor));
+  const roundingAdjustmentMinor = sum(orders.filter((o) => o.status !== 'voided').map((o) => o.rounding_adjustment_minor));
+  const discountsGivenMinor = sum(orders.filter((o) => o.status !== 'voided').map((o) => o.order_discount_minor));
+
+  // What was rung up and then taken back off: whole voided orders at
+  // their subtotal, plus individually voided lines on orders that
+  // survived. Corrections (a mis-tap on a bill nobody has seen) are
+  // excluded — they are keystrokes, not removed sales.
+  const voidedOrderSalesMinor = sum(orders.filter((o) => o.status === 'voided').map((o) => o.subtotal_minor));
+  const voidedLineRows = await db
+    .selectFrom('order_line')
+    .innerJoin('order', 'order.id', 'order_line.order_id')
+    .select('order_line.gross_minor as grossMinor')
+    .where('order.shift_id', '=', shiftId)
+    .where('order.status', '<>', 'voided')
+    .where('order_line.voided', '=', 1)
+    .where('order_line.void_kind', '=', 'void')
+    .execute();
+  const voidedSalesMinor = add(voidedOrderSalesMinor, sum(voidedLineRows.map((r) => r.grossMinor)));
+
+  const consumptionRows = await db
+    .selectFrom('consumption_record')
+    .innerJoin('order', 'order.id', 'consumption_record.order_id')
+    .select(['consumption_record.menu_value_minor as menuValueMinor', 'consumption_record.charged_minor as chargedMinor'])
+    .where('order.shift_id', '=', shiftId)
+    .execute();
+  const consumptionUnchargedMinor = sum(consumptionRows.map((r) => sub(r.menuValueMinor, r.chargedMinor)));
 
   const serviceChargeRows = await db.selectFrom('service_charge_entry').select('amount_minor').where('shift_id', '=', shiftId).execute();
   const serviceChargeCollectedMinor = sum(serviceChargeRows.map((r) => r.amount_minor));
@@ -275,9 +331,22 @@ export async function getZReport(db: Kysely<Database>, shiftId: number): Promise
     .selectFrom('payment')
     .innerJoin('payment_method', 'payment_method.id', 'payment.payment_method_id')
     .innerJoin('order', 'order.id', 'payment.order_id')
-    .select(['payment_method.id as paymentMethodId', 'payment_method.display_name as paymentMethodName', 'payment.amount_minor as amountMinor'])
+    .select([
+      'payment_method.id as paymentMethodId',
+      'payment_method.display_name as paymentMethodName',
+      'payment_method.kind as kind',
+      'payment.amount_minor as amountMinor',
+      'payment.tendered_minor as tenderedMinor',
+      'payment.change_minor as changeMinor',
+    ])
     .where('order.shift_id', '=', shiftId)
     .execute();
+
+  const cashRows = paymentRows.filter((p) => p.kind === 'cash');
+  const cashPaymentsMinor = sum(cashRows.map((p) => p.amountMinor));
+  const cashTenderedMinor = sum(cashRows.map((p) => p.tenderedMinor ?? p.amountMinor));
+  const changeGivenMinor = sum(cashRows.map((p) => p.changeMinor ?? paisa(0)));
+  const nonCashPaymentsMinor = sum(paymentRows.filter((p) => p.kind !== 'cash').map((p) => p.amountMinor));
   const byMethod = new Map<number, { name: string; amounts: Paisa[] }>();
   for (const row of paymentRows) {
     const entry = byMethod.get(row.paymentMethodId) ?? { name: row.paymentMethodName, amounts: [] };
@@ -288,14 +357,31 @@ export async function getZReport(db: Kysely<Database>, shiftId: number): Promise
     .map(([paymentMethodId, { name, amounts }]) => ({ paymentMethodId, paymentMethodName: name, totalMinor: sum(amounts) }))
     .sort((a, b) => a.paymentMethodName.localeCompare(b.paymentMethodName));
 
+  // The same arithmetic closeShift itself uses, so a Z-report read
+  // before closing predicts exactly the expected-cash figure the close
+  // will compute — and a Z-report read after closing agrees with what
+  // was recorded.
+  const expectedCashMinor = add(shift.openingCashMinor, cashPaymentsMinor);
+
   return {
     shift,
     customerSalesMinor,
     consumptionMinor,
     combinedSalesMinor: add(customerSalesMinor, consumptionMinor),
+    consumptionUnchargedMinor,
+    discountsGivenMinor,
+    voidedSalesMinor,
     taxCollectedMinor,
     serviceChargeCollectedMinor,
     roundingAdjustmentMinor,
+    openingFloatMinor: shift.openingCashMinor,
+    cashPaymentsMinor,
+    cashTenderedMinor,
+    changeGivenMinor,
+    nonCashPaymentsMinor,
+    expectedCashMinor,
+    countedCashMinor: shift.countedCashMinor,
+    varianceMinor: shift.varianceMinor,
     paymentMethodBreakdown,
   };
 }

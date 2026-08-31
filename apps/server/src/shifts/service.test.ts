@@ -1,9 +1,10 @@
 import { paisa } from '@pos/shared';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createPaymentMethod, recordPayment, refundOrder } from '../billing/service.js';
+import { createPaymentMethod, recordPayment, refundOrder, settleConsumption } from '../billing/service.js';
 import { createCategory, createItem, setItemPrice } from '../catalog/service.js';
 import { createUser } from '../identity/service.js';
-import { addLine, billOrder, createOrder } from '../ordering/service.js';
+import { createPerson } from '../consumption/service.js';
+import { addLine, billOrder, createOrder, removeLine, setDiscount, voidLine, voidOrder } from '../ordering/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createTestDb } from '../platform/db/test-helpers.js';
 import { eventBus } from '../platform/events/bus.js';
@@ -180,6 +181,132 @@ describe('shifts/service', () => {
       expect(report.serviceChargeCollectedMinor).toBe(50_00);
       expect(report.taxCollectedMinor).toBe(0);
       expect(report.paymentMethodBreakdown).toMatchObject([{ paymentMethodName: 'Cash', totalMinor: 1050_00 }]);
+    });
+  });
+
+  describe('getZReport — the operator-facing figures', () => {
+    it('predicts expected cash before the shift is closed, and agrees with the close afterwards', async () => {
+      const { actor, item, cash } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(2_000_00) }, actor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      const billed = await billOrder(ctx.db, order.id, {}, actor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
+
+      const before = await getZReport(ctx.db, shift.id);
+      expect(before.openingFloatMinor).toBe(2_000_00);
+      expect(before.cashPaymentsMinor).toBe(billed.totalMinor);
+      expect(before.expectedCashMinor).toBe(2_000_00 + billed.totalMinor);
+      expect(before.countedCashMinor).toBeNull();
+      expect(before.varianceMinor).toBeNull();
+
+      const closed = await closeShift(ctx.db, shift.id, { countedCashMinor: paisa(2_000_00 + billed.totalMinor) }, actor);
+      const after = await getZReport(ctx.db, shift.id);
+      expect(after.expectedCashMinor).toBe(closed.expectedCashMinor);
+      expect(after.countedCashMinor).toBe(closed.countedCashMinor);
+      expect(after.varianceMinor).toBe(0);
+    });
+
+    it('reports cash tendered and change alongside what actually stayed in the drawer', async () => {
+      const { actor, item, cash } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      const billed = await billOrder(ctx.db, order.id, {}, actor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: paisa(billed.totalMinor + 500_00) }, actor);
+
+      const report = await getZReport(ctx.db, shift.id);
+      expect(report.cashTenderedMinor).toBe(billed.totalMinor + 500_00);
+      expect(report.changeGivenMinor).toBe(500_00);
+      // What the drawer is actually up by, and what the close will expect.
+      expect(report.cashPaymentsMinor).toBe(billed.totalMinor);
+      expect(report.expectedCashMinor).toBe(billed.totalMinor);
+    });
+
+    it('separates cash from non-cash takings', async () => {
+      const { actor, item, cash, easypaisa } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+
+      const cashOrder = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, cashOrder.id, { itemId: item.id, qty: 1 }, actor);
+      const billedCash = await billOrder(ctx.db, cashOrder.id, {}, actor);
+      await recordPayment(ctx.db, cashOrder.id, { paymentMethodId: cash.id, amountMinor: billedCash.totalMinor }, actor);
+
+      const walletOrder = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, walletOrder.id, { itemId: item.id, qty: 1 }, actor);
+      const billedWallet = await billOrder(ctx.db, walletOrder.id, {}, actor);
+      await recordPayment(ctx.db, walletOrder.id, { paymentMethodId: easypaisa.id, amountMinor: billedWallet.totalMinor }, actor);
+
+      const report = await getZReport(ctx.db, shift.id);
+      expect(report.cashPaymentsMinor).toBe(billedCash.totalMinor);
+      expect(report.nonCashPaymentsMinor).toBe(billedWallet.totalMinor);
+      expect(report.expectedCashMinor).toBe(billedCash.totalMinor);
+    });
+
+    it('reports discounts given', async () => {
+      const { actor, item, cash } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      await setDiscount(ctx.db, order.id, { discountMinor: paisa(100_00), reason: 'loyalty' }, actor);
+      const billed = await billOrder(ctx.db, order.id, {}, actor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
+
+      const report = await getZReport(ctx.db, shift.id);
+      expect(report.discountsGivenMinor).toBe(100_00);
+      expect(report.customerSalesMinor).toBe(900_00);
+    });
+
+    it('reports voided sales, and excludes a voided order from the sales figures', async () => {
+      const { actor, item } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      await voidOrder(ctx.db, order.id, { reason: 'customer left' }, actor);
+
+      const report = await getZReport(ctx.db, shift.id);
+      expect(report.voidedSalesMinor).toBe(1000_00);
+      expect(report.customerSalesMinor).toBe(0);
+    });
+
+    it('counts a voided LINE as voided sales, but not a pre-bill correction', async () => {
+      const { actor, item } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      const added = await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      await removeLine(ctx.db, order.id, added.lines[0]!.id, actor);
+
+      // A mis-tap on a bill nobody has seen is a keystroke, not a
+      // removed sale — it must not show up as one on the Z-report.
+      expect((await getZReport(ctx.db, shift.id)).voidedSalesMinor).toBe(0);
+
+      const second = await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      const liveLine = second.lines.find((l) => !l.voided)!;
+      await voidLine(ctx.db, order.id, liveLine.id, { reason: 'sent back' }, actor);
+
+      expect((await getZReport(ctx.db, shift.id)).voidedSalesMinor).toBe(1000_00);
+    });
+
+    it('shows what the house absorbed on a free staff meal', async () => {
+      const { actor, item } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+      const person = await createPerson(ctx.db, { name: 'Rashid', kind: 'staff', mealPolicy: 'free' }, actor);
+
+      const meal = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: person.id }, actor);
+      await addLine(ctx.db, meal.id, { itemId: item.id, qty: 1 }, actor);
+      await billOrder(ctx.db, meal.id, {}, actor);
+      await settleConsumption(ctx.db, meal.id, { settlementType: 'house_expense' }, actor);
+
+      const report = await getZReport(ctx.db, shift.id);
+      expect(report.consumptionMinor).toBe(1000_00);
+      expect(report.consumptionUnchargedMinor).toBe(1000_00);
+      // A free meal takes no money, so the drawer is unaffected.
+      expect(report.expectedCashMinor).toBe(0);
     });
   });
 });

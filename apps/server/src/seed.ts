@@ -1,6 +1,6 @@
 import { paisa, type Paisa } from '@pos/shared';
 import type { Kysely } from 'kysely';
-import { createPaymentMethod } from './billing/service.js';
+import { createPaymentAccount, createPaymentMethod } from './billing/service.js';
 import {
   createCategory,
   createItem,
@@ -13,6 +13,7 @@ import { createPerson } from './consumption/service.js';
 import { createUser } from './identity/service.js';
 import { createPartner, setItemOwnership, setModifierOwnership } from './partners/service.js';
 import type { Database } from './platform/db/types.js';
+import { saveSetting } from './settings/service.js';
 
 /**
  * Populates a fresh database with a realistic-but-obviously-fictional
@@ -24,11 +25,14 @@ import type { Database } from './platform/db/types.js';
  * account numbers, no real printer address — this file is committed, so
  * nothing in it may be real (see the spec's own rule, and .gitignore).
  *
- * PINs are the obvious sequential ones on purpose: this seeds a demo or
- * a test day, not a live till. Change them before the restaurant opens.
+ * Passwords are the obvious sequential ones on purpose: this seeds a
+ * demo or a test day, not a live till. Change them before the
+ * restaurant opens.
  */
 export interface SeedResult {
   readonly users: { admin: number; manager: number; cashier: number; waiterOne: number; waiterTwo: number };
+  readonly usernames: { admin: string; manager: string; cashier: string; waiterOne: string; waiterTwo: string };
+  readonly paymentAccounts: Record<string, number>;
   readonly partners: { alia: number; bilal: number; chandni: number };
   readonly paymentMethods: { cash: number; easypaisa: number; bankTransfer: number };
   readonly items: Record<string, number>;
@@ -117,6 +121,41 @@ export async function seed(db: Kysely<Database>): Promise<SeedResult> {
   // pulao it sits on belongs to Bilal.
   await setModifierOwnership(db, cheese.id, [{ partnerId: chandni.id, shareBp: 10_000 }], actor);
 
+  // ---- restaurant settings ----
+  // Obviously fictional, and obviously a placeholder: an operator who
+  // never opens the Settings screen should see something on the receipt
+  // that tells them to.
+  await saveSetting(
+    db,
+    'restaurant',
+    {
+      name: 'Demo Restaurant — set your own name in Settings',
+      addressLine1: '00 Example Road',
+      addressLine2: 'Nowhere',
+      phone: '000-0000000',
+      registrationLine: '',
+    },
+    actor,
+  );
+  await saveSetting(
+    db,
+    'receipt',
+    {
+      headerName: '',
+      showAddress: true,
+      showPhone: true,
+      headerNote: '',
+      footerMessage: 'Thank you',
+      footerNote: '',
+      showOrderNumber: true,
+      showTable: true,
+      showWaiter: true,
+      showPaymentAccounts: true,
+      feedLines: 3,
+    },
+    actor,
+  );
+
   // ---- payment methods ----
   const cash = await createPaymentMethod(db, { code: 'cash', displayName: 'Cash', kind: 'cash', sortOrder: 1 }, actor);
   const easypaisa = await createPaymentMethod(
@@ -147,6 +186,37 @@ export async function seed(db: Kysely<Database>): Promise<SeedResult> {
     actor,
   );
 
+  // ---- payment accounts ----
+  // Two wallets and one bank account, so the payment screen has a real
+  // choice to make and the reports have something to tell apart. Every
+  // number here is a placeholder — nothing real is ever committed.
+  const paymentAccounts: Record<string, number> = {};
+  const addAccount = async (
+    paymentMethodId: number,
+    label: string,
+    accountNumber: string,
+    bankName?: string,
+    sortOrder = 0,
+  ) => {
+    const account = await createPaymentAccount(
+      db,
+      {
+        paymentMethodId,
+        label,
+        accountTitle: 'DEMO ACCOUNT — replace before going live',
+        accountNumber,
+        ...(bankName === undefined ? {} : { bankName }),
+        sortOrder,
+      },
+      actor,
+    );
+    paymentAccounts[label] = account.id;
+  };
+
+  await addAccount(easypaisa.id, 'Counter wallet', '0000-0000000', undefined, 1);
+  await addAccount(easypaisa.id, 'Delivery wallet', '0000-1111111', undefined, 2);
+  await addAccount(bankTransfer.id, 'Main current account', '0000000000000000', 'Demo Bank', 1);
+
   // ---- people (staff and owner meals), one per policy ----
   const people: Record<string, number> = {};
   const addPerson = async (
@@ -168,6 +238,14 @@ export async function seed(db: Kysely<Database>): Promise<SeedResult> {
 
   return {
     users: { admin: admin.id, manager: manager.id, cashier: cashier.id, waiterOne: waiterOne.id, waiterTwo: waiterTwo.id },
+    usernames: {
+      admin: admin.username,
+      manager: manager.username,
+      cashier: cashier.username,
+      waiterOne: waiterOne.username,
+      waiterTwo: waiterTwo.username,
+    },
+    paymentAccounts,
     partners: { alia: alia.id, bilal: bilal.id, chandni: chandni.id },
     paymentMethods: { cash: cash.id, easypaisa: easypaisa.id, bankTransfer: bankTransfer.id },
     items,
