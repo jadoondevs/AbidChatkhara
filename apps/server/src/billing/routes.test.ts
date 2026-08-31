@@ -120,7 +120,7 @@ describe('billing routes', () => {
     expect(allowed.statusCode).toBe(200);
   });
 
-  it('print routes respond 503 when no printer is configured', async () => {
+  it('falls back to printable HTML when no printer is configured, rather than failing', async () => {
     const started = await setup();
     ({ app, ctx } = started);
     const token = await loginAs(app, started.admin.username, '9999');
@@ -129,6 +129,12 @@ describe('billing routes', () => {
     const order = orderRes.json() as { id: number };
 
     const res = await app.inject({ method: 'POST', url: `/api/orders/${order.id}/print-bill`, headers: auth });
-    expect(res.statusCode).toBe(503);
+    // A till with no POS printer is a supported configuration, not an
+    // error — it prints through Windows instead.
+    expect(res.statusCode).toBe(200);
+    const outcome = res.json() as { method: string; reason: string; html: string };
+    expect(outcome.method).toBe('fallback');
+    expect(outcome.reason).toBe('not_configured');
+    expect(outcome.html).toContain('BILL');
   });
 });

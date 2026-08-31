@@ -1,7 +1,8 @@
 import { format, paisa, sum, type Paisa } from '@pos/shared';
 import type { Kysely } from 'kysely';
 import { ReceiptBuilder } from '../platform/printing/escpos.js';
-import { sendToPrinter, type PrinterTarget } from '../platform/printing/client.js';
+import { PrintError, sendToPrinter, type PrinterTarget } from '../platform/printing/client.js';
+import { renderBillHtml, renderReceiptHtml } from './receipt-html.js';
 import type { Database } from '../platform/db/types.js';
 import { getAllSettings } from '../settings/service.js';
 import type { ReceiptSettings, RestaurantSettings } from '../settings/schema.js';
@@ -367,16 +368,58 @@ export async function buildReceiptTicketData(db: Kysely<Database>, orderId: numb
   };
 }
 
+/**
+ * What happened when a ticket was printed.
+ *
+ * `thermal` means the configured printer took it and the cashier can
+ * tear it off. Anything else hands back `html` — the same ticket,
+ * rendered for the browser's own print dialog — so the till can offer
+ * Windows printing (and therefore "Microsoft Print to PDF") instead of
+ * telling the cashier the print failed.
+ *
+ * `reason` distinguishes the two fallback cases for the message the
+ * cashier sees, and for the logs: nothing configured at all is a
+ * settings choice, an unreachable printer is a fault someone may want
+ * to fix.
+ */
+export type PrintOutcome =
+  | { readonly method: 'thermal' }
+  | { readonly method: 'fallback'; readonly reason: 'not_configured' | 'unreachable'; readonly detail: string | null; readonly html: string };
+
+/**
+ * Try the configured thermal printer, and fall back to browser-printable
+ * HTML rather than failing.
+ *
+ * A print is never allowed to be the thing that fails: by the time
+ * either of these is called the bill is already finalised or the
+ * payment already recorded, and a printer that is off, missing or
+ * misconfigured is not a reason to tell a cashier their sale did not
+ * work. The worst case is that they print from Windows instead.
+ */
+async function printOrFallBack(target: PrinterTarget | null, bytes: Buffer, html: string): Promise<PrintOutcome> {
+  if (!target) return { method: 'fallback', reason: 'not_configured', detail: null, html };
+  try {
+    await sendToPrinter(target, bytes);
+    return { method: 'thermal' };
+  } catch (error) {
+    // Only a printer/transport failure falls back. Anything else is a
+    // real fault in this server and must surface, not be papered over
+    // with a print dialog.
+    if (!(error instanceof PrintError)) throw error;
+    return { method: 'fallback', reason: 'unreachable', detail: error.message, html };
+  }
+}
+
 /** Print the pro-forma bill — may be called any number of times without
  * changing any state (spec). */
-export async function printBill(db: Kysely<Database>, orderId: number, target: PrinterTarget): Promise<void> {
+export async function printBill(db: Kysely<Database>, orderId: number, target: PrinterTarget | null): Promise<PrintOutcome> {
   const data = await buildBillTicketData(db, orderId);
-  await sendToPrinter(target, renderBillTicket(data));
+  return printOrFallBack(target, renderBillTicket(data), renderBillHtml(data));
 }
 
 /** Print the final receipt, kicking the cash drawer only if a cash
  * payment was part of this order's settlement. */
-export async function printReceipt(db: Kysely<Database>, orderId: number, target: PrinterTarget): Promise<void> {
+export async function printReceipt(db: Kysely<Database>, orderId: number, target: PrinterTarget | null): Promise<PrintOutcome> {
   const data = await buildReceiptTicketData(db, orderId);
-  await sendToPrinter(target, renderReceiptTicket(data));
+  return printOrFallBack(target, renderReceiptTicket(data), renderReceiptHtml(data));
 }

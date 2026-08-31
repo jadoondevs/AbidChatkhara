@@ -90,11 +90,20 @@ describe('definition of done — a full day, offline', () => {
     const splitTwo = await recordPayment(
       ctx.db,
       dineIn.id,
-      { paymentMethodId: easypaisa, amountMinor: paisa(1_050_00), referenceNo: 'EP-DEMO-1' },
+      // The demo restaurant runs two Easypaisa wallets, so the cashier
+      // has to say which one received the transfer — the POS refuses to
+      // pick one for them (docs/decisions/017).
+      {
+        paymentMethodId: easypaisa,
+        amountMinor: paisa(1_050_00),
+        referenceNo: 'EP-DEMO-1',
+        paymentAccountId: data.paymentAccounts['Counter wallet'] as number,
+      },
       cashier,
     );
     expect(splitTwo.orderClosed).toBe(true); // split across cash and Easypaisa
     expect(splitTwo.invoiceNo).toBe(1);
+    expect(splitTwo.payment.paymentAccountId).toBe(data.paymentAccounts['Counter wallet']);
     await printReceipt(ctx.db, dineIn.id, printer);
 
     // ---- 2. takeaway, with an order-level discount ----
