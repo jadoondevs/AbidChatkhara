@@ -14,10 +14,12 @@ settlement, invoice numbering, refunds, ESC/POS printing), gratuity
 payout totals), consumption (staff and owner meals — a per-person
 meal policy, settled separately from the partner's own full-value
 credit), tax (configurable rules, shipped with none active), shifts
-(open/close, cash reconciliation, Z-report, waiter payout sheet), and
-reporting (all six spec-required reports, each CSV-exportable) are
-done.** The frontend is not built yet — see `ARCHITECTURE.md` for the
-current module status.
+(open/close, cash reconciliation, Z-report, waiter payout sheet),
+reporting (all six spec-required reports, each CSV-exportable), and the
+frontend (an installable React PWA covering all twelve screens) are
+done.** What remains is the definition-of-done pass — a seed script and
+the end-to-end scenarios. See `ARCHITECTURE.md` for the current module
+status.
 
 ## Requirements
 
@@ -33,15 +35,18 @@ npm install
 cp .env.example .env   # adjust POS_PORT / POS_DB_PATH if needed
 ```
 
-## Running locally
+## Running it
+
+One process serves both the JSON API and the tablet app, so a normal
+run is: build the frontend once, then start the server.
 
 ```bash
-npm run dev:server
+npm run build:frontend   # writes apps/frontend/dist
+npm run start            # serves the API and that build on :4000
 ```
 
-This starts the Fastify server (default `http://0.0.0.0:4000`), applying
-any pending database migrations on startup. `GET /api/health` should
-respond `{"ok":true}`.
+Open `http://<server-ip>:4000` on the tablet. Migrations are applied on
+startup; `GET /api/health` responds `{"ok":true}`.
 
 There is no seed script yet (that lands with the Definition-of-Done
 milestone), so a freshly-migrated database has no users. To create the
@@ -50,10 +55,25 @@ first admin account for local testing, use the identity service directly
 (`createUser` with `actorId: null`, a system action, is how the very first
 user is created without an existing actor to attribute it to).
 
-For production use, run the compiled/served process the same way — this
-is a single process serving both the JSON API and (once the frontend
-milestone lands) the built PWA. `npm run start` runs the same entrypoint
-as `dev:server` without the file-watcher.
+### Developing
+
+```bash
+npm run dev:server     # API on :4000, restarts on change
+npm run dev:frontend   # Vite on :5173, proxying /api to :4000
+```
+
+With no `apps/frontend/dist` present the server runs API-only and every
+non-API path 404s, which is exactly what you want while Vite is serving
+the app itself.
+
+### Installing on the tablet
+
+The frontend is a PWA: open it in Chrome on the tablet and use "Add to
+home screen". It's built for a 10-inch tablet in landscape, and the
+built app shell is cached by a service worker so a reload still works if
+the server blips. API responses are deliberately never cached — a
+cashier must never be shown a stale order list, or a bill another
+terminal has already settled.
 
 ## Testing, linting, type-checking
 
@@ -82,6 +102,7 @@ committed to git:
 | `POS_DB_PATH`      | `./data/pos.sqlite`   | SQLite database file                                   |
 | `POS_PRINTER_HOST` | unset                 | Receipt printer's IP address on the local network      |
 | `POS_PRINTER_PORT` | `9100`                | Printer's raw ESC/POS TCP port (9100 is the standard "JetDirect" port) |
+| `POS_FRONTEND_DIR` | `apps/frontend/dist`  | Built PWA to serve; API-only if it holds no `index.html` |
 
 `POS_PRINTER_HOST` unset is a supported, working state — the server runs
 normally and print routes respond `503` with a clear message instead of

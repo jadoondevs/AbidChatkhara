@@ -24,12 +24,14 @@ for the gap, all while the owning partner is still credited in full),
 **tax** (configurable rules, shipped active-rule-free so `tax_minor` is
 zero everywhere until a manager turns one on), **shifts** (open/
 close, cash reconciliation scoped to what actually moved through that
-shift, a Z-report, and the waiter payout sheet), and **reporting** (all
+shift, a Z-report, and the waiter payout sheet), **reporting** (all
 six spec-required reports, CSV-exportable, built on the other modules'
-own read seams rather than re-deriving their figures). Everything else
-— the frontend — is designed for (the module boundaries and seams below
-exist) but not built yet. Each lands as its own milestone;
-this file's "Modules" section says, per module, what exists today.
+own read seams rather than re-deriving their figures), and the
+**frontend** (an installable React PWA covering all twelve screens,
+served by this same server process). The server-side system is complete;
+what remains is the definition-of-done pass — a seed script and the
+end-to-end scenarios the spec lists. This file's "Modules" section says,
+per module, what exists today.
 
 ## Why local-first and single-writer
 
@@ -89,7 +91,7 @@ apps/server/src/
 packages/shared/src/
   money/          the Paisa branded type + all money arithmetic  [BUILT]
 
-apps/frontend/    React PWA                                      [not yet built]
+apps/frontend/    React PWA                                      [BUILT — see below]
 ```
 
 Each module owns its own database tables and exposes a service interface
@@ -697,6 +699,65 @@ re-deriving anything from raw tables a second time.
   top-level fields, with any nested array/object field (like
   `paymentMethodBreakdown`) JSON-encoded inside its own cell rather than
   spawning a second, nested CSV shape.
+
+## The frontend
+
+`apps/frontend` is a React + Vite PWA covering the spec's twelve
+screens, built to `apps/frontend/dist` and served by the same Fastify
+process as the API (`buildApp`'s `frontendDir`), so a tablet talks to
+exactly one origin and there is no CORS, no second server, and nothing
+to keep in sync between two deployments.
+
+- **There is no "current order" in the frontend either.** Every order
+  screen is addressed by its own id in the URL (`/orders/42/bill`), so
+  two tills can work two orders at once and a reload lands back on the
+  same one. The floor view is a live board of both queues, polled on a
+  short interval — this system has one server on one LAN and no push
+  channel by design, and a 4-second poll is the simplest thing that
+  keeps two tills honest about each other.
+- **Money never becomes a bare number on the way through the UI.**
+  `MoneyInput` parses what staff type with the money module's own
+  `parseRupees`, and every figure on screen renders through `format` —
+  the same functions the server uses, from `@pos/shared`. The
+  money-arithmetic guard now scans `.tsx` as well as `.ts`, so a stray
+  `paisa / 100` in a component fails the suite exactly as it would on
+  the server (this milestone extended the guard; it was previously
+  blind to the frontend's file extension).
+- **Manager approval doesn't sign the till over.** A line void by a
+  non-manager gets a 403 from the server; the screen then asks a manager
+  for their own PIN, authenticates them for that one call
+  (`AuthContext.approveAs`), and retries the void with that token —
+  which is dropped immediately after. The cashier stays logged in, and
+  the audit row records the manager as the approver, which is what the
+  void's `void_approved_by` is for.
+- **The server stays the authority on permissions.** Manager-only
+  screens are hidden from a cashier's navigation, but that's cosmetic —
+  every route behind them enforces its own role server-side, and the UI
+  simply avoids showing a screen whose every call would 403.
+- **A staff/owner meal settles through a different screen path**, not a
+  variant of the payment form: the payment screen switches to the
+  consumption settlement form when the order's channel isn't
+  `customer`, because the server settles those through
+  `settle-consumption`, not `payments`. The settlement-type selector
+  disappears entirely for a `full_price` person, since the server
+  rejects a settlement type when there's no gap to apply it to.
+- **A dead printer never blocks the flow.** Printing is a separate call
+  after the bill is already finalised server-side, so a 502/503 from an
+  unreachable printer surfaces as "the bill is finalised, only the
+  printer failed" with a way onward — matching the local-first rule that
+  order-taking and billing keep working with a dead printer.
+- **Offline caching is the app shell only.** The service worker
+  precaches the built HTML/JS/CSS so a reload survives a server blip,
+  and deliberately caches no API response — a cashier must never be
+  shown a stale order list, or a bill another terminal has already
+  settled. `navigateFallbackDenylist` keeps `/api/*` off the fallback
+  entirely so a fetch never receives an HTML shell where it expects
+  JSON.
+- **`@fastify/static` is registered last, and only when a build
+  exists.** Registering it after every route plugin means no static file
+  can shadow an API path; skipping it when `apps/frontend/dist` has no
+  `index.html` means a server-only deployment and a `vite dev` session
+  both work unchanged, with every non-API path simply 404ing.
 
 ## Testing approach
 
