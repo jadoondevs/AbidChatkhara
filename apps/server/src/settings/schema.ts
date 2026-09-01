@@ -73,6 +73,16 @@ export const printerSettingsSchema = z.object({
   host: z.string().max(255).default(''),
   port: z.number().int().min(1).max(65535).default(9100),
   enabled: z.boolean().default(true),
+  /**
+   * How dark the printer burns. 0 leaves the printer on its own
+   * setting and sends no command; 1-8 is passed through as the ESC/POS
+   * print-density level. Thermal darkness is a printer property, and
+   * this is the only way to make ORDINARY receipt text dark without
+   * emphasising every line and flattening the receipt into one weight.
+   * The right value is the one that reads well on the paper — Settings
+   * has a test print for exactly that.
+   */
+  densityLevel: z.number().int().min(0).max(8).default(5),
 });
 
 export const SETTING_SCHEMAS = {

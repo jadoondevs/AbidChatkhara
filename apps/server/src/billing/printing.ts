@@ -1,10 +1,10 @@
 import { format, paisa, sum, type Paisa } from '@pos/shared';
 import type { Kysely } from 'kysely';
-import { ReceiptBuilder } from '../platform/printing/escpos.js';
+import { DEFAULT_DENSITY_LEVEL, ReceiptBuilder, type TicketFormat } from '../platform/printing/escpos.js';
 import { PrintError, sendToPrinter, type PrinterTarget } from '../platform/printing/client.js';
-import { renderBillHtml, renderReceiptHtml } from './receipt-html.js';
+import { renderBillHtml, renderPrintTestHtml, renderReceiptHtml } from './receipt-html.js';
 import type { Database } from '../platform/db/types.js';
-import { getAllSettings } from '../settings/service.js';
+import { getAllSettings, getSetting } from '../settings/service.js';
 import type { ReceiptSettings, RestaurantSettings, ServiceChargeSettings } from '../settings/schema.js';
 
 const RECEIPT_WIDTH = 42; // characters — a standard 80mm thermal printer at font A
@@ -114,8 +114,8 @@ function printFooter(b: ReceiptBuilder, branding: TicketBranding): void {
  * see docs/decisions/007), and headed "BILL" in large type so nobody
  * mistakes it for the restaurant's record copy.
  */
-export function renderBillTicket(data: BillTicketData): Buffer {
-  const b = new ReceiptBuilder().init();
+export function renderBillTicket(data: BillTicketData, printFormat: TicketFormat = { densityLevel: DEFAULT_DENSITY_LEVEL }): Buffer {
+  const b = new ReceiptBuilder().init(printFormat);
   printHeader(b, data.branding);
   b.align('center').doubleSize(true).line('BILL').doubleSize(false).line('(not a receipt)').align('left').rule();
 
@@ -199,8 +199,8 @@ export interface ReceiptTicketData {
 
 /** The final receipt (spec's billing stage 2) — the restaurant's record
  * copy, carrying the invoice number this bill only gets once it closes. */
-export function renderReceiptTicket(data: ReceiptTicketData): Buffer {
-  const b = new ReceiptBuilder().init();
+export function renderReceiptTicket(data: ReceiptTicketData, printFormat: TicketFormat = { densityLevel: DEFAULT_DENSITY_LEVEL }): Buffer {
+  const b = new ReceiptBuilder().init(printFormat);
   printHeader(b, data.branding);
   b.align('center').doubleSize(true).line('RECEIPT').doubleSize(false).line(`Invoice #${data.invoiceNo}`).align('left').rule();
 
@@ -480,16 +480,85 @@ async function printOrFallBack(target: PrinterTarget | null, bytes: Buffer, html
   }
 }
 
+/**
+ * A short strip that answers the only question that matters about
+ * thermal output: is ordinary text dark enough to read, and is
+ * emphasised text still visibly different?
+ *
+ * Both are physical properties of the printer and the paper — no test
+ * suite can judge them, and a byte-level assertion proves only what was
+ * sent. So the app prints the comparison and a person looks at it. It
+ * carries the density level it was printed at, so a strip kept on the
+ * counter says which setting produced it.
+ */
+export function renderPrintTestTicket(
+  branding: TicketBranding,
+  printFormat: TicketFormat = { densityLevel: DEFAULT_DENSITY_LEVEL },
+): Buffer {
+  const b = new ReceiptBuilder().init(printFormat);
+  printHeader(b, branding);
+
+  b.align('center').bold(true).line('PRINT TEST').bold(false).align('left').rule();
+  b.line(
+    printFormat.densityLevel === 0
+      ? "Density: the printer's own setting"
+      : `Density level: ${printFormat.densityLevel} of 8`,
+  );
+  b.rule();
+
+  b.line('NORMAL TEXT — this must be readable');
+  // Real receipt lines, laid out by the same helper the real ticket
+  // uses, so the strip is a fair sample of the paper it is judging.
+  b.line(twoColumn('1 x Chicken Karahi', 'Rs 1,850.00'));
+  b.line(twoColumn('Subtotal', 'Rs 1,850.00'));
+  b.line('abcdefghijklmnopqrstuvwxyz 0123456789');
+  b.rule();
+
+  b.bold(true);
+  b.line('EMPHASISED TEXT — this must be heavier');
+  b.line(twoColumn('TOTAL', 'Rs 1,942.00'));
+  b.bold(false);
+  b.rule();
+
+  b.line('If the two blocks look the same, emphasis is');
+  b.line('doing the work density should be doing.');
+  b.line('If the top block is grey, raise the density');
+  b.line('level in Settings and print this again.');
+
+  printFooter(b, branding);
+  return b.build();
+}
+
+/**
+ * Print the test strip. Uses the same fallback path as everything else,
+ * so a till with no thermal printer gets it through the browser and can
+ * at least check the layout — though the question it answers is only
+ * answerable on thermal paper.
+ */
+export async function printTestTicket(db: Kysely<Database>, target: PrinterTarget | null): Promise<PrintOutcome> {
+  const config = await loadTicketConfig(db);
+  const printFormat = await ticketFormat(db);
+  const bytes = renderPrintTestTicket(config.branding, printFormat);
+  return printOrFallBack(target, bytes, renderPrintTestHtml(config.branding, printFormat.densityLevel));
+}
+
 /** Print the pro-forma bill — may be called any number of times without
  * changing any state (spec). */
 export async function printBill(db: Kysely<Database>, orderId: number, target: PrinterTarget | null): Promise<PrintOutcome> {
   const data = await buildBillTicketData(db, orderId);
-  return printOrFallBack(target, renderBillTicket(data), renderBillHtml(data));
+  return printOrFallBack(target, renderBillTicket(data, await ticketFormat(db)), renderBillHtml(data));
 }
 
 /** Print the final receipt, kicking the cash drawer only if a cash
  * payment was part of this order's settlement. */
 export async function printReceipt(db: Kysely<Database>, orderId: number, target: PrinterTarget | null): Promise<PrintOutcome> {
   const data = await buildReceiptTicketData(db, orderId);
-  return printOrFallBack(target, renderReceiptTicket(data), renderReceiptHtml(data));
+  return printOrFallBack(target, renderReceiptTicket(data, await ticketFormat(db)), renderReceiptHtml(data));
+}
+
+/** The configured darkness, read at print time so a change in Settings
+ * applies to the next ticket without restarting anything. */
+async function ticketFormat(db: Kysely<Database>): Promise<TicketFormat> {
+  const printer = await getSetting(db, 'printer');
+  return { densityLevel: printer.densityLevel };
 }

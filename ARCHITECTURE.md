@@ -750,6 +750,41 @@ in the restaurant and used to be an outright error. A wallet or bank
 transfer of more than the bill cannot be handed back from the drawer, so
 it stays a rejection the cashier has to resolve deliberately.
 
+## Thermal darkness is the printer's job; emphasis is the heading's
+
+A thermal head burns dots for a fixed time at a fixed intensity. How
+dark ordinary text comes out is therefore a property of the PRINTER —
+its density setting — not of the text, and the only text-level lever
+that changes it is emphasis, which is also the ticket's one weight
+difference.
+
+Using emphasis for darkness costs the difference. That is exactly what
+happened here: `init` emitted `ESC E 1` for the whole ticket and
+`bold(false)` returned to that base, so a receipt printed dark and
+uniform, with a total indistinguishable from the line above it.
+
+So:
+
+- `init` sends `ESC @`, `ESC M 0` (Font A, 12×24 — not Font B's thin
+  9×17), `ESC t 0`, and `GS ( K` function 49 with the configured
+  density level. Level 0 sends no density command at all.
+- `bold()` is emphasis, and it turns off again. `ESC E 1` before a
+  heading and a TOTAL, `ESC E 0` after, nothing emphasised in between.
+
+`GS ( K` is the length-prefixed ESC/POS family: pL/pH say how many
+bytes follow, so a printer that does not implement function 49 skips
+exactly those bytes rather than printing them. That framing is why it
+is this command and not `ESC 7 n1 n2 n3` or `DC2 # n`, which have no
+length prefix and litter the paper on hardware that ignores them.
+
+The level lives in Settings → Printer because the correct value is the
+one that reads well on the paper in that restaurant, and no test in
+this repository can see paper. Settings prints a test strip — one block
+of ordinary text, one emphasised block, and the level that produced
+them — which is the only acceptance test that means anything here. A
+printer that ignores the command shows no difference between levels,
+and the answer is then its own configuration utility.
+
 ## Printing: two renderers, one calculation
 
 Receipts reach paper by one of two routes, and the choice is the

@@ -8,7 +8,7 @@ import { ConcurrentModificationError, OrderStateError } from '../ordering/servic
 import type { Database } from '../platform/db/types.js';
 import { PrintError, type PrinterTarget } from '../platform/printing/client.js';
 import { getSetting, resolvePrinterTarget } from '../settings/service.js';
-import { printBill, printReceipt } from './printing.js';
+import { printBill, printReceipt, printTestTicket } from './printing.js';
 import {
   activeAccountsForMethod,
   createPaymentAccount,
@@ -431,6 +431,20 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
       html: z.string(),
     }),
   ]);
+
+  /**
+   * Print the darkness test strip. Admin-only because it is part of
+   * setting the printer up, and it is the only way to answer "is
+   * ordinary text readable on this hardware" — which no test here can.
+   */
+  app.post(
+    '/api/printer/test-print',
+    { schema: { response: { 200: printOutcomeSchema } } },
+    async (request, reply) => {
+      requireRole(request, reply, 'admin');
+      return printTestTicket(db, await currentPrinter());
+    },
+  );
 
   app.post(
     '/api/orders/:id/print-bill',

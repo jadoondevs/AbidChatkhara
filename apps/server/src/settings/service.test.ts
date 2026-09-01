@@ -116,26 +116,33 @@ describe('settings/service', () => {
 
 describe('resolvePrinterTarget', () => {
   const env = { host: '10.0.0.9', port: 9100 };
+  /** Density plays no part in resolving WHERE to print. */
+  const printer = (over: { host: string; port?: number; enabled?: boolean }) => ({
+    port: 9100,
+    enabled: true,
+    densityLevel: 5,
+    ...over,
+  });
 
   it('prefers a printer configured in Settings over the environment', () => {
-    expect(resolvePrinterTarget({ host: '10.0.0.50', port: 9100, enabled: true }, env)).toEqual({ host: '10.0.0.50', port: 9100 });
+    expect(resolvePrinterTarget(printer({ host: '10.0.0.50', enabled: true }), env)).toEqual({ host: '10.0.0.50', port: 9100 });
   });
 
   it('falls back to the environment when Settings names no host', () => {
-    expect(resolvePrinterTarget({ host: '', port: 9100, enabled: true }, env)).toEqual(env);
-    expect(resolvePrinterTarget({ host: '   ', port: 9100, enabled: true }, env)).toEqual(env);
+    expect(resolvePrinterTarget(printer({ host: '', enabled: true }), env)).toEqual(env);
+    expect(resolvePrinterTarget(printer({ host: '   ', enabled: true }), env)).toEqual(env);
   });
 
   it('returns nothing when neither is configured', () => {
-    expect(resolvePrinterTarget({ host: '', port: 9100, enabled: true }, null)).toBeNull();
+    expect(resolvePrinterTarget(printer({ host: '', enabled: true }), null)).toBeNull();
   });
 
   it('disables printing outright when told to, whatever the environment says', () => {
-    expect(resolvePrinterTarget({ host: '10.0.0.50', port: 9100, enabled: false }, env)).toBeNull();
-    expect(resolvePrinterTarget({ host: '', port: 9100, enabled: false }, env)).toBeNull();
+    expect(resolvePrinterTarget(printer({ host: '10.0.0.50', enabled: false }), env)).toBeNull();
+    expect(resolvePrinterTarget(printer({ host: '', enabled: false }), env)).toBeNull();
   });
 
   it('honours a non-default port from Settings', () => {
-    expect(resolvePrinterTarget({ host: '10.0.0.50', port: 9101, enabled: true }, env)).toEqual({ host: '10.0.0.50', port: 9101 });
+    expect(resolvePrinterTarget(printer({ host: '10.0.0.50', port: 9101 }), env)).toEqual({ host: '10.0.0.50', port: 9101 });
   });
 });

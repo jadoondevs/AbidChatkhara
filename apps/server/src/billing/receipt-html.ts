@@ -236,3 +236,24 @@ export function renderReceiptHtml(data: ReceiptTicketData): string {
     ].join('\n'),
   );
 }
+
+/**
+ * The print test, for a till with no thermal printer. The comparison it
+ * offers is weaker here — a browser renders both weights properly, and
+ * the whole point of the thermal strip is that the printer might not —
+ * but it keeps the button honest on every install rather than only the
+ * ones with a printer attached.
+ */
+export function renderPrintTestHtml(branding: TicketBranding, densityLevel: number): string {
+  const body = [
+    header(branding, 'PRINT TEST', densityLevel === 0 ? "Density: the printer's own setting" : `Density level: ${densityLevel} of 8`),
+    '<hr>',
+    '<div>NORMAL TEXT — this must be readable</div>',
+    row('1 x Chicken Karahi', 'Rs 1,850.00'),
+    row('Subtotal', 'Rs 1,850.00'),
+    '<hr>',
+    '<div class="grand">EMPHASISED TEXT — this must be heavier</div>',
+    row('TOTAL', 'Rs 1,942.00', 'grand'),
+  ].join('');
+  return page('Print test', body);
+}

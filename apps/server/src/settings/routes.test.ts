@@ -143,8 +143,13 @@ describe('settings routes', () => {
     const token = await loginAs(app, started.admin.username, '9999');
     const auth = { authorization: `Bearer ${token}` };
 
-    await app.inject({ method: 'PUT', url: '/api/settings/printer', headers: auth, payload: { host: '10.0.0.50', port: 9100, enabled: true } });
+    await app.inject({
+      method: 'PUT',
+      url: '/api/settings/printer',
+      headers: auth,
+      payload: { host: '10.0.0.50', port: 9100, enabled: true, densityLevel: 6 },
+    });
     const read = await app.inject({ method: 'GET', url: '/api/settings/printer', headers: auth });
-    expect(read.json()).toEqual({ host: '10.0.0.50', port: 9100, enabled: true });
+    expect(read.json()).toEqual({ host: '10.0.0.50', port: 9100, enabled: true, densityLevel: 6 });
   });
 });
