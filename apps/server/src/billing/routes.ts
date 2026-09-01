@@ -64,6 +64,7 @@ const orderSummarySchema = z.object({
   netSalesMinor: z.number().int(),
   taxMinor: z.number().int(),
   serviceChargeMinor: z.number().int(),
+  serviceChargeRateBp: z.number().int().nullable(),
   roundingAdjustmentMinor: z.number().int(),
   totalMinor: z.number().int(),
   version: z.number().int(),

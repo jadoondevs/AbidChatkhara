@@ -696,6 +696,7 @@ export async function recordPayment(
       netSalesMinor: order.net_sales_minor,
       taxMinor: order.tax_minor,
       serviceChargeMinor: order.service_charge_minor,
+      serviceChargeRateBp: order.service_charge_rate_bp,
       roundingAdjustmentMinor: order.rounding_adjustment_minor,
       totalMinor: order.total_minor,
       version: order.version,

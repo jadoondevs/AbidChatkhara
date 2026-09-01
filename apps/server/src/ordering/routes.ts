@@ -5,6 +5,7 @@ import type { Kysely } from 'kysely';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../identity/require-auth.js';
 import type { Database } from '../platform/db/types.js';
+import { getOrderHistory } from './history.js';
 import {
   addLine,
   billOrder,
@@ -30,6 +31,7 @@ const orderStatusSchema = z.enum(['open', 'billed', 'closed', 'voided']);
 const orderLineModifierSchema = z.object({
   id: z.number().int(),
   modifierId: z.number().int(),
+  modifierName: z.string(),
   priceDeltaMinor: z.number().int(),
   grossMinor: z.number().int(),
   proratedDiscountMinor: z.number().int(),
@@ -40,6 +42,7 @@ const orderLineModifierSchema = z.object({
 const orderLineSchema = z.object({
   id: z.number().int(),
   itemId: z.number().int(),
+  itemName: z.string(),
   qty: z.number().int(),
   unitPriceMinor: z.number().int(),
   grossMinor: z.number().int(),
@@ -75,6 +78,7 @@ const orderSummarySchema = z.object({
   netSalesMinor: z.number().int(),
   taxMinor: z.number().int(),
   serviceChargeMinor: z.number().int(),
+  serviceChargeRateBp: z.number().int().nullable(),
   roundingAdjustmentMinor: z.number().int(),
   totalMinor: z.number().int(),
   version: z.number().int(),
@@ -103,8 +107,48 @@ const billTotalsSchema = z.object({
   netSalesMinor: z.number().int(),
   taxMinor: z.number().int(),
   serviceChargeMinor: z.number().int(),
+  serviceChargeRateBp: z.number().int().nullable(),
+  serviceChargeName: z.string(),
   roundingAdjustmentMinor: z.number().int(),
   totalMinor: z.number().int(),
+});
+
+const historicalPaymentSchema = z.object({
+  id: z.number().int(),
+  methodName: z.string(),
+  methodKind: z.string(),
+  amountMinor: z.number().int(),
+  referenceNo: z.string().nullable(),
+  accountId: z.number().int().nullable(),
+  accountLabel: z.string().nullable(),
+  accountNumber: z.string().nullable(),
+  accountBankName: z.string().nullable(),
+  tenderedMinor: z.number().int().nullable(),
+  changeMinor: z.number().int().nullable(),
+  receivedAt: z.string(),
+  receivedByName: z.string().nullable(),
+  isRefund: z.boolean(),
+  reversedByPaymentId: z.number().int().nullable(),
+});
+
+const orderHistorySchema = z.object({
+  order: orderDetailSchema,
+  waiterName: z.string().nullable(),
+  openedByName: z.string().nullable(),
+  closedByName: z.string().nullable(),
+  beneficiaryName: z.string().nullable(),
+  payments: z.array(historicalPaymentSchema),
+  paidMinor: z.number().int(),
+  balanceMinor: z.number().int(),
+  changeGivenMinor: z.number().int(),
+  partnerAllocations: z.array(
+    z.object({
+      partnerId: z.number().int(),
+      partnerName: z.string(),
+      amountMinor: z.number().int(),
+      shareBpSnapshot: z.number().int(),
+    }),
+  ),
 });
 
 const errorSchema = z.object({ error: z.string() });
@@ -303,13 +347,17 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
     {
       schema: {
         params: z.object({ id: z.coerce.number().int() }),
+        // No override given means "what would the configured rule
+        // charge?" — which is what the bill screen asks before a
+        // cashier touches anything.
         querystring: z.object({ serviceChargeMinor: z.coerce.number().int().optional() }),
         response: { 200: billTotalsSchema },
       },
     },
     async (request, reply) => {
       requireAuth(request, reply);
-      return previewBillTotals(db, request.params.id, paisa(request.query.serviceChargeMinor ?? 0));
+      const override = request.query.serviceChargeMinor;
+      return previewBillTotals(db, request.params.id, override === undefined ? undefined : paisa(override));
     },
   );
 
@@ -349,6 +397,35 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
         actorId: actor.userId,
         terminalId: actor.terminalId,
       });
+    },
+  );
+
+  /**
+   * The complete record of one order — what was on it, what it came to,
+   * and how it was paid. Read-only: opening an order must never change
+   * it, so this route touches nothing.
+   *
+   * Any signed-in user may read it: a cashier looking up the bill they
+   * settled ten minutes ago is the main reason it exists, and the
+   * figures on it are the ones already printed on the customer's own
+   * receipt.
+   */
+  app.get(
+    '/api/orders/:id/history',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        response: { 200: orderHistorySchema, 404: errorSchema },
+      },
+    },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      const history = await getOrderHistory(db, request.params.id);
+      if (!history) {
+        reply.code(404);
+        return { error: `order ${request.params.id} not found` };
+      }
+      return history;
     },
   );
 };

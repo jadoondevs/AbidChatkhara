@@ -40,12 +40,24 @@ async function paymentMethodBreakdownForOrders(db: Kysely<Database>, orderIds: r
 // ---------------------------------------------------------------------
 
 export interface DailySalesReport {
+  /** Menu value before any discount — what was rung up. */
+  readonly grossSalesMinor: Paisa;
+  readonly discountsMinor: Paisa;
   readonly customerSalesMinor: Paisa;
   readonly consumptionMinor: Paisa;
   readonly combinedSalesMinor: Paisa;
   readonly taxCollectedMinor: Paisa;
+  /** Service charge collected across the period, as its own line.
+   * Deliberately NOT folded into a sales figure: it is money held for
+   * the waiters, not revenue the restaurant earned
+   * (docs/decisions/008). `serviceChargeByWaiter` is the same money
+   * broken down by who is owed it. */
+  readonly serviceChargeMinor: Paisa;
   readonly serviceChargeByWaiter: readonly WaiterPayoutLine[];
   readonly roundingAdjustmentMinor: Paisa;
+  /** What customers actually paid: net sales + tax + service charge +
+   * rounding. The figure the payment breakdown below adds up to. */
+  readonly totalCollectedMinor: Paisa;
   readonly paymentMethodBreakdown: readonly PaymentMethodBreakdownLine[];
 }
 
@@ -60,7 +72,17 @@ export interface DailySalesReport {
 export async function dailySalesReport(db: Kysely<Database>, opts: DateRangeOptions = {}): Promise<DailySalesReport> {
   let query = db
     .selectFrom('order')
-    .select(['id', 'channel', 'net_sales_minor', 'tax_minor', 'rounding_adjustment_minor'])
+    .select([
+      'id',
+      'channel',
+      'subtotal_minor',
+      'order_discount_minor',
+      'net_sales_minor',
+      'tax_minor',
+      'service_charge_minor',
+      'rounding_adjustment_minor',
+      'total_minor',
+    ])
     .where('status', '=', 'closed');
   if (opts.fromInclusive) query = query.where('closed_at', '>=', opts.fromInclusive);
   if (opts.toExclusive) query = query.where('closed_at', '<', opts.toExclusive);
@@ -78,12 +100,19 @@ export async function dailySalesReport(db: Kysely<Database>, opts: DateRangeOpti
   );
 
   return {
+    grossSalesMinor: sum(orders.map((o) => o.subtotal_minor)),
+    discountsMinor: sum(orders.map((o) => o.order_discount_minor)),
     customerSalesMinor,
     consumptionMinor,
     combinedSalesMinor: add(customerSalesMinor, consumptionMinor),
     taxCollectedMinor,
+    // From the orders themselves, not the payout sheet: the payout is
+    // grouped by waiter and would omit a charge on an order whose
+    // waiter has since been removed.
+    serviceChargeMinor: sum(orders.map((o) => o.service_charge_minor)),
     serviceChargeByWaiter,
     roundingAdjustmentMinor,
+    totalCollectedMinor: sum(orders.map((o) => o.total_minor)),
     paymentMethodBreakdown,
   };
 }

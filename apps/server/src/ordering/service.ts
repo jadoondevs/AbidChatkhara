@@ -1,9 +1,10 @@
-import { add, paisa, roundToRupee, sub, type Paisa } from '@pos/shared';
+import { add, paisa, proportionalAmount, roundToRupee, sub, type Paisa } from '@pos/shared';
 import type { Kysely, Transaction } from 'kysely';
 import { getItem, getModifier, getCurrentPrice, listModifierGroupsForItem } from '../catalog/service.js';
 import { recordAudit } from '../identity/audit.js';
 import type { Database } from '../platform/db/types.js';
 import { eventBus } from '../platform/events/bus.js';
+import { getSetting } from '../settings/service.js';
 import { computeTaxForOrder } from '../tax/service.js';
 import { computeOrderPipeline, type LineInput } from './pipeline.js';
 import type { OrderChannel, OrderStatus, OrderType, VoidKind } from './tables.js';
@@ -93,6 +94,8 @@ export interface OrderSummary {
   readonly netSalesMinor: Paisa;
   readonly taxMinor: Paisa;
   readonly serviceChargeMinor: Paisa;
+  /** The rate that produced it, or null — see migration 0016. */
+  readonly serviceChargeRateBp: number | null;
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
   readonly version: number;
@@ -120,6 +123,7 @@ interface OrderRow {
   net_sales_minor: Paisa;
   tax_minor: Paisa;
   service_charge_minor: Paisa;
+  service_charge_rate_bp: number | null;
   rounding_adjustment_minor: Paisa;
   total_minor: Paisa;
   version: number;
@@ -148,6 +152,7 @@ function toOrderSummary(row: OrderRow): OrderSummary {
     netSalesMinor: row.net_sales_minor,
     taxMinor: row.tax_minor,
     serviceChargeMinor: row.service_charge_minor,
+    serviceChargeRateBp: row.service_charge_rate_bp,
     roundingAdjustmentMinor: row.rounding_adjustment_minor,
     totalMinor: row.total_minor,
     version: row.version,
@@ -157,6 +162,8 @@ function toOrderSummary(row: OrderRow): OrderSummary {
 export interface OrderLineModifierDetail {
   readonly id: number;
   readonly modifierId: number;
+  /** What it was called when it was sold, not what it is called now. */
+  readonly modifierName: string;
   readonly priceDeltaMinor: Paisa;
   readonly grossMinor: Paisa;
   readonly proratedDiscountMinor: Paisa;
@@ -167,6 +174,8 @@ export interface OrderLineModifierDetail {
 export interface OrderLineDetail {
   readonly id: number;
   readonly itemId: number;
+  /** What it was called when it was sold, not what it is called now. */
+  readonly itemName: string;
   readonly qty: number;
   readonly unitPriceMinor: Paisa;
   readonly grossMinor: Paisa;
@@ -213,6 +222,7 @@ async function loadLines(
   return lineRows.map((line) => ({
     id: line.id,
     itemId: line.item_id,
+    itemName: line.item_name_snapshot ?? `item ${line.item_id}`,
     qty: line.qty,
     unitPriceMinor: line.unit_price_minor,
     grossMinor: line.gross_minor,
@@ -228,6 +238,7 @@ async function loadLines(
       .map((m) => ({
         id: m.id,
         modifierId: m.modifier_id,
+        modifierName: m.modifier_name_snapshot ?? `modifier ${m.modifier_id}`,
         priceDeltaMinor: m.price_delta_minor,
         grossMinor: m.gross_minor,
         proratedDiscountMinor: m.prorated_discount_minor,
@@ -463,6 +474,7 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
       net_sales_minor: paisa(0),
       tax_minor: paisa(0),
       service_charge_minor: paisa(0),
+      service_charge_rate_bp: null,
       rounding_adjustment_minor: paisa(0),
       total_minor: paisa(0),
       version: 0,
@@ -731,6 +743,9 @@ export async function addLine(db: Kysely<Database>, orderId: number, input: AddL
       .values({
         order_id: orderId,
         item_id: input.itemId,
+        // The name is snapshotted alongside the price: a bill must not
+        // change when the menu does (migration 0017).
+        item_name_snapshot: item.name,
         qty: input.qty,
         unit_price_minor: unitPriceMinor,
         gross_minor: paisa(0),
@@ -753,6 +768,7 @@ export async function addLine(db: Kysely<Database>, orderId: number, input: AddL
         .values({
           order_line_id: lineRow.id,
           modifier_id: m.id,
+          modifier_name_snapshot: m.name,
           price_delta_minor: m.priceDeltaMinor,
           gross_minor: paisa(0),
           prorated_discount_minor: paisa(0),
@@ -1009,8 +1025,67 @@ export interface BillTotals {
   readonly netSalesMinor: Paisa;
   readonly taxMinor: Paisa;
   readonly serviceChargeMinor: Paisa;
+  /** The configured rate this service charge came from, or null when
+   * none did — no charge, or a cashier-entered amount. Carried through
+   * so a bill can say "Service charge (5%)" rather than leaving a
+   * manager to work out which rate was in force that day. */
+  readonly serviceChargeRateBp: number | null;
+  readonly serviceChargeName: string;
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
+}
+
+/**
+ * What this order's service charge should be, from the restaurant's
+ * configured rule — and, so a historical bill can say so, the rate that
+ * produced it.
+ *
+ * THE one place a service charge is worked out. Nothing else in the
+ * system multiplies a rate by a total: `billOrder` persists what this
+ * returns, `previewBillTotals` shows what this returns, and the receipt
+ * prints the amount that was persisted. A screen that did its own
+ * percentage would be a second answer.
+ *
+ * A cashier may still override the amount — waiving service on a
+ * complaint is ordinary restaurant practice, and the old POS allowed it
+ * — but an override records `rateBp: null`, because no rate produced
+ * it and claiming one would be a lie on the receipt.
+ */
+export async function computeServiceCharge(
+  db: Kysely<Database> | Transaction<Database>,
+  order: Pick<OrderRow, 'order_type' | 'waiter_id' | 'net_sales_minor' | 'channel'>,
+  override: Paisa | undefined,
+): Promise<{ amountMinor: Paisa; rateBp: number | null; displayName: string }> {
+  const config = await getSetting(db, 'serviceCharge');
+
+  if (override !== undefined) {
+    if (override < 0) throw new OrderStateError('service charge cannot be negative');
+    if (override > 0 && !config.enabled) {
+      throw new OrderStateError('service charge is switched off for this restaurant — enable it in Settings first');
+    }
+    if (override > 0 && order.waiter_id === null) {
+      throw new OrderStateError('service charge requires a waiter; this order has none');
+    }
+    return { amountMinor: override, rateBp: null, displayName: config.displayName };
+  }
+
+  // Every reason there is no charge, in one place, so "disabled means
+  // zero" cannot be true on one screen and not another.
+  const applies =
+    config.enabled &&
+    config.rateBp > 0 &&
+    order.waiter_id !== null &&
+    // A staff or owner meal is not table service being sold.
+    order.channel === 'customer' &&
+    (!config.dineInOnly || order.order_type === 'dine_in');
+
+  if (!applies) return { amountMinor: paisa(0), rateBp: null, displayName: config.displayName };
+
+  return {
+    amountMinor: proportionalAmount(order.net_sales_minor, config.rateBp, 10_000),
+    rateBp: config.rateBp,
+    displayName: config.displayName,
+  };
 }
 
 /**
@@ -1024,18 +1099,15 @@ export interface BillTotals {
  * total before printing is that it is the total that gets printed.
  */
 async function computeBillTotals(
-  trx: Transaction<Database>,
+  trx: Kysely<Database> | Transaction<Database>,
   order: OrderRow,
-  serviceChargeMinor: Paisa,
+  serviceChargeOverride: Paisa | undefined,
   at: Date,
 ): Promise<BillTotals> {
-  if (serviceChargeMinor < 0) throw new OrderStateError('service charge cannot be negative');
-  if (serviceChargeMinor > 0 && order.waiter_id === null) {
-    throw new OrderStateError('service charge requires a waiter; this order has none');
-  }
+  const serviceCharge = await computeServiceCharge(trx, order, serviceChargeOverride);
 
   const { taxMinor } = await computeTaxForOrder(trx, order.id, order.order_type, at);
-  const preRound = add(add(order.net_sales_minor, taxMinor), serviceChargeMinor);
+  const preRound = add(add(order.net_sales_minor, taxMinor), serviceCharge.amountMinor);
   const { total, adjustment } = roundToRupee(preRound);
 
   return {
@@ -1043,7 +1115,9 @@ async function computeBillTotals(
     orderDiscountMinor: order.order_discount_minor,
     netSalesMinor: order.net_sales_minor,
     taxMinor,
-    serviceChargeMinor,
+    serviceChargeMinor: serviceCharge.amountMinor,
+    serviceChargeRateBp: serviceCharge.rateBp,
+    serviceChargeName: serviceCharge.displayName,
     roundingAdjustmentMinor: adjustment,
     totalMinor: total,
   };
@@ -1060,13 +1134,11 @@ async function computeBillTotals(
 export async function previewBillTotals(
   db: Kysely<Database>,
   orderId: number,
-  serviceChargeMinor: Paisa,
+  serviceChargeOverride?: Paisa,
 ): Promise<BillTotals> {
-  return db.transaction().execute(async (trx) => {
-    const order = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirst();
-    if (!order) throw new Error(`order ${orderId} not found`);
-    return computeBillTotals(trx, order, serviceChargeMinor, new Date());
-  });
+  const order = await db.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirst();
+  if (!order) throw new Error(`order ${orderId} not found`);
+  return computeBillTotals(db, order, serviceChargeOverride, new Date());
 }
 
 /**
@@ -1094,7 +1166,7 @@ export async function billOrder(db: Kysely<Database>, orderId: number, input: Bi
     }
 
     const now = new Date();
-    const totals = await computeBillTotals(trx, order, input.serviceChargeMinor ?? paisa(0), now);
+    const totals = await computeBillTotals(trx, order, input.serviceChargeMinor, now);
 
     const updated = await versionedUpdate(trx, orderId, order.version, {
       status: 'billed',
@@ -1104,6 +1176,7 @@ export async function billOrder(db: Kysely<Database>, orderId: number, input: Bi
       first_billed_at: order.first_billed_at ?? now.toISOString(),
       tax_minor: totals.taxMinor,
       service_charge_minor: totals.serviceChargeMinor,
+      service_charge_rate_bp: totals.serviceChargeRateBp,
       rounding_adjustment_minor: totals.roundingAdjustmentMinor,
       total_minor: totals.totalMinor,
     });

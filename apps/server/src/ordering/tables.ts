@@ -31,6 +31,9 @@ export interface OrderTable {
   net_sales_minor: Paisa;
   tax_minor: Paisa;
   service_charge_minor: Paisa;
+  /** The configured rate that produced `service_charge_minor`, or null
+   * when none did — see migration 0016. */
+  service_charge_rate_bp: number | null;
   rounding_adjustment_minor: Paisa;
   total_minor: Paisa;
   version: number;
@@ -40,6 +43,10 @@ export interface OrderLineTable {
   id: Generated<number>;
   order_id: number;
   item_id: number;
+  /** What the item was called when it was sold (migration 0017).
+   * Nullable only because SQLite cannot add a NOT NULL column without a
+   * default; every row is backfilled and the service never writes null. */
+  item_name_snapshot: string | null;
   qty: number;
   unit_price_minor: Paisa;
   gross_minor: Paisa;
@@ -56,6 +63,8 @@ export interface OrderLineModifierTable {
   id: Generated<number>;
   order_line_id: number;
   modifier_id: number;
+  /** What the modifier was called when it was sold — see migration 0017. */
+  modifier_name_snapshot: string | null;
   price_delta_minor: Paisa;
   gross_minor: Paisa;
   prorated_discount_minor: Paisa;

@@ -5,7 +5,7 @@ import { createPaymentMethod, recordPayment } from '../billing/service.js';
 import { createPerson } from '../consumption/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createUser } from '../identity/service.js';
-import { createTestDb } from '../platform/db/test-helpers.js';
+import { createTestDb, enableServiceCharge } from '../platform/db/test-helpers.js';
 import { eventBus } from '../platform/events/bus.js';
 import {
   addLine,
@@ -55,6 +55,9 @@ describe('ordering/service', () => {
     await linkModifierGroup(ctx.db, itemWithModifiers.id, group.id, catalogActor);
 
     const orderActor = { actorId: server.id, terminalId: 'till-1' };
+    // Several tests here bill with a hand-entered service charge,
+    // which a disabled charge refuses (see computeServiceCharge).
+    await enableServiceCharge(ctx.db, catalogActor);
     return { admin, server, item, itemWithModifiers, group, mild, extraHot, orderActor };
   }
 

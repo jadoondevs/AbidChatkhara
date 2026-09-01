@@ -5,7 +5,7 @@ import { createCategory, createItem, setItemPrice } from '../catalog/service.js'
 import { createUser } from '../identity/service.js';
 import { addLine, billOrder, createOrder } from '../ordering/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
-import { createTestDb } from '../platform/db/test-helpers.js';
+import { createTestDb, enableServiceCharge } from '../platform/db/test-helpers.js';
 import { closeShift, openShift } from '../shifts/service.js';
 import { recordServiceChargeEntry, reverseServiceChargeEntries, waiterPayoutTotals } from './service.js';
 
@@ -20,6 +20,9 @@ describe('gratuity/service', () => {
     ctx = createTestDb();
     const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     const actor = { actorId: admin.id, terminalId: 'till-1' };
+    // These tests bill with a hand-entered service charge, which is
+    // refused outright while the feature is switched off.
+    await enableServiceCharge(ctx.db, actor);
     const waiter = await createUser(ctx.db, { name: 'Bilal', username: 'bilal', password: '1111', role: 'server' }, actor);
 
     const category = await createCategory(ctx.db, { name: 'Mains' }, actor);

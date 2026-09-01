@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { recordPayment, refundOrder, settleConsumption } from './billing/service.js';
 import { printBill, printReceipt } from './billing/printing.js';
 import { addLine, billOrder, createOrder, setDiscount, voidLine } from './ordering/service.js';
-import { createTestDb } from './platform/db/test-helpers.js';
+import { createTestDb, enableServiceCharge } from './platform/db/test-helpers.js';
 import type { PrinterTarget } from './platform/printing/client.js';
 import { allocationReconciliation, dailySalesReport, partnerStatement } from './reporting/service.js';
 import { seed, type SeedResult } from './seed.js';
@@ -55,6 +55,11 @@ describe('definition of done — a full day, offline', () => {
     const admin = { actorId: data.users.admin, terminalId: 'till-1' };
     const manager = { actorId: data.users.manager, terminalId: 'till-1' };
     const cashier = { actorId: data.users.cashier, terminalId: 'till-2' };
+
+    // The demo restaurant levies a service charge. The cashier still
+    // enters the amount by hand below, which is refused outright
+    // while the feature is switched off (computeServiceCharge).
+    await enableServiceCharge(ctx.db, admin);
     const { cash, easypaisa } = data.paymentMethods;
     const karahi = data.items['Chicken Karahi (full)'] as number;
     const biryani = data.items['Chicken Biryani'] as number;

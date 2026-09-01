@@ -9,7 +9,9 @@ import {
   createPartner,
   getActiveItemOwnership,
   getActiveModifierOwnership,
+  getPartnerRecord,
   listPartners,
+  renamePartner,
   setItemOwnership,
   setModifierOwnership,
   setPartnerActive,
@@ -141,6 +143,76 @@ export const partnersRoutes: FastifyPluginAsync<PartnersPluginOptions> = async (
     async (request, reply) => {
       requireRole(request, reply, 'manager');
       return checkOwnershipIntegrity(db);
+    },
+  );
+
+  app.patch(
+    '/api/partners/:id',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        body: z.object({ name: z.string().min(1).optional(), active: z.boolean().optional() }),
+        response: { 200: partnerSchema },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      const context = { actorId: actor.userId, terminalId: actor.terminalId };
+
+      // Name and active state are separate operations with separate
+      // audit entries — a rename is not a deactivation, and a caller
+      // sending both gets both recorded.
+      if (request.body.name !== undefined) {
+        await renamePartner(db, request.params.id, request.body.name, context);
+      }
+      if (request.body.active !== undefined) {
+        await setPartnerActive(db, request.params.id, request.body.active, context);
+      }
+
+      const record = await getPartnerRecord(db, request.params.id);
+      if (!record) throw new Error(`partner ${request.params.id} not found`);
+      return record.partner;
+    },
+  );
+
+  /** A partner's own record: what they own today, and what they have
+   * actually been credited — at the shares each sale was written at. */
+  app.get(
+    '/api/partners/:id/record',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        querystring: z.object({ limit: z.coerce.number().int().min(1).max(200).optional() }),
+        response: {
+          200: z.object({
+            partner: partnerSchema,
+            ownedItems: z.array(z.object({ itemId: z.number().int(), itemName: z.string(), shareBp: z.number().int() })),
+            recentAllocations: z.array(
+              z.object({
+                orderId: z.number().int(),
+                invoiceNo: z.number().int().nullable(),
+                closedAt: z.string().nullable(),
+                itemName: z.string(),
+                qty: z.number().int(),
+                shareBpSnapshot: z.number().int(),
+                amountMinor: z.number().int(),
+                isReversal: z.boolean(),
+              }),
+            ),
+            totalAllocatedMinor: z.number().int(),
+          }),
+          404: z.object({ error: z.string() }),
+        },
+      },
+    },
+    async (request, reply) => {
+      requireRole(request, reply, 'manager');
+      const record = await getPartnerRecord(db, request.params.id, { limit: request.query.limit });
+      if (!record) {
+        reply.code(404);
+        return { error: `partner ${request.params.id} not found` };
+      }
+      return record;
     },
   );
 };

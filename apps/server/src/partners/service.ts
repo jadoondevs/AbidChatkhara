@@ -48,6 +48,38 @@ export async function listPartners(db: Kysely<Database>, opts: { includeInactive
   return rows.map(toPartnerSummary);
 }
 
+/**
+ * Rename a partner.
+ *
+ * Safe at any time: `line_allocation` snapshots the SHARE, and every
+ * historical report joins the partner by id, so correcting a spelling
+ * changes what the partner is called from now on and rewrites no
+ * money. The audit log keeps both names.
+ */
+export async function renamePartner(db: Kysely<Database>, id: number, name: string, actor: ActorContext): Promise<PartnerSummary> {
+  if (!name.trim()) throw new Error('a partner needs a name');
+  const before = await db.selectFrom('partner').selectAll().where('id', '=', id).executeTakeFirst();
+  if (!before) throw new Error(`partner ${id} not found`);
+
+  const after = await db
+    .updateTable('partner')
+    .set({ name: name.trim() })
+    .where('id', '=', id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  await recordAudit(db, {
+    actorId: actor.actorId,
+    terminalId: actor.terminalId,
+    action: 'partner.rename',
+    entity: 'partner',
+    entityId: id,
+    before: toPartnerSummary(before),
+    after: toPartnerSummary(after),
+  });
+  return toPartnerSummary(after);
+}
+
 export async function setPartnerActive(db: Kysely<Database>, id: number, active: boolean, actor: ActorContext): Promise<PartnerSummary> {
   const before = await db.selectFrom('partner').selectAll().where('id', '=', id).executeTakeFirst();
   if (!before) throw new Error(`partner ${id} not found`);
@@ -578,4 +610,109 @@ export function scheduleOwnershipIntegrityCheck(db: Kysely<Database>, intervalMs
   }, intervalMs);
   timer.unref(); // a scheduled check should never be the reason the process stays alive
   return () => clearInterval(timer);
+}
+
+// ---------------------------------------------------------------------
+// A partner's own record: what they currently own, and what they have
+// been credited.
+// ---------------------------------------------------------------------
+
+export interface PartnerOwnedItem {
+  readonly itemId: number;
+  readonly itemName: string;
+  readonly shareBp: number;
+}
+
+export interface PartnerAllocationEntry {
+  readonly orderId: number;
+  readonly invoiceNo: number | null;
+  readonly closedAt: string | null;
+  readonly itemName: string;
+  readonly qty: number;
+  readonly shareBpSnapshot: number;
+  readonly amountMinor: Paisa;
+  readonly isReversal: boolean;
+}
+
+export interface PartnerRecord {
+  readonly partner: PartnerSummary;
+  readonly ownedItems: PartnerOwnedItem[];
+  readonly recentAllocations: PartnerAllocationEntry[];
+  readonly totalAllocatedMinor: Paisa;
+}
+
+/**
+ * Everything an admin needs to see about one partner: what they own on
+ * today's menu, and what they have actually been credited.
+ *
+ * The allocation rows come from `line_allocation`, which snapshots the
+ * share it was written at — so this is what each sale really credited
+ * them, not what today's ownership would credit them for the same
+ * sale. The item name comes from the order line's own snapshot for the
+ * same reason.
+ *
+ * Reversals (from refunds) are included and marked rather than netted
+ * away: a partner looking at their record should see the sale and the
+ * refund, not a smaller number with no explanation.
+ */
+export async function getPartnerRecord(
+  db: Kysely<Database>,
+  partnerId: number,
+  opts: { limit?: number | undefined } = {},
+): Promise<PartnerRecord | null> {
+  const partnerRow = await db.selectFrom('partner').selectAll().where('id', '=', partnerId).executeTakeFirst();
+  if (!partnerRow) return null;
+
+  const now = new Date().toISOString();
+  const ownedRows = await db
+    .selectFrom('item_ownership')
+    .innerJoin('item', 'item.id', 'item_ownership.item_id')
+    .select(['item.id as itemId', 'item.name as itemName', 'item_ownership.share_bp as shareBp'])
+    .where('item_ownership.partner_id', '=', partnerId)
+    .where('item_ownership.valid_from', '<=', now)
+    .where((eb) => eb.or([eb('item_ownership.valid_to', 'is', null), eb('item_ownership.valid_to', '>', now)]))
+    .orderBy('item.name', 'asc')
+    .execute();
+
+  const allocationRows = await db
+    .selectFrom('line_allocation')
+    .innerJoin('order_line', 'order_line.id', 'line_allocation.order_line_id')
+    .innerJoin('order', 'order.id', 'order_line.order_id')
+    .select([
+      'order.id as orderId',
+      'order.invoice_no as invoiceNo',
+      'order.closed_at as closedAt',
+      'order_line.item_name_snapshot as itemName',
+      'order_line.item_id as itemId',
+      'order_line.qty as qty',
+      'line_allocation.share_bp_snapshot as shareBpSnapshot',
+      'line_allocation.amount_minor as amountMinor',
+      'line_allocation.reverses_allocation_id as reversesAllocationId',
+    ])
+    .where('line_allocation.partner_id', '=', partnerId)
+    .orderBy('line_allocation.id', 'desc')
+    .limit(opts.limit ?? 50)
+    .execute();
+
+  const totalRows = await db
+    .selectFrom('line_allocation')
+    .select('amount_minor')
+    .where('partner_id', '=', partnerId)
+    .execute();
+
+  return {
+    partner: toPartnerSummary(partnerRow),
+    ownedItems: ownedRows.map((row) => ({ itemId: row.itemId, itemName: row.itemName, shareBp: row.shareBp })),
+    recentAllocations: allocationRows.map((row) => ({
+      orderId: row.orderId,
+      invoiceNo: row.invoiceNo,
+      closedAt: row.closedAt,
+      itemName: row.itemName ?? `item ${row.itemId}`,
+      qty: row.qty,
+      shareBpSnapshot: row.shareBpSnapshot,
+      amountMinor: row.amountMinor,
+      isReversal: row.reversesAllocationId !== null,
+    })),
+    totalAllocatedMinor: sum(totalRows.map((row) => row.amount_minor)),
+  };
 }

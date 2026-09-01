@@ -42,12 +42,13 @@ export async function getSetting<K extends SettingKey>(
 }
 
 export async function getAllSettings(db: Kysely<Database>): Promise<AllSettings> {
-  const [restaurant, receipt, printer] = await Promise.all([
+  const [restaurant, receipt, serviceCharge, printer] = await Promise.all([
     getSetting(db, 'restaurant'),
     getSetting(db, 'receipt'),
+    getSetting(db, 'serviceCharge'),
     getSetting(db, 'printer'),
   ]);
-  return { restaurant, receipt, printer };
+  return { restaurant, receipt, serviceCharge, printer };
 }
 
 /**

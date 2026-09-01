@@ -224,6 +224,8 @@ export interface PaymentMethodBreakdownLine {
 
 export interface ZReport {
   readonly shift: ShiftSummary;
+  /** Menu value before discounts — what was rung up this shift. */
+  readonly grossSalesMinor: Paisa;
   /** Net sales from customer-channel orders only — the spec's "default
    * the headline number to customer sales only". */
   readonly customerSalesMinor: Paisa;
@@ -299,6 +301,7 @@ export async function getZReport(db: Kysely<Database>, shiftId: number): Promise
   const taxCollectedMinor = sum(orders.filter((o) => o.status !== 'voided').map((o) => o.tax_minor));
   const roundingAdjustmentMinor = sum(orders.filter((o) => o.status !== 'voided').map((o) => o.rounding_adjustment_minor));
   const discountsGivenMinor = sum(orders.filter((o) => o.status !== 'voided').map((o) => o.order_discount_minor));
+  const grossSalesMinor = sum(orders.filter((o) => o.status !== 'voided').map((o) => o.subtotal_minor));
 
   // What was rung up and then taken back off: whole voided orders at
   // their subtotal, plus individually voided lines on orders that
@@ -365,6 +368,7 @@ export async function getZReport(db: Kysely<Database>, shiftId: number): Promise
 
   return {
     shift,
+    grossSalesMinor,
     customerSalesMinor,
     consumptionMinor,
     combinedSalesMinor: add(customerSalesMinor, consumptionMinor),

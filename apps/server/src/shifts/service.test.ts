@@ -6,7 +6,7 @@ import { createUser } from '../identity/service.js';
 import { createPerson } from '../consumption/service.js';
 import { addLine, billOrder, createOrder, removeLine, setDiscount, voidLine, voidOrder } from '../ordering/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
-import { createTestDb } from '../platform/db/test-helpers.js';
+import { createTestDb, enableServiceCharge } from '../platform/db/test-helpers.js';
 import { eventBus } from '../platform/events/bus.js';
 import { closeShift, getBlockingOrders, getOpenShift, getZReport, openShift, ShiftCloseBlockedError, ShiftStateError } from './service.js';
 
@@ -21,6 +21,7 @@ describe('shifts/service', () => {
     ctx = createTestDb();
     const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     const actor = { actorId: admin.id, terminalId: 'till-1' };
+    await enableServiceCharge(ctx.db, actor);
 
     const category = await createCategory(ctx.db, { name: 'Mains' }, actor);
     const item = await createItem(ctx.db, { categoryId: category.id, name: 'Karahi' }, actor);
