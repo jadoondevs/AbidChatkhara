@@ -234,13 +234,23 @@ Account numbers are masked to their last four digits on a printed
 ticket.
 
 **Thermal output is set up for legibility, not left to the printer's
-defaults.** Every ticket selects Font A, turns emphasis on for the
-whole receipt and picks a code page; `ESC @` on its own leaves many
-printers on the small Font B with no emphasis, which is the thin grey
-output that gets mistaken for a hardware fault. Typographic characters
-the POS itself produces (em dashes, curly quotes, ×) are transliterated,
-because a receipt printer decodes one byte at a time against a code page
-and would otherwise print them as noise.
+defaults.** Every ticket selects Font A (12×24, not Font B's thin
+9×17), picks a code page, and sets the print density. Typographic
+characters the POS itself produces (em dashes, curly quotes, ×) are
+transliterated, because a receipt printer decodes one byte at a time
+against a code page and would otherwise print them as noise.
+
+**If ordinary receipt text prints grey, raise the print darkness**
+under Settings → Printer, then press **Print test strip** and look at
+the paper. The strip prints one block of ordinary text and one
+emphasised block: ordinary text has to be readable, and the emphasised
+block has to be visibly heavier. Darkness is a property of the printer,
+so this is the only lever that fixes ordinary text without emphasising
+every line and flattening the receipt into one weight.
+
+Some printers ignore the density command. If the strip looks identical
+at every level, set the darkness in the printer's own configuration
+utility and put this setting back to "use the printer's own setting".
 
 **One print job per ticket, so Microsoft Print to PDF asks once.** The
 fallback writes the receipt into an off-screen iframe; that iframe is

@@ -507,8 +507,10 @@ export function renderPrintTestTicket(
   b.rule();
 
   b.line('NORMAL TEXT — this must be readable');
-  b.line('1 x Chicken Karahi                Rs 1,850.00');
-  b.line('Subtotal                          Rs 1,850.00');
+  // Real receipt lines, laid out by the same helper the real ticket
+  // uses, so the strip is a fair sample of the paper it is judging.
+  b.line(twoColumn('1 x Chicken Karahi', 'Rs 1,850.00'));
+  b.line(twoColumn('Subtotal', 'Rs 1,850.00'));
   b.line('abcdefghijklmnopqrstuvwxyz 0123456789');
   b.rule();
 
