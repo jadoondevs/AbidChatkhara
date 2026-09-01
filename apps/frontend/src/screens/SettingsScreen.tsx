@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   useCreatePaymentAccount,
   useCreateUser,
@@ -57,6 +58,15 @@ export function SettingsScreen(): JSX.Element {
           </button>
         ))}
       </div>
+
+      {/* The rest of the configuration lives on screens of its own,
+          because a manager needs it and this screen is admin-only. An
+          admin who came here looking for it should not have to guess
+          that. */}
+      <p className="muted elsewhere-note">
+        Also configurable: <Link to="/config/menu">menu and prices</Link>, <Link to="/config/partners">partners and ownership</Link>,{' '}
+        <Link to="/config/payment-methods">payment methods</Link>, and <Link to="/config/people">people for staff meals</Link>.
+      </p>
 
       {tab === 'restaurant' && <RestaurantPanel />}
       {tab === 'receipt' && <ReceiptPanel />}

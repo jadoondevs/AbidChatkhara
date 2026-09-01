@@ -972,3 +972,13 @@ button.link-button:hover {
   font-size: 12px;
   padding: 2px 6px;
 }
+
+/* A pointer to the configuration that lives on its own screens. */
+.elsewhere-note {
+  margin: 0;
+  font-size: 13px;
+}
+
+.elsewhere-note a {
+  color: var(--accent);
+}
