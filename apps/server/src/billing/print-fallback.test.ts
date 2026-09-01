@@ -10,7 +10,7 @@ import type { PrinterTarget } from '../platform/printing/client.js';
 import { saveSetting } from '../settings/service.js';
 import { defaultsFor } from '../settings/schema.js';
 import { activeAccountsForMethod, createPaymentAccount, createPaymentMethod, recordPayment, updatePaymentAccount, updatePaymentMethod } from './service.js';
-import { buildBillTicketData, buildReceiptTicketData, printBill, printReceipt } from './printing.js';
+import { buildBillTicketData, buildReceiptTicketData, printBill, printReceipt, printTestTicket } from './printing.js';
 import { renderReceiptHtml } from './receipt-html.js';
 
 /** A loopback socket standing in for a network thermal printer: it
@@ -382,6 +382,114 @@ describe('printing — direct printer, and the Windows fallback', () => {
       // printing is suppressed.
       const payment = await ctx.db.selectFrom('payment').selectAll().where('order_id', '=', order.id).executeTakeFirstOrThrow();
       expect(payment.payment_account_id).toBe(account.id);
+    });
+  });
+
+  /**
+   * What actually reaches the printer, at the level the paper cares
+   * about: ordinary lines must not be emphasised, headings must be, and
+   * the density command must be there to make the ordinary ones dark.
+   */
+  describe('what the printer receives', () => {
+    it('sets density once at the top and never emphasises ordinary lines', async () => {
+      const { order } = await setupClosedOrder();
+      const printer = await fakePrinter();
+
+      await printReceipt(ctx.db, order.id, printer.target);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const bytes = printer.received();
+      await printer.close();
+
+      // ESC @, Font A, code page, then GS ( K density — in that order,
+      // once, before any text.
+      expect(bytes.subarray(0, 8)).toEqual(Buffer.from([0x1b, 0x40, 0x1b, 0x4d, 0x00, 0x1b, 0x74, 0x00]));
+      const density = Buffer.from([0x1d, 0x28, 0x4b, 0x02, 0x00, 0x31]);
+      expect(bytes.indexOf(density)).toBe(8);
+      expect(bytes.indexOf(density, 9)).toBe(-1);
+
+      // Emphasis is used, and released again — the receipt is not one
+      // uniform weight.
+      expect(bytes.includes(Buffer.from([0x1b, 0x45, 0x01]))).toBe(true);
+      expect(bytes.includes(Buffer.from([0x1b, 0x45, 0x00]))).toBe(true);
+    });
+
+    it('leaves the item lines and totals unemphasised, and TOTAL emphasised', async () => {
+      const { order } = await setupClosedOrder();
+      const printer = await fakePrinter();
+      await printReceipt(ctx.db, order.id, printer.target);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const text = printer.received().toString('latin1');
+      await printer.close();
+
+      const on = '\u001b\u0045\u0001';
+      const off = '\u001b\u0045\u0000';
+      const emphasisBefore = (needle: string): boolean => {
+        const at = text.indexOf(needle);
+        const lastOn = text.lastIndexOf(on, at);
+        const lastOff = text.lastIndexOf(off, at);
+        return lastOn > lastOff;
+      };
+
+      expect(emphasisBefore('Subtotal'), 'subtotal').toBe(false);
+      expect(emphasisBefore('Karahi'), 'item line').toBe(false);
+      expect(emphasisBefore('Date:'), 'date').toBe(false);
+      expect(emphasisBefore('TOTAL'), 'total').toBe(true);
+    });
+
+    it('honours a printer configured to keep its own density', async () => {
+      const { actor, order } = await setupClosedOrder();
+      await saveSetting(ctx.db, 'printer', { ...defaultsFor('printer'), densityLevel: 0 }, actor);
+
+      const printer = await fakePrinter();
+      await printReceipt(ctx.db, order.id, printer.target);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const bytes = printer.received();
+      await printer.close();
+
+      expect(bytes.includes(Buffer.from([0x1d, 0x28, 0x4b]))).toBe(false);
+      // And the rest of the ticket is unchanged.
+      expect(bytes.toString('latin1')).toContain('TOTAL');
+    });
+
+    it('sends the configured density level, so Settings is what the paper obeys', async () => {
+      const { actor, order } = await setupClosedOrder();
+      await saveSetting(ctx.db, 'printer', { ...defaultsFor('printer'), densityLevel: 8 }, actor);
+
+      const printer = await fakePrinter();
+      await printReceipt(ctx.db, order.id, printer.target);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const bytes = printer.received();
+      await printer.close();
+
+      expect(bytes.subarray(8, 15)).toEqual(Buffer.from([0x1d, 0x28, 0x4b, 0x02, 0x00, 0x31, 0x08]));
+    });
+
+    it('prints a test strip with both weights on it', async () => {
+      const { actor } = await setupClosedOrder();
+      await saveSetting(ctx.db, 'printer', { ...defaultsFor('printer'), densityLevel: 4 }, actor);
+
+      const printer = await fakePrinter();
+      const outcome = await printTestTicket(ctx.db, printer.target);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const bytes = printer.received();
+      await printer.close();
+
+      expect(outcome.method).toBe('thermal');
+      const text = bytes.toString('latin1');
+      expect(text).toContain('PRINT TEST');
+      expect(text).toContain('NORMAL TEXT');
+      expect(text).toContain('EMPHASISED TEXT');
+      // It says which level produced it, so a strip on the counter can
+      // be compared with another.
+      expect(text).toContain('Density level: 4 of 8');
+      expect(bytes.subarray(8, 15)).toEqual(Buffer.from([0x1d, 0x28, 0x4b, 0x02, 0x00, 0x31, 0x04]));
+    });
+
+    it('falls back for the test strip too, on a till with no printer', async () => {
+      await setupClosedOrder();
+      const outcome = await printTestTicket(ctx.db, null);
+      expect(outcome.method).toBe('fallback');
+      if (outcome.method === 'fallback') expect(outcome.html).toContain('PRINT TEST');
     });
   });
 });

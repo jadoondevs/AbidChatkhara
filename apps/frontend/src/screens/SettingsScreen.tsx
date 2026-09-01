@@ -6,6 +6,7 @@ import {
   usePaymentAccounts,
   usePaymentMethods,
   usePrinterSettings,
+  usePrintTest,
   useSaveReceiptSettings,
   useSavePrinterSettings,
   useSaveRestaurantSettings,
@@ -319,6 +320,7 @@ function ServiceChargePanel(): JSX.Element {
 function PrinterPanel(): JSX.Element {
   const printer = usePrinterSettings(true);
   const save = useSavePrinterSettings();
+  const testPrint = usePrintTest();
   const [draft, setDraft] = useState<PrinterSettings | null>(null);
   const [saved, setSaved] = useState(false);
 
@@ -371,6 +373,46 @@ function PrinterPanel(): JSX.Element {
         />
         <p className="muted field-hint">9100 unless your printer’s manual says otherwise.</p>
       </div>
+
+      {/* Darkness is a property of the printer, not of the text. This
+          is the only way to make ORDINARY receipt lines dark without
+          emphasising every one of them, which would leave a receipt
+          with no difference between a total and the line above it. */}
+      <div style={{ maxWidth: 320 }}>
+        <label htmlFor="printer-density">Print darkness</label>
+        <select
+          id="printer-density"
+          value={current.densityLevel}
+          onChange={(event) => update({ densityLevel: Number(event.target.value) })}
+        >
+          <option value={0}>Use the printer’s own setting</option>
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((level) => (
+            <option key={level} value={level}>
+              Level {level}
+              {level === 5 ? ' (default)' : ''}
+              {level === 8 ? ' (darkest)' : ''}
+            </option>
+          ))}
+        </select>
+        <p className="muted field-hint">
+          Raise this if ordinary receipt text prints grey. Print the test strip below, look at the paper, and adjust — the printer is the
+          only thing that can answer this. Some printers ignore the command entirely; if the test strip does not change between levels,
+          set the darkness in the printer’s own configuration utility instead.
+        </p>
+      </div>
+
+      <div className="row">
+        <button disabled={testPrint.isPending} onClick={() => testPrint.mutate()}>
+          {testPrint.isPending ? 'Printing…' : 'Print test strip'}
+        </button>
+        {testPrint.data === 'thermal' && <span className="pill ok">Sent to the printer</span>}
+        {testPrint.data === 'fallback' && <span className="muted">No POS printer — sent to Windows printing</span>}
+      </div>
+      <ErrorBanner error={testPrint.error} />
+      <p className="muted field-hint" style={{ marginTop: 0 }}>
+        The strip prints one block of ordinary text and one emphasised block. Ordinary text must be readable; the emphasised block must be
+        visibly heavier. Save any change above before printing it.
+      </p>
 
       <label className="checkbox-row">
         <input type="checkbox" checked={current.enabled} onChange={(event) => update({ enabled: event.target.checked })} />

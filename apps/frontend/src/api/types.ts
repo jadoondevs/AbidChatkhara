@@ -310,6 +310,9 @@ export interface PrinterSettings {
   host: string;
   port: number;
   enabled: boolean;
+  /** 0 = leave the printer on its own setting; 1–8 = ESC/POS print
+   * density. What makes ordinary receipt text dark. */
+  densityLevel: number;
 }
 
 export interface AppSettings {

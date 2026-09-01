@@ -1,23 +1,63 @@
 import { describe, expect, it } from 'vitest';
-import { ReceiptBuilder } from './escpos.js';
+import { DEFAULT_DENSITY_LEVEL, ReceiptBuilder } from './escpos.js';
 
 describe('ReceiptBuilder', () => {
-  it('init resets, then selects Font A, code page 437, and emphasis', () => {
-    // Emphasis is not decoration: without it a thermal head prints
-    // grey, which is the "the printer must be broken" complaint.
+  it('init resets, selects Font A and code page 437, and sets print density', () => {
+    const buf = new ReceiptBuilder().init({ densityLevel: 5 }).build();
+    expect(buf).toEqual(
+      Buffer.from([
+        0x1b, 0x40, // ESC @   — reset
+        0x1b, 0x4d, 0x00, // ESC M 0 — Font A (12x24), not Font B's thin 9x17
+        0x1b, 0x74, 0x00, // ESC t 0 — code page 437
+        0x1d, 0x28, 0x4b, 0x02, 0x00, 0x31, 0x05, // GS ( K, fn 49 — print density
+      ]),
+    );
+  });
+
+  it('does NOT turn emphasis on for the whole ticket', () => {
+    // Darkness is the density command's job. Emphasising everything
+    // makes a dark receipt with no difference left between a heading, a
+    // total and an item — which is what this printed before.
     const buf = new ReceiptBuilder().init().build();
-    expect(buf).toEqual(Buffer.from([0x1b, 0x40, 0x1b, 0x4d, 0x00, 0x1b, 0x74, 0x00, 0x1b, 0x45, 0x01]));
+    expect(buf.includes(Buffer.from([0x1b, 0x45, 0x01]))).toBe(false);
   });
 
-  it('bold(false) returns to the ticket base rather than going light', () => {
-    const buf = new ReceiptBuilder().init().bold(true).bold(false).build();
-    // The last two emphasis commands are both "on": nothing on a
-    // receipt should print lighter than the receipt itself.
-    expect(buf.subarray(-6)).toEqual(Buffer.from([0x1b, 0x45, 0x01, 0x1b, 0x45, 0x01]));
+  it('leaves the printer on its own density when the level is 0', () => {
+    // An installation whose printer is already set up correctly, or one
+    // whose printer mis-handles the command, turns it off entirely.
+    const buf = new ReceiptBuilder().init({ densityLevel: 0 }).build();
+    expect(buf).toEqual(Buffer.from([0x1b, 0x40, 0x1b, 0x4d, 0x00, 0x1b, 0x74, 0x00]));
+    expect(buf.includes(Buffer.from([0x1d, 0x28, 0x4b]))).toBe(false);
   });
 
-  it('bold(false) on a builder with no init is plain off', () => {
-    expect(new ReceiptBuilder().bold(false).build()).toEqual(Buffer.from([0x1b, 0x45, 0]));
+  it('refuses a density level outside the printer scale rather than sending nonsense', () => {
+    for (const densityLevel of [-1, 9, 255]) {
+      const buf = new ReceiptBuilder().init({ densityLevel }).build();
+      expect(buf.includes(Buffer.from([0x1d, 0x28, 0x4b])), `level ${densityLevel}`).toBe(false);
+    }
+  });
+
+  it('frames the density command so a printer that ignores it skips exactly those bytes', () => {
+    const buf = new ReceiptBuilder().init({ densityLevel: 8 }).build();
+    const at = buf.indexOf(Buffer.from([0x1d, 0x28, 0x4b]));
+    expect(at).toBeGreaterThan(-1);
+    // pL/pH say two payload bytes follow (fn and m) — the framing that
+    // makes this safe on hardware that does not implement function 49.
+    expect(buf[at + 3]).toBe(0x02);
+    expect(buf[at + 4]).toBe(0x00);
+    expect(buf.length).toBe(at + 7);
+  });
+
+  it('defaults to a level that is dark without over-burning', () => {
+    expect(DEFAULT_DENSITY_LEVEL).toBeGreaterThan(0);
+    expect(DEFAULT_DENSITY_LEVEL).toBeLessThanOrEqual(8);
+    expect(new ReceiptBuilder().init().build().subarray(-1)).toEqual(Buffer.from([DEFAULT_DENSITY_LEVEL]));
+  });
+
+  it('bold turns emphasis on and OFF, so normal text is normal', () => {
+    const buf = new ReceiptBuilder().bold(true).line('TOTAL').bold(false).line('Subtotal').build();
+    expect(buf.indexOf(Buffer.from([0x1b, 0x45, 0x01]))).toBeGreaterThan(-1);
+    expect(buf.indexOf(Buffer.from([0x1b, 0x45, 0x00]))).toBeGreaterThan(-1);
   });
 
   it('transliterates typographic characters a code page cannot render', () => {
@@ -62,6 +102,20 @@ describe('ReceiptBuilder', () => {
 
   it('kickDrawer emits the standard ESC p 0 25 250 pulse', () => {
     expect(new ReceiptBuilder().kickDrawer().build()).toEqual(Buffer.from([0x1b, 0x70, 0x00, 0x19, 0xfa]));
+  });
+
+  it('emphasis changes only where a line asks for it', () => {
+    // The state a printer is in when it reaches each line, in order —
+    // this is what "hierarchy" means at the byte level.
+    const buf = new ReceiptBuilder().init().line('normal').bold(true).line('HEADING').bold(false).line('normal again').build();
+    const text = buf.toString('latin1');
+    const emphasisOn = text.indexOf('\u001b\u0045\u0001');
+    const emphasisOff = text.indexOf('\u001b\u0045\u0000');
+
+    expect(text.indexOf('normal')).toBeLessThan(emphasisOn);
+    expect(emphasisOn).toBeLessThan(text.indexOf('HEADING'));
+    expect(text.indexOf('HEADING')).toBeLessThan(emphasisOff);
+    expect(emphasisOff).toBeLessThan(text.indexOf('normal again'));
   });
 
   it('chains commands in call order, concatenated', () => {

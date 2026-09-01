@@ -381,6 +381,16 @@ export function usePaymentOptions(): UseQueryResult<PaymentOption[]> {
  * case (api/printing.ts), so a caller gets one promise for "the ticket
  * has been dealt with" however this till prints.
  */
+/**
+ * Print the darkness test strip. Same fallback path as any other print,
+ * so a till with no thermal printer still gets something to look at.
+ */
+export function usePrintTest(): UseMutationResult<'thermal' | 'fallback', Error, void> {
+  return useMutation({
+    mutationFn: async () => completePrint(await api.post<PrintOutcome>('/api/printer/test-print')),
+  });
+}
+
 export function usePrintBill(): UseMutationResult<'thermal' | 'fallback', Error, number> {
   return useMutation({
     mutationFn: async (orderId: number) => completePrint(await api.post<PrintOutcome>(`/api/orders/${orderId}/print-bill`)),

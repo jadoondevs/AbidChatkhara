@@ -12,6 +12,30 @@ const GS = 0x1d;
 export type Align = 'left' | 'center' | 'right';
 
 /**
+ * How dark this printer should burn.
+ *
+ * Thermal darkness is a property of the PRINTER — how long each dot is
+ * heated — not of the text. It is the only lever that makes ordinary
+ * text dark without making it bold, which is why it exists here: the
+ * alternative (emphasising every line) produces a dark receipt with no
+ * difference left between a heading and a total and an item.
+ *
+ * `0` means "leave the printer on whatever it is configured for" and
+ * sends nothing. `1`–`8` are passed through as the `m` byte of the
+ * ESC/POS print-density function; the printer maps them onto its own
+ * scale, so the right value is the one that looks right on the paper —
+ * which is why it is a setting and why Settings has a test print.
+ */
+export interface TicketFormat {
+  readonly densityLevel: number;
+}
+
+/** Dark enough to read on cheap paper, on a printer that honours it.
+ * Deliberately not the maximum: over-burning bleeds thin strokes
+ * together and shortens the head's life. */
+export const DEFAULT_DENSITY_LEVEL = 5;
+
+/**
  * Typographic characters this system's own strings contain, mapped to
  * what a thermal printer's single-byte code page can actually render.
  *
@@ -53,37 +77,43 @@ export class ReceiptBuilder {
   private readonly chunks: Buffer[] = [];
 
   /**
-   * Whether ordinary text on this ticket is emphasised. Set by `init`,
-   * because emphasis is what makes a thermal receipt readable — see the
-   * note there.
-   */
-  private baseEmphasis = false;
-
-  /**
-   * Printer reset, then the three settings that decide whether the
-   * ticket is readable at all.
+   * Printer reset, then the settings that decide whether the ticket is
+   * readable at all.
    *
    * `ESC @` alone leaves the printer on ITS defaults, which on cheap
-   * hardware means the small Font B and no emphasis — the thin, grey
-   * output that sends people looking for a hardware fault. So:
+   * hardware — or on a printer whose density was turned down — means
+   * thin grey text that sends people looking for a hardware fault. So:
    *
    *  - `ESC M 0` selects Font A (12x24 rather than Font B's 9x17):
    *    bigger, and every glyph is drawn with more dots.
-   *  - `ESC E 1` turns emphasis on for the whole ticket. On a thermal
-   *    printer emphasis means each dot is struck harder, which is the
-   *    standard way to get black rather than grey. `bold()` still
-   *    exists for headings, and `bold(false)` returns to this base
-   *    rather than clearing it — nothing on a receipt should be
-   *    lighter than the receipt.
    *  - `ESC t 0` selects code page 437, so the single-byte characters
    *    `encodeTicketText` produces decode to the glyphs intended.
+   *  - `GS ( K` sets print density, when a level is configured. This is
+   *    the command that makes ORDINARY text dark. Emphasis is not used
+   *    for that job: emphasising every line would make the receipt
+   *    uniformly heavy and leave no difference between a total and the
+   *    line above it.
+   *
+   * The density command is safe to send to a printer that does not
+   * implement it. `GS (` is the length-prefixed command family — pL/pH
+   * tell the printer how many bytes follow — so a printer that does not
+   * know function 49 skips exactly those bytes instead of printing them
+   * as text. That is why it is this command and not one of the
+   * vendor-specific heating commands (`ESC 7 n1 n2 n3`, `DC2 # n`),
+   * which have no framing and litter the paper on hardware that ignores
+   * them.
    */
-  init(): this {
+  init(format: TicketFormat = { densityLevel: DEFAULT_DENSITY_LEVEL }): this {
     this.chunks.push(Buffer.from([ESC, 0x40]));
     this.chunks.push(Buffer.from([ESC, 0x4d, 0x00]));
     this.chunks.push(Buffer.from([ESC, 0x74, 0x00]));
-    this.baseEmphasis = true;
-    this.chunks.push(Buffer.from([ESC, 0x45, 1]));
+
+    const level = Math.trunc(format.densityLevel);
+    if (level > 0 && level <= 8) {
+      // GS ( K pL pH fn m — pL/pH = 2 bytes of payload (fn, m); fn = 49
+      // is the print-density function.
+      this.chunks.push(Buffer.from([GS, 0x28, 0x4b, 0x02, 0x00, 0x31, level]));
+    }
     return this;
   }
 
@@ -94,12 +124,18 @@ export class ReceiptBuilder {
   }
 
   /**
-   * Extra weight for a heading. Turning it off returns to the ticket's
-   * base emphasis, so an ordinary line after a bold one is still dark.
+   * Emphasis, and nothing else uses it.
+   *
+   * It is the ticket's only weight difference — a heading and a TOTAL
+   * are emphasised, everything else is not — so it has to actually turn
+   * off again. Making ordinary text dark is the density command's job
+   * (see `init`); if that job is given to emphasis instead, the receipt
+   * prints as one uniform weight and stops being readable in the way
+   * that matters, which is telling the total apart from the line above
+   * it at a glance.
    */
   bold(on: boolean): this {
-    const emphasised = on || this.baseEmphasis;
-    this.chunks.push(Buffer.from([ESC, 0x45, emphasised ? 1 : 0]));
+    this.chunks.push(Buffer.from([ESC, 0x45, on ? 1 : 0]));
     return this;
   }
 
