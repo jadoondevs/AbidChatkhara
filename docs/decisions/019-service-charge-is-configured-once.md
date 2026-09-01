@@ -20,9 +20,11 @@ through `computeBillTotals`, so the amount previewed on the bill screen
 is the amount the bill charges — not because two implementations agree,
 but because there is one.
 
-A cashier may still override the amount for one bill, including to
-zero. An override while the charge is switched off is refused rather
-than silently accepted.
+The cashier types the amount in rupees on the bill, seeded with what
+the configured rate works out to. They may change it, zero it, or
+leave it — including when no rate is configured at all. The
+configuration decides what a bill carries by DEFAULT; it does not
+decide what a cashier is permitted to charge.
 
 `order.service_charge_rate_bp` stores the rate that produced the charge,
 or NULL when no rate did — an override names no percentage. Every
@@ -52,10 +54,21 @@ to be owed 10%. Storing the rate on the order makes the change
 forward-only by construction, the same way `item_price` and
 `line_allocation.share_bp_snapshot` already work.
 
-**Disabled has to mean zero everywhere.** A restaurant that switches
-the charge off is making one decision, not fourteen. The single
-calculation is what makes that one decision reach the preview, the
-bill, the receipt, the reports and the Z-report at the same moment.
+**Disabled has to mean zero everywhere, by default.** A restaurant
+that switches the charge off is making one decision, not fourteen, and
+the single calculation is what makes that decision reach the preview,
+the bill, the receipt, the reports and the Z-report at the same moment.
+It applies to what a bill carries on its own, not to what a cashier
+can put on one: a customer asking to add something for the staff is
+answered at the counter, not by an admin editing Settings mid-service.
+Two rules survive regardless, because neither is about policy — a
+negative charge is not a charge, and a charge with no waiter has
+nobody to be paid out to.
+
+**A cashier types rupees, never a percentage.** "Add 200 for the
+staff" is what a customer says. Asking a busy till to work out 5% of
+4,150 is how a bill gets the wrong number on it, so the rate does that
+arithmetic and the cashier gets its answer to accept or replace.
 
 ## Consequences
 

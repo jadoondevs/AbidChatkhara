@@ -82,19 +82,39 @@ only) holds the restaurant's name and address, the receipt wording, the
 printer, the Easypaisa and bank accounts money arrives in, and the login
 accounts themselves.
 
+### The cashier's path
+
+```
+New order → add items → Go to bill → [ bill dialog ] → Print bill → Payment
+```
+
+The bill is a **dialog over the order screen**, carrying everything it
+carried as a page: the discount amount and reason, Apply discount, the
+service charge, subtotal through total, and Print bill. It scrolls
+rather than dropping anything.
+
+Printing the bill opens **payment for that same order** — no going back
+to the floor to find it again. If the ticket did not go straight to a
+thermal printer, the till asks what happened first: **Continue without
+printing**, **Retry print**, or **Cancel sale**. A browser cannot tell a
+saved PDF from a cancelled dialog, so the one person who knows is
+asked. Cancelling voids the order before payment and refunds it after;
+continuing is always safe, because the bill is already finalised.
+
 ### The service charge
 
-The service charge is configured once, under **Settings → Service
-charge**: on or off, a percentage, the name the customer reads, and
-whether it applies to dine-in only. One calculation on the server
-produces it for the bill preview, the bill, the receipt, the reports
-and the Z-report, so those cannot disagree. Switched off, it is zero
-everywhere — including a cashier's attempt to enter one by hand, which
-is refused rather than quietly kept.
+Configured once, under **Settings → Service charge**: on or off, a
+percentage, the name the customer reads, and whether it applies to
+dine-in only. One calculation on the server produces it for the bill
+preview, the bill, the receipt, the reports and the Z-report, so those
+cannot disagree.
 
-A cashier can still waive or adjust the charge on one bill. That is
-recorded as an override, and the ticket then names no percentage,
-because no percentage produced the amount.
+On the bill, the cashier sees **a rupee amount**, seeded with what that
+rate works out to. They can change it, zero it, or leave it — on any
+bill, including when no rate is configured. Nobody is asked to work out
+5% of 4,150 at a busy till, and nobody is blocked from adding what a
+customer asked for. Leaving the seed alone records the rate on the
+order; typing an amount records no rate, because no rate produced it.
 
 **Changing the rate never rewrites the past.** Each order stores the
 rate it was billed at, so an order taken while the charge was 5% still
@@ -105,9 +125,25 @@ The charge is money held for the waiter who earned it, not the
 restaurant's revenue (`docs/decisions/008`), so it appears on its own
 line in every report and never inside a sales figure.
 
+### Orders
+
+**Orders** is the history, separate from the floor. It opens on today,
+takes a specific date or a range, and searches by order number, invoice
+number, customer, table, staff member or payment reference. It never
+loads more than the window asked for.
+
+The **floor** stays the live board: open orders, awaiting payment, and
+a short tail of completed ones. An open order with nothing on it can be
+deleted there (and from the shift-close list, which is where an empty
+order actually gets in the way) — with a confirmation, and only when it
+has no items, no payment and no figures at all. Anything real is
+refused by the server whoever asks; those are voided or refunded, never
+deleted. See `docs/decisions/021`.
+
 ### Past orders
 
-Clicking a completed order on the floor opens its full record: the
+Clicking a completed order — on the floor or in Orders — opens its full
+record: the
 order and invoice numbers, type, table, customer, waiter, who opened and
 who settled it, the times, every item with its quantity, unit price,
 line total, modifiers and kitchen note, the whole financial breakdown
@@ -177,6 +213,22 @@ ticket to the paisa (see `docs/decisions/018`).
 Account numbers are masked to their last four digits on a printed
 ticket.
 
+**Thermal output is set up for legibility, not left to the printer's
+defaults.** Every ticket selects Font A, turns emphasis on for the
+whole receipt and picks a code page; `ESC @` on its own leaves many
+printers on the small Font B with no emphasis, which is the thin grey
+output that gets mistaken for a hardware fault. Typographic characters
+the POS itself produces (em dashes, curly quotes, ×) are transliterated,
+because a receipt printer decodes one byte at a time against a code page
+and would otherwise print them as noise.
+
+**One print job per ticket, so Microsoft Print to PDF asks once.** The
+fallback writes the receipt into an off-screen iframe; that iframe is
+given its content before it is attached, and its load handler latches.
+Attaching it empty first made the browser load `about:blank`, print
+that, then load the receipt and print again — the empty PDF a cashier
+had to save and throw away before saving the real one.
+
 ### Upgrading an existing database
 
 Sign-in changed from "pick your user id, tap a PIN" to a username and a
@@ -207,6 +259,15 @@ Nothing else needs to be done by hand: start the new server against the
 existing database and it migrates on startup, as always. Historical
 payments recorded before this rule keep their empty account and are left
 untouched.
+
+### Updating a till
+
+The app is a PWA, so the built shell is cached on the machine. A
+deployment therefore has to be able to *replace* what a running till is
+executing: when a new service worker takes over a page an older one
+loaded, the page reloads itself. Nobody closes every window on a
+restaurant terminal, and that used to be the only thing that cleared
+the old bundle. API responses are never cached either way.
 
 ### Developing
 

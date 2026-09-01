@@ -37,8 +37,12 @@ export function Modal({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className={`modal${wide ? ' modal-wide' : ''}`} onClick={(event) => event.stopPropagation()}>
-        <div className="row" style={{ marginBottom: 12 }}>
-          <h2 style={{ margin: 0, flex: 1 }}>{title}</h2>
+        {/* A dialog whose content carries its own heading passes an
+            empty title rather than repeating it — the close control
+            still needs somewhere to live. */}
+        <div className={`row modal-header${title ? '' : ' modal-header-bare'}`}>
+          {title && <h2 style={{ margin: 0, flex: 1 }}>{title}</h2>}
+          <span style={{ flex: 1 }} />
           <button className="ghost" onClick={onClose}>
             Close
           </button>

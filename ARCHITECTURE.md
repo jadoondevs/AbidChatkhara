@@ -807,6 +807,33 @@ exactly what happened during that one shift.
   companion, and the reporting milestone's own per-date-range service
   charge report).
 
+## The cashier's path: order → bill dialog → payment
+
+The three screens a cashier lives in are deliberately not three
+places.
+
+- **The bill is a dialog over the order**, not a page of its own
+  (`BillPanel`, opened from `OrderScreen`). Reviewing an order's total
+  is a step in taking the order; leaving the screen to look at its own
+  figures was a page change that bought nothing. `/orders/:id/bill`
+  still renders the same panel as a page, so a reload or a bookmark
+  lands somewhere sensible, and the panel itself is the one definition
+  of what a bill shows.
+- **Printing the bill opens payment for that order id.** The cashier
+  who printed the bill is the person about to take the money for it.
+  The old flow sent them back to the floor to find the order in
+  "awaiting payment" — the longest detour in the day, and one that got
+  longer as the restaurant got busier.
+- **What the printer did is a question, not an outcome.** A browser
+  cannot tell a saved PDF from a cancelled dialog: `afterprint` fires
+  for both, and it fires for "printed" and "pressed Escape" alike. So
+  anything that did not go straight to a thermal printer ends in
+  `PrintDecision` — continue, retry, or cancel the sale — which is what
+  the old POS asked, for the same reason. Cancelling uses the system's
+  own mechanism: a void before payment, a refund after. Continuing is
+  always safe, because by then the bill is finalised or the payment is
+  recorded.
+
 ## Historical orders: the record
 
 `apps/server/src/ordering/history.ts` answers one question —
@@ -837,6 +864,26 @@ is nothing there to modify with.
   awaiting-payment row still opens the till, because what that cashier
   needs is to take the money, and the record is one click away from
   there too.
+
+## Floor and Orders are different questions
+
+`getFloorBoard` answers "what is happening now": every live order, plus
+a short tail of completed ones, refetched on a timer and watched by a
+cashier. `searchOrders` answers "what happened": a date window, an
+optional search term, and a hard limit.
+
+They are separate because the failure modes are opposite. A floor that
+grew to a thousand rows would be useless; a history that only showed
+today would not be a history. And a lookup that loaded every order by
+default is a screen that breaks precisely when the restaurant succeeds
+— six months of trading is tens of thousands of rows to render twenty.
+
+An order is dated by `COALESCE(closed_at, opened_at)`, so one opened at
+11pm and paid at 12:10am belongs to the night it was paid for, and one
+still open belongs to the day it was started on. Days are resolved in
+the restaurant's own local time by `platform/date-range.ts`, the same
+helper the reports use — it lives in platform/ because both need to
+know what "today" means and neither should import the other to ask.
 
 ## Reporting
 
