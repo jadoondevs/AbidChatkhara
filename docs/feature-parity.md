@@ -113,7 +113,9 @@ missed rather than judged, and it belongs in the next pass.
 | Roles and permissions | Preserved | Enforced on the server, not just by hiding buttons. |
 | Partners | Improved | Create, rename, mark as left, bring back, and a full record of what they own and are owed. |
 | Ownership splits | Preserved | Effective-dated; past sales keep their shares. |
-| Payment methods | Improved | In Settings beside the accounts they receive money into, rather than a second configuration screen elsewhere. A code already in use now says so instead of failing with a server error. |
+| Payment methods | Improved | In Settings beside the accounts they receive money into. A method is a TYPE — name, code, kind, active — with edit and activate/deactivate; a code already in use says so instead of failing with a server error. |
+| Payment accounts | Improved | Add, edit, activate, deactivate, and a per-account "prints on receipt" that is independent of active — an account can take money without being advertised on the ticket (`docs/decisions/022`). |
+| Account details on a past receipt | Improved | Snapshotted on the payment, so editing an account never rewrites a receipt or an order record from before the edit. |
 | Payment accounts | Added | Easypaisa and bank accounts, activatable, never deleted. |
 | Restaurant name and receipt details | Improved | In the database, set from Settings, not compiled in. |
 | Printer address | Improved | Set from Settings; the environment variable is only a fallback. |

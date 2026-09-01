@@ -39,6 +39,38 @@ export function ShiftScreen(): JSX.Element {
 
   if (openShift.isLoading) return <Loading />;
 
+  // Closing a shift makes `openShift` null, which used to drop the
+  // manager straight back to "no shift is open" — the counted cash, the
+  // expected cash and the variance they had just produced gone from the
+  // screen before they could read them. The mutation's own result is
+  // the closed shift, so it stays up until they are done with it.
+  const justClosed = closeShift.data;
+  if (!shift && justClosed) {
+    return (
+      <div className="col" style={{ maxWidth: 520 }}>
+        <h1 style={{ margin: 0 }}>Shift #{justClosed.id} closed</h1>
+        <div className="card col">
+          <h3 style={{ margin: 0 }}>Cash reconciliation</h3>
+          <div className="total-line">
+            <span>Expected in the drawer</span>
+            <Money minor={justClosed.expectedCashMinor} />
+          </div>
+          <div className="total-line">
+            <span>Counted</span>
+            <Money minor={justClosed.countedCashMinor} />
+          </div>
+          <div className="total-line grand" style={{ color: justClosed.varianceMinor === 0 ? 'var(--success)' : 'var(--warn)' }}>
+            <span>{justClosed.varianceMinor === 0 ? 'Variance — none' : 'Variance'}</span>
+            <Money minor={justClosed.varianceMinor} />
+          </div>
+          <button className="primary big" onClick={() => closeShift.reset()}>
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!shift) {
     return (
       <div className="col" style={{ maxWidth: 520 }}>

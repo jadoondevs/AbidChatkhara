@@ -674,6 +674,32 @@ customer's receipt — and writable only by an admin. `rateBp` is capped
 at 5,000 (50%) at the schema boundary: a typo that turns 5% into 500%
 should be refused where every other implausible number is.
 
+## Payment methods and payment accounts are different tables for a reason
+
+A **method** is what a customer paid with — cash, a wallet, a bank
+transfer, a card. An **account** is where the money went, and one method
+can have several: a restaurant with two Easypaisa wallets has one method
+and two accounts.
+
+The method table still carries `account_title`, `account_number`,
+`bank_name`, `instructions_line` and `print_on_bill` from before
+accounts existed. They are superseded and no longer read or written
+(migration 0019) — they remain only because dropping a column in SQLite
+rewrites the table, and 0019's backfill read them.
+
+`payment_account.print_on_receipt` decides whether an account's details
+print for a customer to pay into, and is **independent of `active`**.
+The old per-method flag meant hiding one wallet from a ticket required
+deactivating it, which stops the till using it; "live but not
+advertised" is a real configuration and now has a representation. See
+docs/decisions/022.
+
+Every payment stores what the method and the account were CALLED when
+the money arrived, and whether that account was printing then. The
+`payment_account_id` link stays for reports that group by account; what
+is printed and displayed comes from the snapshot, so correcting an
+account holder's name never rewrites a receipt handed over months ago.
+
 ## Payment accounts
 
 `payment_method` has always carried a single `account_title`/
@@ -779,6 +805,15 @@ exactly what happened during that one shift.
   while any order is still open or awaiting payment, listing which
   ones") — `shifts/routes.ts` maps it to a 422 with that list in the
   response body, not just a count.
+- **And the same list is a query, not only a rejection.**
+  `GET /api/shifts/:id/blocking-orders` answers it before the attempt,
+  and each entry carries `lineCount` so the screen can offer to delete
+  the ones that were never orders. The till used to learn about
+  blockers only from a 422 and keep them in component state, so
+  clearing one — deleting an empty order, taking the last payment —
+  left it displaying a snapshot of a request that had since become
+  wrong. Read live, deleting the last empty order removes the blocker
+  and enables the close, because the server stops returning it.
 - **Expected cash is opening float plus every unreversed *cash* payment**
   against an order this shift owns — wallet/bank payments never count
   (they're not physical cash in the drawer), and a cash refund is

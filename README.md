@@ -134,8 +134,9 @@ loads more than the window asked for.
 
 The **floor** stays the live board: open orders, awaiting payment, and
 a short tail of completed ones. An open order with nothing on it can be
-deleted there (and from the shift-close list, which is where an empty
-order actually gets in the way) — with a confirmation, and only when it
+deleted there and from the shift-close list — where the blocker
+disappears and **Count and close** becomes available the moment the
+server confirms the deletion, with no reload — with a confirmation, and only when it
 has no items, no payment and no figures at all. Anything real is
 refused by the server whoever asks; those are voided or refunded, never
 deleted. See `docs/decisions/021`.
@@ -168,7 +169,26 @@ reassign what they own, and the confirmation says so, with a count.
 Ownership splits still apply **from now forward only**: past sales keep
 the shares they were allocated under (`docs/decisions/006`).
 
-### Payment accounts
+### Payment methods and payment accounts
+
+Two different things, in two Settings tabs:
+
+- **Payment methods** are what a customer can pay *with* — Cash,
+  Easypaisa, Bank transfer, Card. A name, a code, a type, and whether
+  it is active. Add, edit, deactivate and reactivate them there.
+  Nothing about a receiving account appears on that screen.
+- **Payment accounts** are where the money *goes*. One method can have
+  several: two Easypaisa wallets are one method and two accounts.
+
+Each account has a **Prints on receipt** setting that is independent of
+whether it is active. An account can take payments without its details
+being printed for customers to pay into — hiding it from the ticket does
+not stop the till using it, which is exactly what the old per-method
+flag forced. See `docs/decisions/022`.
+
+A payment records the method and account names as they were when the
+money arrived, so editing an account later never rewrites a receipt or
+an order record from before the edit.
 
 Easypaisa and bank payments have to say **which** of the restaurant's
 accounts received the money, so each non-cash method needs at least one
