@@ -222,7 +222,10 @@ describe('configurable branding', () => {
   it('uses the receipt header name in preference to the restaurant name', () => {
     const receipt = { ...defaultsFor('receipt'), headerName: 'Demo Karahi House — Branch 2' };
     const text = bill({ branding: { restaurant, receipt } });
-    expect(text).toContain('Demo Karahi House — Branch 2');
+    // The em dash an admin typed arrives as a hyphen: a thermal
+    // printer decodes one byte against a code page, and the
+    // alternative is two random glyphs where the dash should be.
+    expect(text).toContain('Demo Karahi House - Branch 2');
   });
 
   it('prints the configured footer message and note', () => {

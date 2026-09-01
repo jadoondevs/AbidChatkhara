@@ -13,6 +13,7 @@ import {
   createPaymentMethod,
   listPaymentAccounts,
   listPaymentMethods,
+  PaymentMethodError,
   recordPayment,
   refundOrder,
   settleConsumption,
@@ -703,6 +704,43 @@ describe('billing/service', () => {
 
       const settled = await settleConsumption(ctx.db, order.id, { paymentMethodId: easypaisa.id }, actor);
       expect(settled.payment?.paymentAccountId).toBe(account.id);
+    });
+  });
+
+  describe('createPaymentMethod — a code is an identifier, not free text', () => {
+    it('refuses a code that is already taken, with a sentence an admin can act on', async () => {
+      const { actor } = await setupBase();
+
+      // setupBase already created "easypaisa". This used to be a raw
+      // UNIQUE violation, i.e. "Internal Server Error" on the screen
+      // and nothing to act on.
+      await expect(
+        createPaymentMethod(ctx.db, { code: 'easypaisa', displayName: 'Easypaisa 2', kind: 'wallet' }, actor),
+      ).rejects.toThrow(PaymentMethodError);
+    });
+
+    it('says to reactivate rather than duplicate when the clash is inactive', async () => {
+      const { actor } = await setupBase();
+      const method = await createPaymentMethod(ctx.db, { code: 'card', displayName: 'Card', kind: 'card' }, actor);
+      await updatePaymentMethod(ctx.db, method.id, { active: false }, actor);
+
+      await expect(createPaymentMethod(ctx.db, { code: 'card', displayName: 'Card', kind: 'card' }, actor)).rejects.toThrow(/reactivate/);
+    });
+
+    it('normalises the code, so "JazzCash " and "jazzcash" are the same method', async () => {
+      const { actor } = await setupBase();
+      const created = await createPaymentMethod(ctx.db, { code: '  JazzCash ', displayName: 'JazzCash', kind: 'wallet' }, actor);
+      expect(created.code).toBe('jazzcash');
+      await expect(createPaymentMethod(ctx.db, { code: 'jazzcash', displayName: 'Again', kind: 'wallet' }, actor)).rejects.toThrow(
+        PaymentMethodError,
+      );
+    });
+
+    it('refuses a blank code instead of storing one', async () => {
+      const { actor } = await setupBase();
+      await expect(createPaymentMethod(ctx.db, { code: '   ', displayName: 'Nameless', kind: 'cash' }, actor)).rejects.toThrow(
+        /needs a code/,
+      );
     });
   });
 });

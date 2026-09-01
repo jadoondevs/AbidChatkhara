@@ -313,6 +313,9 @@ export async function listOrders(db: Kysely<Database>, opts: ListOrdersOptions =
 export interface FloorOrder extends OrderSummary {
   readonly paidMinor: Paisa;
   readonly balanceMinor: Paisa;
+  /** Item lines on the order, voided ones included. Zero is what makes
+   * an order deletable rather than voidable — see `deleteEmptyOrder`. */
+  readonly lineCount: number;
 }
 
 export interface FloorBoard {
@@ -348,14 +351,30 @@ export async function getFloorBoard(db: Kysely<Database>, opts: FloorBoardOption
     .execute();
 
   const rows = [...live, ...completedRows];
-  const paidByOrder = await paidTotals(
-    db,
-    rows.map((row) => row.id),
-  );
+  const orderIds = rows.map((row) => row.id);
+  const paidByOrder = await paidTotals(db, orderIds);
+
+  // One grouped count for the whole board, so the floor can offer to
+  // delete an order that never became one without a query per row.
+  const lineCounts = new Map<number, number>();
+  if (orderIds.length > 0) {
+    const counted = await db
+      .selectFrom('order_line')
+      .select(({ fn }) => ['order_id as orderId', fn.count<number>('id').as('lines')])
+      .where('order_id', 'in', orderIds)
+      .groupBy('order_id')
+      .execute();
+    for (const row of counted) lineCounts.set(row.orderId, Number(row.lines));
+  }
 
   const decorate = (row: OrderRow): FloorOrder => {
     const paidMinor = paidByOrder.get(row.id) ?? paisa(0);
-    return { ...toOrderSummary(row), paidMinor, balanceMinor: sub(row.total_minor, paidMinor) };
+    return {
+      ...toOrderSummary(row),
+      paidMinor,
+      balanceMinor: sub(row.total_minor, paidMinor),
+      lineCount: lineCounts.get(row.id) ?? 0,
+    };
   };
 
   return {
@@ -984,6 +1003,71 @@ export async function setLineQty(
   });
 }
 
+/**
+ * Remove an order that never became one.
+ *
+ * A till accumulates these: a table opened by mistake, an order started
+ * for a customer who walked out, a double-tap on "New order". They are
+ * not transactions — nothing was ordered, nothing was billed, nothing
+ * was paid — but they sit on the floor at Rs 0.00 and, because a shift
+ * cannot close while any order is still open, they hold the day open at
+ * midnight.
+ *
+ * Voiding them would be the wrong record: a void says "this happened
+ * and was cancelled", and nothing happened here. So the row goes, and
+ * the audit log keeps the fact that it went, by whom, from where.
+ *
+ * Every condition below is checked here rather than in a route, because
+ * "genuinely empty" is the whole of the safety and it must hold for any
+ * caller. A single line — even a voided one — a single payment, a
+ * single non-zero figure, or any status other than `open` means this is
+ * a record of something, and records are not deleted (see
+ * docs/decisions/021).
+ */
+export async function deleteEmptyOrder(db: Kysely<Database>, orderId: number, actor: OrderActor): Promise<void> {
+  await db.transaction().execute(async (trx) => {
+    const order = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirst();
+    if (!order) throw new Error(`order ${orderId} not found`);
+
+    if (order.status !== 'open') {
+      throw new OrderStateError(
+        `order ${orderId} is ${order.status} — only an order that was never billed or paid can be deleted, and this one is part of the record`,
+      );
+    }
+
+    const lines = await trx.selectFrom('order_line').select('id').where('order_id', '=', orderId).execute();
+    if (lines.length > 0) {
+      throw new OrderStateError(
+        `order ${orderId} has ${lines.length} item line(s) — remove them first, or void the order if it needs to stay on the record`,
+      );
+    }
+
+    const payments = await trx.selectFrom('payment').select('id').where('order_id', '=', orderId).execute();
+    if (payments.length > 0) {
+      throw new OrderStateError(`order ${orderId} has money recorded against it and cannot be deleted`);
+    }
+
+    // Belt and braces: an order with no lines should have no figures
+    // either, and if it somehow does, that is not something to delete.
+    if (order.subtotal_minor !== 0 || order.total_minor !== 0 || order.order_discount_minor !== 0 || order.service_charge_minor !== 0) {
+      throw new OrderStateError(`order ${orderId} carries financial figures and cannot be deleted`);
+    }
+
+    // Audited BEFORE the delete: the audit row is the only thing that
+    // will remain, so it carries what the order was.
+    await recordAudit(trx, {
+      actorId: actor.actorId,
+      terminalId: actor.terminalId,
+      action: 'order.delete_empty',
+      entity: 'order',
+      entityId: orderId,
+      before: toOrderSummary(order),
+    });
+
+    await trx.deleteFrom('order').where('id', '=', orderId).execute();
+  });
+}
+
 // ---------------------------------------------------------------------
 // Who the order is for, and what the kitchen was told
 // ---------------------------------------------------------------------
@@ -1189,11 +1273,19 @@ export async function computeServiceCharge(
 ): Promise<{ amountMinor: Paisa; rateBp: number | null; displayName: string }> {
   const config = await getSetting(db, 'serviceCharge');
 
+  // A cashier who types an amount has decided what this one bill
+  // carries, and that decision stands whether or not a rate is
+  // configured: the till is where a customer's "add something for the
+  // staff" is answered, and a restaurant that has never configured a
+  // percentage still takes them. The configuration decides what is
+  // charged by DEFAULT, not what a cashier is permitted to charge.
+  //
+  // Two rules survive, because they are not about policy:
+  // a negative charge is not a charge, and a charge with no waiter has
+  // nobody to be paid out to (gratuity/service.ts writes the payout
+  // entry against a waiter id).
   if (override !== undefined) {
     if (override < 0) throw new OrderStateError('service charge cannot be negative');
-    if (override > 0 && !config.enabled) {
-      throw new OrderStateError('service charge is switched off for this restaurant — enable it in Settings first');
-    }
     if (override > 0 && order.waiter_id === null) {
       throw new OrderStateError('service charge requires a waiter; this order has none');
     }

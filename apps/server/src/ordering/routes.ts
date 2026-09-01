@@ -11,6 +11,7 @@ import {
   billOrder,
   ConcurrentModificationError,
   createOrder,
+  deleteEmptyOrder,
   getFloorBoard,
   getOrder,
   listOrders,
@@ -96,6 +97,7 @@ const orderDetailSchema = orderSummarySchema.extend({
 });
 
 const floorOrderSchema = orderSummarySchema.extend({
+  lineCount: z.number().int(),
   paidMinor: z.number().int(),
   balanceMinor: z.number().int(),
 });
@@ -422,6 +424,25 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
    * figures on it are the ones already printed on the customer's own
    * receipt.
    */
+  app.delete(
+    '/api/orders/:id',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        response: { 204: z.null() },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireAuth(request, reply);
+      // Any signed-in user: an order opened by mistake is the cashier's
+      // own mess to clear, and the service refuses anything that is not
+      // genuinely empty whoever asks.
+      await deleteEmptyOrder(db, request.params.id, { actorId: actor.userId, terminalId: actor.terminalId });
+      reply.code(204);
+      return null;
+    },
+  );
+
   app.patch(
     '/api/orders/:id/customer',
     {

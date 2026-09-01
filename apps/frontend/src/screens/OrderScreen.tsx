@@ -17,6 +17,7 @@ import {
 } from '../api/hooks.js';
 import type { MenuItem, Modifier, ModifierGroup, OrderDetail, OrderLine } from '../api/types.js';
 import { ErrorBanner, Loading, ManagerApproval, Modal, Money, QtyInput } from '../components/ui.tsx';
+import { BillPanel } from './BillScreen.tsx';
 
 /**
  * Screen 3: an item grid on the left, the running bill on the right.
@@ -45,6 +46,9 @@ export function OrderScreen(): JSX.Element {
   const menu = useMenu(categoryId ?? undefined);
   const addLine = useAddLine();
   const [configuring, setConfiguring] = useState<MenuItem | null>(null);
+  // The bill is a dialog over this screen, not a page of its own:
+  // reviewing an order's total is a step in taking the order.
+  const [billing, setBilling] = useState(false);
 
   if (order.isLoading) return <Loading />;
   if (order.error) return <ErrorBanner error={order.error} />;
@@ -108,7 +112,21 @@ export function OrderScreen(): JSX.Element {
         )}
       </div>
 
-      <RunningBill order={detail} onBill={() => navigate(`/orders/${detail.id}/bill`)} />
+      <RunningBill order={detail} onBill={() => setBilling(true)} />
+
+      {billing && (
+        <Modal title="" wide onClose={() => setBilling(false)}>
+          <BillPanel
+            orderId={detail.id}
+            onBackToOrder={() => setBilling(false)}
+            // Straight to the till for THIS order — the cashier who
+            // printed the bill is the one about to take the money for
+            // it, and the floor detour in between was pure friction.
+            onPrinted={(id) => navigate(`/orders/${id}/payment`)}
+            onCancelled={() => navigate('/')}
+          />
+        </Modal>
+      )}
 
       {configuring && (
         <ModifierPicker

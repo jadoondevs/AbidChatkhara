@@ -28,6 +28,10 @@ export interface BlockingOrderSummary {
   readonly orderType: OrderType;
   readonly status: OrderStatus;
   readonly tableLabel: string | null;
+  /** Zero means the order never became one: the close is being held up
+   * by a mis-tap, and the till can offer to delete it rather than
+   * leaving the manager to hunt for it on the floor. */
+  readonly lineCount: number;
 }
 
 /** Carries the list of what's blocking a close — the spec's "refuse to
@@ -136,12 +140,26 @@ export async function openShift(db: Kysely<Database>, input: OpenShiftInput, act
 export async function getBlockingOrders(db: Kysely<Database> | Transaction<Database>, shiftId: number): Promise<BlockingOrderSummary[]> {
   const rows = await db
     .selectFrom('order')
-    .select(['id', 'order_type', 'status', 'table_label'])
-    .where('shift_id', '=', shiftId)
-    .where('status', 'in', ['open', 'billed'])
-    .orderBy('id', 'asc')
+    .leftJoin('order_line', 'order_line.order_id', 'order.id')
+    .select(({ fn }) => [
+      'order.id as id',
+      'order.order_type as orderType',
+      'order.status as status',
+      'order.table_label as tableLabel',
+      fn.count<number>('order_line.id').as('lineCount'),
+    ])
+    .where('order.shift_id', '=', shiftId)
+    .where('order.status', 'in', ['open', 'billed'])
+    .groupBy('order.id')
+    .orderBy('order.id', 'asc')
     .execute();
-  return rows.map((r) => ({ id: r.id, orderType: r.order_type, status: r.status, tableLabel: r.table_label }));
+  return rows.map((r) => ({
+    id: r.id,
+    orderType: r.orderType,
+    status: r.status,
+    tableLabel: r.tableLabel,
+    lineCount: Number(r.lineCount),
+  }));
 }
 
 export interface CloseShiftInput {

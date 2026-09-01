@@ -3,9 +3,16 @@ import { useCreatePaymentMethod, usePaymentMethods, useUpdatePaymentMethod } fro
 import type { PaymentMethodKind } from '../api/types.js';
 import { ErrorBanner, Loading } from '../components/ui.tsx';
 
-/** Screen 9: display name, kind, and the account details that print on
- * the bill's payment-options block. */
-export function PaymentMethodConfigScreen(): JSX.Element {
+/**
+ * The ways this restaurant can be paid: display name, kind, and the
+ * account details that print on the bill's payment-options block.
+ *
+ * A panel rather than a screen, and it lives in Settings beside the
+ * accounts those methods receive money into. Two separate places to
+ * configure payment — a top-level screen AND a Settings tab — was one
+ * place too many, and the wrong one was the one that broke.
+ */
+export function PaymentMethodsPanel(): JSX.Element {
   const methods = usePaymentMethods(true);
   const createMethod = useCreatePaymentMethod();
   const updateMethod = useUpdatePaymentMethod();
@@ -43,8 +50,7 @@ export function PaymentMethodConfigScreen(): JSX.Element {
   };
 
   return (
-    <div className="col" style={{ maxWidth: 1000 }}>
-      <h1 style={{ margin: 0 }}>Payment methods</h1>
+    <div className="col settings-panel">
       <ErrorBanner error={createMethod.error ?? updateMethod.error} />
 
       <div className="card">
@@ -130,6 +136,12 @@ export function PaymentMethodConfigScreen(): JSX.Element {
           </div>
         </div>
 
+        {/* The code is the method's stable identifier: payments and
+            reports refer to it, so it is lower-cased and checked for a
+            clash on the server rather than being free text. */}
+        <p className="muted field-hint" style={{ margin: 0 }}>
+          The code identifies this method for good — “easypaisa”, “bank”. The display name is what the cashier sees and can change later.
+        </p>
         <button className="primary" disabled={!code.trim() || !displayName.trim() || createMethod.isPending} onClick={submit}>
           Add method
         </button>

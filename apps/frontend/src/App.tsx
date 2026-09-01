@@ -10,7 +10,6 @@ import { MenuConfigScreen } from './screens/MenuConfigScreen.tsx';
 import { OrderDetailScreen } from './screens/OrderDetailScreen.tsx';
 import { OrderScreen } from './screens/OrderScreen.tsx';
 import { PartnerConfigScreen } from './screens/PartnerConfigScreen.tsx';
-import { PaymentMethodConfigScreen } from './screens/PaymentMethodConfigScreen.tsx';
 import { PaymentScreen } from './screens/PaymentScreen.tsx';
 import { PeopleConfigScreen } from './screens/PeopleConfigScreen.tsx';
 import { ReportsScreen } from './screens/ReportsScreen.tsx';
@@ -41,7 +40,6 @@ const MANAGEMENT = [
   { to: '/reports', label: 'Reports', minimum: 'manager' },
   { to: '/config/menu', label: 'Menu', minimum: 'manager' },
   { to: '/config/partners', label: 'Partners', minimum: 'manager' },
-  { to: '/config/payment-methods', label: 'Payment', minimum: 'manager' },
   { to: '/config/people', label: 'People', minimum: 'manager' },
   { to: '/settings', label: 'Settings', minimum: 'admin' },
 ] as const;
@@ -130,14 +128,11 @@ export function App(): JSX.Element {
               </RoleGate>
             }
           />
-          <Route
-            path="/config/payment-methods"
-            element={
-              <RoleGate minimum="manager">
-                <PaymentMethodConfigScreen />
-              </RoleGate>
-            }
-          />
+          {/* Payment configuration lives in one place now — Settings,
+              beside the accounts the money lands in. The old path still
+              resolves so a bookmark or a muscle-memory URL lands there
+              rather than nowhere. */}
+          <Route path="/config/payment-methods" element={<Navigate to="/settings" replace />} />
           <Route
             path="/config/people"
             element={

@@ -1,8 +1,20 @@
-import { useNavigate } from 'react-router-dom';
-import { useFloorBoard, useOpenShift, useRoster } from '../api/hooks.js';
-import type { FloorOrder } from '../api/types.js';
-import { ErrorBanner, Loading, Money, elapsedSince } from '../components/ui.tsx';
-import { orderTitle } from './OrderScreen.tsx';
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  useDeleteEmptyOrder,
+  useFloorBoard,
+  useOpenShift,
+  useRoster,
+} from "../api/hooks.js";
+import type { FloorOrder } from "../api/types.js";
+import {
+  ErrorBanner,
+  Loading,
+  Modal,
+  Money,
+  elapsedSince,
+} from "../components/ui.tsx";
+import { orderTitle } from "./OrderScreen.tsx";
 
 /**
  * Screen 2, the home screen: three live lists, in the order work moves
@@ -24,15 +36,19 @@ export function FloorScreen(): JSX.Element {
   const navigate = useNavigate();
   const board = useFloorBoard();
   const openShift = useOpenShift();
+  const deleteOrder = useDeleteEmptyOrder();
+  const [deleting, setDeleting] = useState<FloorOrder | null>(null);
 
   return (
     <div className="col floor">
       <div className="row">
         <h1 style={{ margin: 0, flex: 1 }}>Floor</h1>
-        {openShift.data === null && <span className="pill warn">No shift open</span>}
+        {openShift.data === null && (
+          <span className="pill warn">No shift open</span>
+        )}
       </div>
 
-      <ErrorBanner error={board.error} />
+      <ErrorBanner error={board.error ?? deleteOrder.error} />
 
       <div className="floor-board">
         <OrderList
@@ -42,6 +58,7 @@ export function FloorScreen(): JSX.Element {
           orders={board.data?.open}
           loading={board.isLoading}
           onOpen={(order) => navigate(`/orders/${order.id}`)}
+          onDelete={setDeleting}
         />
         <OrderList
           title="Awaiting payment"
@@ -63,6 +80,37 @@ export function FloorScreen(): JSX.Element {
           onOpen={(order) => navigate(`/orders/${order.id}/detail`)}
         />
       </div>
+      {deleting && (
+        <Modal title="Delete empty order?" onClose={() => setDeleting(null)}>
+          <div className="col">
+            <p style={{ margin: 0 }}>
+              {orderTitle(deleting)}{" "}
+              <span className="muted">#{deleting.id}</span> has no items on it.
+            </p>
+            <p className="muted" style={{ margin: 0 }}>
+              It was never billed and nothing was paid, so there is no record to
+              keep. Removing it also stops it holding the shift open.
+            </p>
+            <div className="row">
+              <button className="ghost" onClick={() => setDeleting(null)}>
+                Cancel
+              </button>
+              <span style={{ flex: 1 }} />
+              <button
+                className="danger big"
+                disabled={deleteOrder.isPending}
+                onClick={() =>
+                  deleteOrder.mutate(deleting.id, {
+                    onSuccess: () => setDeleting(null),
+                  })
+                }
+              >
+                {deleteOrder.isPending ? "Deleting…" : "Delete order"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -74,16 +122,21 @@ function OrderList({
   orders,
   loading,
   onOpen,
+  onDelete,
 }: {
   title: string;
   subtitle: string;
-  tone: 'open' | 'awaiting' | 'done';
+  tone: "open" | "awaiting" | "done";
   orders: FloorOrder[] | undefined;
   loading: boolean;
   onOpen: (order: FloorOrder) => void;
+  /** Only passed for the open list: an order with anything on it is a
+   * record, and records are voided, never deleted. */
+  onDelete?: ((order: FloorOrder) => void) | undefined;
 }): JSX.Element {
   const roster = useRoster();
-  const waiterName = (id: number | null) => roster.data?.find((user) => user.id === id)?.name ?? null;
+  const waiterName = (id: number | null) =>
+    roster.data?.find((user) => user.id === id)?.name ?? null;
 
   return (
     <section className={`card floor-list floor-list-${tone}`}>
@@ -98,31 +151,65 @@ function OrderList({
 
       <div className="col" style={{ gap: 8 }}>
         {orders?.map((order) => (
-          <button key={order.id} className="order-row" onClick={() => onOpen(order)}>
-            <span className="order-row-main">
-              <strong>{orderTitle(order)}</strong>
-              <span className="muted order-row-id">#{order.id}</span>
-              {order.channel !== 'customer' && <span className="pill staff">{order.channel === 'staff_meal' ? 'Staff' : 'Owner'}</span>}
-              {order.waiterId !== null && <span className="muted">{waiterName(order.waiterId) ?? `waiter ${order.waiterId}`}</span>}
-            </span>
-
-            <span className="order-row-money">
-              {tone === 'awaiting' && order.paidMinor > 0 ? (
-                // A part-paid bill must not look like an untouched one:
-                // what is still owed is the number the cashier needs.
-                <>
-                  <span className="pill part-paid">Part paid</span>
-                  <span>
-                    <Money minor={order.balanceMinor} /> <span className="muted">left</span>
+          <div key={order.id} className="order-row-wrap">
+            {/* The delete affordance sits OUTSIDE the row button: a
+                nested button is not clickable, and a stray tap on a
+                real order's row must never remove anything. */}
+            {onDelete && order.lineCount === 0 && (
+              <button
+                className="ghost order-row-delete"
+                title="Delete this empty order"
+                aria-label={`Delete empty order ${order.id}`}
+                onClick={() => onDelete(order)}
+              >
+                ✕
+              </button>
+            )}
+            <button className="order-row" onClick={() => onOpen(order)}>
+              <span className="order-row-main">
+                <strong>{orderTitle(order)}</strong>
+                <span className="muted order-row-id">#{order.id}</span>
+                {order.channel !== "customer" && (
+                  <span className="pill staff">
+                    {order.channel === "staff_meal" ? "Staff" : "Owner"}
                   </span>
-                </>
-              ) : (
-                <Money minor={order.status === 'open' ? order.subtotalMinor : order.totalMinor} />
-              )}
-              {tone === 'done' && order.invoiceNo !== null && <span className="muted">#{order.invoiceNo}</span>}
-              {tone !== 'done' && <span className="muted">{elapsedSince(order.openedAt)}</span>}
-            </span>
-          </button>
+                )}
+                {order.waiterId !== null && (
+                  <span className="muted">
+                    {waiterName(order.waiterId) ?? `waiter ${order.waiterId}`}
+                  </span>
+                )}
+              </span>
+
+              <span className="order-row-money">
+                {tone === "awaiting" && order.paidMinor > 0 ? (
+                  // A part-paid bill must not look like an untouched one:
+                  // what is still owed is the number the cashier needs.
+                  <>
+                    <span className="pill part-paid">Part paid</span>
+                    <span>
+                      <Money minor={order.balanceMinor} />{" "}
+                      <span className="muted">left</span>
+                    </span>
+                  </>
+                ) : (
+                  <Money
+                    minor={
+                      order.status === "open"
+                        ? order.subtotalMinor
+                        : order.totalMinor
+                    }
+                  />
+                )}
+                {tone === "done" && order.invoiceNo !== null && (
+                  <span className="muted">#{order.invoiceNo}</span>
+                )}
+                {tone !== "done" && (
+                  <span className="muted">{elapsedSince(order.openedAt)}</span>
+                )}
+              </span>
+            </button>
+          </div>
         ))}
       </div>
     </section>

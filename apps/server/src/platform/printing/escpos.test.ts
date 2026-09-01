@@ -2,9 +2,33 @@ import { describe, expect, it } from 'vitest';
 import { ReceiptBuilder } from './escpos.js';
 
 describe('ReceiptBuilder', () => {
-  it('init emits ESC @', () => {
+  it('init resets, then selects Font A, code page 437, and emphasis', () => {
+    // Emphasis is not decoration: without it a thermal head prints
+    // grey, which is the "the printer must be broken" complaint.
     const buf = new ReceiptBuilder().init().build();
-    expect(buf).toEqual(Buffer.from([0x1b, 0x40]));
+    expect(buf).toEqual(Buffer.from([0x1b, 0x40, 0x1b, 0x4d, 0x00, 0x1b, 0x74, 0x00, 0x1b, 0x45, 0x01]));
+  });
+
+  it('bold(false) returns to the ticket base rather than going light', () => {
+    const buf = new ReceiptBuilder().init().bold(true).bold(false).build();
+    // The last two emphasis commands are both "on": nothing on a
+    // receipt should print lighter than the receipt itself.
+    expect(buf.subarray(-6)).toEqual(Buffer.from([0x1b, 0x45, 0x01, 0x1b, 0x45, 0x01]));
+  });
+
+  it('bold(false) on a builder with no init is plain off', () => {
+    expect(new ReceiptBuilder().bold(false).build()).toEqual(Buffer.from([0x1b, 0x45, 0]));
+  });
+
+  it('transliterates typographic characters a code page cannot render', () => {
+    const buf = new ReceiptBuilder().line('Voided \u2014 "spilled" \u2026 2 \u00d7 Karahi').build();
+    expect(buf.toString('utf8')).toBe('Voided - "spilled" ... 2 x Karahi\n');
+  });
+
+  it('passes other non-ASCII through rather than replacing it', () => {
+    // A restaurant's own item name is not this module's to censor.
+    const buf = new ReceiptBuilder().line('Kar\u0101hi').build();
+    expect(buf.toString('utf8')).toBe('Kar\u0101hi\n');
   });
 
   it('align emits ESC a n for left/center/right', () => {
@@ -41,9 +65,8 @@ describe('ReceiptBuilder', () => {
   });
 
   it('chains commands in call order, concatenated', () => {
-    const buf = new ReceiptBuilder().init().align('center').bold(true).line('Restaurant').bold(false).cut().build();
+    const buf = new ReceiptBuilder().align('center').bold(true).line('Restaurant').bold(false).cut().build();
     const expected = Buffer.concat([
-      Buffer.from([0x1b, 0x40]),
       Buffer.from([0x1b, 0x61, 1]),
       Buffer.from([0x1b, 0x45, 1]),
       Buffer.from('Restaurant', 'utf8'),

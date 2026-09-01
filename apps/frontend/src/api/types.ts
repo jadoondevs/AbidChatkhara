@@ -147,6 +147,9 @@ export interface OrderSummary {
 }
 
 export interface FloorOrder extends OrderSummary {
+  /** Item lines, voided ones included. Zero means the order never
+   * became one and can be deleted rather than voided. */
+  lineCount: number;
   paidMinor: Paisa;
   balanceMinor: Paisa;
 }
@@ -432,6 +435,8 @@ export interface BlockingOrder {
   orderType: string;
   status: string;
   tableLabel: string | null;
+  /** Zero means it can be deleted rather than worked through. */
+  lineCount: number;
 }
 
 export interface ZReport {

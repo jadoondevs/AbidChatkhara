@@ -11,13 +11,79 @@ const GS = 0x1d;
 
 export type Align = 'left' | 'center' | 'right';
 
+/**
+ * Typographic characters this system's own strings contain, mapped to
+ * what a thermal printer's single-byte code page can actually render.
+ *
+ * A receipt printer is not a browser: it decodes one byte at a time
+ * against a code page, so an em dash sent as UTF-8 arrives as two or
+ * three random glyphs. These are all characters the POS itself
+ * produces — in settings text, in "Voided — reason", in the masked
+ * account number — so they are worth translating rather than leaving
+ * to be printed as noise.
+ */
+const TRANSLITERATIONS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/[‐-―]/g, '-'], // hyphens and dashes
+  [/[‘’‛]/g, "'"],
+  [/[“”‟]/g, '"'],
+  [/…/g, '...'],
+  [/[×✕]/g, 'x'],
+  [/[•●]/g, '*'],
+  [/₨|₹/g, 'Rs'],
+  [/\u00a0/g, ' '], // a non-breaking space is not a space to a printer
+];
+
+/**
+ * Text as bytes the printer will render.
+ *
+ * Anything still non-ASCII after transliteration is passed through as
+ * UTF-8 rather than dropped: a printer configured for a multi-byte code
+ * page can render it, and silently replacing a restaurant's own item
+ * name with question marks would be worse than a glyph that might not
+ * land.
+ */
+export function encodeTicketText(text: string): Buffer {
+  let out = text;
+  for (const [pattern, replacement] of TRANSLITERATIONS) out = out.replace(pattern, replacement);
+  return Buffer.from(out, 'utf8');
+}
+
 /** Accumulates ESC/POS commands and renders them to one Buffer. */
 export class ReceiptBuilder {
   private readonly chunks: Buffer[] = [];
 
-  /** Printer reset — always the first command on a fresh ticket. */
+  /**
+   * Whether ordinary text on this ticket is emphasised. Set by `init`,
+   * because emphasis is what makes a thermal receipt readable — see the
+   * note there.
+   */
+  private baseEmphasis = false;
+
+  /**
+   * Printer reset, then the three settings that decide whether the
+   * ticket is readable at all.
+   *
+   * `ESC @` alone leaves the printer on ITS defaults, which on cheap
+   * hardware means the small Font B and no emphasis — the thin, grey
+   * output that sends people looking for a hardware fault. So:
+   *
+   *  - `ESC M 0` selects Font A (12x24 rather than Font B's 9x17):
+   *    bigger, and every glyph is drawn with more dots.
+   *  - `ESC E 1` turns emphasis on for the whole ticket. On a thermal
+   *    printer emphasis means each dot is struck harder, which is the
+   *    standard way to get black rather than grey. `bold()` still
+   *    exists for headings, and `bold(false)` returns to this base
+   *    rather than clearing it — nothing on a receipt should be
+   *    lighter than the receipt.
+   *  - `ESC t 0` selects code page 437, so the single-byte characters
+   *    `encodeTicketText` produces decode to the glyphs intended.
+   */
   init(): this {
     this.chunks.push(Buffer.from([ESC, 0x40]));
+    this.chunks.push(Buffer.from([ESC, 0x4d, 0x00]));
+    this.chunks.push(Buffer.from([ESC, 0x74, 0x00]));
+    this.baseEmphasis = true;
+    this.chunks.push(Buffer.from([ESC, 0x45, 1]));
     return this;
   }
 
@@ -27,8 +93,13 @@ export class ReceiptBuilder {
     return this;
   }
 
+  /**
+   * Extra weight for a heading. Turning it off returns to the ticket's
+   * base emphasis, so an ordinary line after a bold one is still dark.
+   */
   bold(on: boolean): this {
-    this.chunks.push(Buffer.from([ESC, 0x45, on ? 1 : 0]));
+    const emphasised = on || this.baseEmphasis;
+    this.chunks.push(Buffer.from([ESC, 0x45, emphasised ? 1 : 0]));
     return this;
   }
 
@@ -38,12 +109,10 @@ export class ReceiptBuilder {
     return this;
   }
 
-  /** A line of text, UTF-8 encoded, terminated with a line feed. Most
-   * thermal printers handle UTF-8 for at least the Latin range this
-   * system needs (English item names, PKR amounts); a printer that
-   * doesn't is a hardware/firmware concern outside this module's scope. */
+  /** A line of text terminated with a line feed. See
+   * `encodeTicketText` for how it reaches the printer. */
   line(text: string = ''): this {
-    this.chunks.push(Buffer.from(text, 'utf8'));
+    this.chunks.push(encodeTicketText(text));
     this.chunks.push(Buffer.from([0x0a]));
     return this;
   }

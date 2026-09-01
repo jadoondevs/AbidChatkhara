@@ -17,6 +17,7 @@ import {
   listPaymentMethods,
   methodRequiresAccount,
   PaymentAccountError,
+  PaymentMethodError,
   recordPayment,
   refundOrder,
   settleConsumption,
@@ -169,7 +170,7 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
       reply.code(409).send({ error: error.message });
       return;
     }
-    if (error instanceof OrderStateError || error instanceof PaymentAccountError) {
+    if (error instanceof OrderStateError || error instanceof PaymentAccountError || error instanceof PaymentMethodError) {
       reply.code(422).send({ error: error.message });
       return;
     }
