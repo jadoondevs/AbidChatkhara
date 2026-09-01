@@ -174,6 +174,9 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
           <button disabled={printReceipt.isPending} onClick={() => printReceipt.mutate(orderId, { onSuccess: (via) => setPrintedVia(via) })}>
             Reprint receipt
           </button>
+          {/* The full record is one click away rather than something a
+              cashier has to go back to the floor to find. */}
+          <button onClick={() => navigate(`/orders/${orderId}/detail`)}>Order details</button>
           <button className="primary big" autoFocus onClick={() => navigate('/')}>
             Back to floor
           </button>
@@ -372,9 +375,12 @@ function ConsumptionSettlement({ orderId }: { orderId: number }): JSX.Element {
       <div className="card col" style={{ maxWidth: 560 }}>
         <h2 style={{ margin: 0 }}>Meal settled</h2>
         <p>Invoice #{detail.invoiceNo}</p>
-        <button className="primary big" onClick={() => navigate('/')}>
-          Back to floor
-        </button>
+        <div className="row">
+          <button onClick={() => navigate(`/orders/${orderId}/detail`)}>Order details</button>
+          <button className="primary big" onClick={() => navigate('/')}>
+            Back to floor
+          </button>
+        </div>
       </div>
     );
   }

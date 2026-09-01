@@ -8,11 +8,14 @@ import type {
   Category,
   FloorBoard,
   PaymentAccount,
+  OrderHistory,
+  PartnerRecord,
   PaymentOption,
   PrintOutcome,
   PrinterSettings,
   ReceiptSettings,
   RestaurantSettings,
+  ServiceChargeSettings,
   Role,
   RosterEntry,
   ConsumptionReport,
@@ -148,13 +151,27 @@ export function useFloorBoard(): UseQueryResult<FloorBoard> {
   });
 }
 
+/** The complete record of one order, as it happened — see the server's
+ * getOrderHistory. Read-only; opening an order changes nothing. */
+export function useOrderHistory(orderId: number | null): UseQueryResult<OrderHistory> {
+  return useQuery({
+    queryKey: ['order-history', orderId],
+    queryFn: () => api.get<OrderHistory>(`/api/orders/${orderId}/history`),
+    enabled: orderId !== null,
+  });
+}
+
 /** What this order WILL total if billed with the given service charge —
  * computed by the same server code that will do the billing, so the
  * figure on screen is the figure that prints. */
-export function useBillPreview(orderId: number | null, serviceChargeMinor: Paisa): UseQueryResult<BillTotals> {
+export function useBillPreview(orderId: number | null, serviceChargeMinor?: Paisa): UseQueryResult<BillTotals> {
   return useQuery({
-    queryKey: ['bill-preview', orderId, serviceChargeMinor],
-    queryFn: () => api.get<BillTotals>(`/api/orders/${orderId}/bill-preview${query({ serviceChargeMinor })}`),
+    queryKey: ['bill-preview', orderId, serviceChargeMinor ?? null],
+    queryFn: () =>
+      // No override means "what would the configured rule charge?",
+      // which is what the bill screen asks before a cashier touches
+      // anything.
+      api.get<BillTotals>(`/api/orders/${orderId}/bill-preview${query(serviceChargeMinor === undefined ? {} : { serviceChargeMinor })}`),
     enabled: orderId !== null,
   });
 }
@@ -535,6 +552,21 @@ export function useCreatePartner(): UseMutationResult<Partner, Error, { name: st
   return useMutation({ mutationFn: (body) => api.post<Partner>('/api/partners', body), onSuccess: invalidate });
 }
 
+export function useUpdatePartner(): UseMutationResult<Partner, Error, { id: number; name?: string; active?: boolean }> {
+  const invalidate = useInvalidateOnSuccess(['partners', 'partner-record']);
+  return useMutation({ mutationFn: ({ id, ...body }) => api.patch<Partner>(`/api/partners/${id}`, body), onSuccess: invalidate });
+}
+
+/** What a partner owns today, and what they have actually been credited
+ * — at the share each sale was written at. */
+export function usePartnerRecord(partnerId: number | null): UseQueryResult<PartnerRecord> {
+  return useQuery({
+    queryKey: ['partner-record', partnerId],
+    queryFn: () => api.get<PartnerRecord>(`/api/partners/${partnerId}/record`),
+    enabled: partnerId !== null,
+  });
+}
+
 export function useOpenShiftMutation(): UseMutationResult<Shift, Error, { openingCashMinor: Paisa }> {
   const invalidate = useInvalidateOnSuccess(['shift']);
   return useMutation({ mutationFn: (body) => api.post<Shift>('/api/shifts', body), onSuccess: invalidate });
@@ -573,6 +605,19 @@ export function usePrinterSettings(enabled: boolean): UseQueryResult<PrinterSett
 export function useSaveRestaurantSettings(): UseMutationResult<RestaurantSettings, Error, RestaurantSettings> {
   const invalidate = useInvalidateOnSuccess(['settings']);
   return useMutation({ mutationFn: (body) => api.put<RestaurantSettings>('/api/settings/restaurant', body), onSuccess: invalidate });
+}
+
+export function useServiceChargeSettings(): UseQueryResult<ServiceChargeSettings> {
+  return useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<AppSettings>('/api/settings'),
+    select: (settings) => settings.serviceCharge,
+  });
+}
+
+export function useSaveServiceChargeSettings(): UseMutationResult<ServiceChargeSettings, Error, ServiceChargeSettings> {
+  const invalidate = useInvalidateOnSuccess(['settings', 'bill-preview', 'order']);
+  return useMutation({ mutationFn: (body) => api.put<ServiceChargeSettings>('/api/settings/service-charge', body), onSuccess: invalidate });
 }
 
 export function useSaveReceiptSettings(): UseMutationResult<ReceiptSettings, Error, ReceiptSettings> {

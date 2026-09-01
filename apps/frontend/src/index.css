@@ -835,3 +835,75 @@ th.num {
   border-top: none;
   padding-top: 0;
 }
+
+/* ---------------------------------------------------------------
+   The historical order record (OrderDetailScreen).
+
+   Two columns on a desk-sized screen — "what this order was" beside
+   "what it came to" — collapsing to one on a narrow till. Everything
+   below runs full width because items and payments are lists, not
+   summaries.
+   --------------------------------------------------------------- */
+.order-detail .detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .order-detail .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Label left, value right, on one line each. The label is allowed to
+   wrap; the value is not, so a time or an amount stays readable. */
+.detail-field {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-field:last-child {
+  border-bottom: none;
+}
+
+.detail-field > span:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Modifiers and void notes hang under the item they belong to rather
+   than taking a row of their own — the eye should read one line per
+   thing that was ordered. */
+.line-modifiers {
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+/* One payment: amount and method on top, the trail underneath. Each
+   payment is a box because a bill settled with cash plus a wallet is
+   two separate events, and running them together loses which
+   reference belonged to which. */
+.payment-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 10px 12px;
+}
+
+/* A refund is money going the other way and must not be mistaken for
+   a payment at a glance. */
+.payment-card.refund {
+  border-left-color: var(--danger);
+}
+
+.payment-card-details {
+  font-size: 13px;
+  margin-top: 6px;
+  display: grid;
+  gap: 2px;
+}

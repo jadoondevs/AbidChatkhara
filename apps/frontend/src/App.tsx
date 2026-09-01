@@ -7,6 +7,7 @@ import { BillScreen } from './screens/BillScreen.tsx';
 import { FloorScreen } from './screens/FloorScreen.tsx';
 import { LoginScreen } from './screens/LoginScreen.tsx';
 import { MenuConfigScreen } from './screens/MenuConfigScreen.tsx';
+import { OrderDetailScreen } from './screens/OrderDetailScreen.tsx';
 import { OrderScreen } from './screens/OrderScreen.tsx';
 import { PartnerConfigScreen } from './screens/PartnerConfigScreen.tsx';
 import { PaymentMethodConfigScreen } from './screens/PaymentMethodConfigScreen.tsx';
@@ -101,6 +102,7 @@ export function App(): JSX.Element {
           <Route path="/" element={<FloorScreen />} />
           <Route path="/orders/:orderId" element={<OrderScreen />} />
           <Route path="/orders/:orderId/bill" element={<BillScreen />} />
+          <Route path="/orders/:orderId/detail" element={<OrderDetailScreen />} />
           <Route path="/orders/:orderId/payment" element={<PaymentScreen />} />
           <Route path="/staff-meal" element={<StaffMealScreen />} />
           <Route path="/shift" element={<ShiftScreen />} />

@@ -57,7 +57,10 @@ export function FloorScreen(): JSX.Element {
           tone="done"
           orders={board.data?.completed}
           loading={board.isLoading}
-          onOpen={(order) => navigate(`/orders/${order.id}/payment`)}
+          // A settled bill has nothing left to take, so its row opens the
+          // record of what happened — who served it, what was on it, how
+          // it was paid — rather than a till screen with one line on it.
+          onOpen={(order) => navigate(`/orders/${order.id}/detail`)}
         />
       </div>
     </div>

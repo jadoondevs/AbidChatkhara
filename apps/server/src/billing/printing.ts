@@ -5,7 +5,7 @@ import { PrintError, sendToPrinter, type PrinterTarget } from '../platform/print
 import { renderBillHtml, renderReceiptHtml } from './receipt-html.js';
 import type { Database } from '../platform/db/types.js';
 import { getAllSettings } from '../settings/service.js';
-import type { ReceiptSettings, RestaurantSettings } from '../settings/schema.js';
+import type { ReceiptSettings, RestaurantSettings, ServiceChargeSettings } from '../settings/schema.js';
 
 const RECEIPT_WIDTH = 42; // characters — a standard 80mm thermal printer at font A
 
@@ -56,6 +56,9 @@ export interface BillTicketData {
   readonly discountReason: string | null;
   readonly taxMinor: Paisa;
   readonly serviceChargeMinor: Paisa;
+  /** What the customer reads for the charge, rate included — worked out
+   * from the rate stored on THIS order, never from today's setting. */
+  readonly serviceChargeLabel: string;
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
   readonly printedAt: string;
@@ -131,7 +134,7 @@ export function renderBillTicket(data: BillTicketData): Buffer {
     b.line(twoColumn(`Discount${data.discountReason ? ` (${data.discountReason})` : ''}`, `-${format(data.discountMinor)}`));
   }
   if (data.taxMinor > 0) b.line(twoColumn('Tax', format(data.taxMinor)));
-  if (data.serviceChargeMinor > 0) b.line(twoColumn('Service charge', format(data.serviceChargeMinor)));
+  if (data.serviceChargeMinor > 0) b.line(twoColumn(data.serviceChargeLabel, format(data.serviceChargeMinor)));
   if (data.roundingAdjustmentMinor !== 0) b.line(twoColumn('Rounding', format(data.roundingAdjustmentMinor)));
   b.rule();
   b.bold(true).line(twoColumn('TOTAL', format(data.totalMinor))).bold(false);
@@ -175,6 +178,7 @@ export interface ReceiptTicketData {
   readonly discountMinor: Paisa;
   readonly taxMinor: Paisa;
   readonly serviceChargeMinor: Paisa;
+  readonly serviceChargeLabel: string;
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
   readonly payments: readonly PaymentLine[];
@@ -210,7 +214,7 @@ export function renderReceiptTicket(data: ReceiptTicketData): Buffer {
   b.line(twoColumn('Subtotal', format(data.subtotalMinor)));
   if (data.discountMinor > 0) b.line(twoColumn('Discount', `-${format(data.discountMinor)}`));
   if (data.taxMinor > 0) b.line(twoColumn('Tax', format(data.taxMinor)));
-  if (data.serviceChargeMinor > 0) b.line(twoColumn('Service charge', format(data.serviceChargeMinor)));
+  if (data.serviceChargeMinor > 0) b.line(twoColumn(data.serviceChargeLabel, format(data.serviceChargeMinor)));
   if (data.roundingAdjustmentMinor !== 0) b.line(twoColumn('Rounding', format(data.roundingAdjustmentMinor)));
   b.rule();
   b.bold(true).line(twoColumn('TOTAL', format(data.totalMinor))).bold(false);
@@ -266,10 +270,28 @@ async function loadTicketLines(db: Kysely<Database>, orderId: number): Promise<T
   }));
 }
 
-/** The configured branding both renderers need, fetched once. */
-async function loadBranding(db: Kysely<Database>): Promise<TicketBranding> {
+/** The configured branding and charge wording both renderers need,
+ * fetched once. */
+async function loadTicketConfig(db: Kysely<Database>): Promise<{ branding: TicketBranding; serviceCharge: ServiceChargeSettings }> {
   const settings = await getAllSettings(db);
-  return { restaurant: settings.restaurant, receipt: settings.receipt };
+  return {
+    branding: { restaurant: settings.restaurant, receipt: settings.receipt },
+    serviceCharge: settings.serviceCharge,
+  };
+}
+
+/**
+ * What to call the service charge on a ticket.
+ *
+ * The wording is the restaurant's current one — renaming "Service
+ * charge" to "Service fee" should change every ticket, including
+ * reprints. The RATE is not: it comes from the order itself, so a
+ * receipt reprinted today for a bill taken when the rate was 5% still
+ * reads 5%. A charge a cashier overrode carries no rate at all,
+ * because no rate produced it.
+ */
+export function serviceChargeLabel(config: ServiceChargeSettings, rateBp: number | null): string {
+  return rateBp === null ? config.displayName : `${config.displayName} (${rateBp / 100}%)`;
 }
 
 export async function buildBillTicketData(db: Kysely<Database>, orderId: number): Promise<BillTicketData> {
@@ -285,8 +307,10 @@ export async function buildBillTicketData(db: Kysely<Database>, orderId: number)
     .orderBy('label', 'asc')
     .execute();
 
+  const config = await loadTicketConfig(db);
+
   return {
-    branding: await loadBranding(db),
+    branding: config.branding,
     orderId: order.id,
     tableLabel: order.table_label,
     orderType: order.order_type,
@@ -297,6 +321,7 @@ export async function buildBillTicketData(db: Kysely<Database>, orderId: number)
     discountReason: order.discount_reason,
     taxMinor: order.tax_minor,
     serviceChargeMinor: order.service_charge_minor,
+    serviceChargeLabel: serviceChargeLabel(config.serviceCharge, order.service_charge_rate_bp),
     roundingAdjustmentMinor: order.rounding_adjustment_minor,
     totalMinor: order.total_minor,
     printedAt: order.billed_at ?? new Date().toISOString(),
@@ -341,8 +366,10 @@ export async function buildReceiptTicketData(db: Kysely<Database>, orderId: numb
 
   const cashRows = paymentRows.filter((p) => p.kind === 'cash' && p.tenderedMinor !== null);
 
+  const config = await loadTicketConfig(db);
+
   return {
-    branding: await loadBranding(db),
+    branding: config.branding,
     orderId: order.id,
     invoiceNo: order.invoice_no,
     closedAt: order.closed_at,
@@ -354,6 +381,7 @@ export async function buildReceiptTicketData(db: Kysely<Database>, orderId: numb
     discountMinor: order.order_discount_minor,
     taxMinor: order.tax_minor,
     serviceChargeMinor: order.service_charge_minor,
+    serviceChargeLabel: serviceChargeLabel(config.serviceCharge, order.service_charge_rate_bp),
     roundingAdjustmentMinor: order.rounding_adjustment_minor,
     totalMinor: order.total_minor,
     payments: paymentRows.map((p) => ({

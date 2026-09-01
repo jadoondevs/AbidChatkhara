@@ -1,17 +1,22 @@
 import { paisa, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useBillOrder, useBillPreview, useOrder, usePrintBill, useSetDiscount } from '../api/hooks.js';
-import type { OrderDetail } from '../api/types.js';
+import { useBillOrder, useBillPreview, useOrder, usePrintBill, useServiceChargeSettings, useSetDiscount } from '../api/hooks.js';
+import type { OrderDetail, ServiceChargeSettings } from '../api/types.js';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 import { orderTitle } from './OrderScreen.tsx';
 
 /**
- * Screen 4: order-level discount with reason, service charge entry, the
+ * Screen 4: order-level discount with reason, the service charge, the
  * rounded total, and print. Printing the bill returns to the floor view
  * (spec) rather than parking the cashier on a payment screen — payment
  * is picked up later, by whoever is at the till then, from the
  * awaiting-payment list.
+ *
+ * The service charge is the restaurant's configured one, worked out by
+ * the server; this screen shows what it will be and offers a waiver,
+ * rather than asking a cashier to type the same percentage into every
+ * bill and get one of them wrong.
  */
 export function BillScreen(): JSX.Element {
   const { orderId: orderIdParam } = useParams();
@@ -25,7 +30,10 @@ export function BillScreen(): JSX.Element {
 
   const [discountMinor, setDiscountMinor] = useState<Paisa>(paisa(0));
   const [discountReason, setDiscountReason] = useState('');
-  const [serviceChargeMinor, setServiceChargeMinor] = useState<Paisa>(paisa(0));
+  // null means "whatever the restaurant charges" — the normal case, and
+  // the only one that records the rate on the order. A number is a
+  // deliberate override for this one bill.
+  const [chargeOverride, setChargeOverride] = useState<Paisa | null>(null);
   const [printError, setPrintError] = useState<unknown>(null);
 
   if (order.isLoading) return <Loading />;
@@ -37,8 +45,8 @@ export function BillScreen(): JSX.Element {
   const staffMeal = detail.channel !== 'customer';
   const noWaiter = detail.waiterId === null;
   // A service charge cannot be attributed without a waiter, and the
-  // server refuses one — so the field is disabled rather than offered
-  // and then rejected.
+  // server refuses one — so the card explains itself rather than
+  // offering a field that would be rejected.
   const serviceChargeAllowed = !noWaiter && !staffMeal;
 
   const applyDiscount = () => {
@@ -60,8 +68,12 @@ export function BillScreen(): JSX.Element {
       printAndReturn(orderId);
       return;
     }
+    // Send the override only when there is one. Sending the previewed
+    // amount back would turn the restaurant's rate into a number this
+    // screen typed, and the order would no longer record which rate
+    // produced it.
     billOrder.mutate(
-      { orderId, ...(serviceChargeMinor > 0 ? { serviceChargeMinor } : {}) },
+      { orderId, ...(chargeOverride === null ? {} : { serviceChargeMinor: chargeOverride }) },
       { onSuccess: (billed) => printAndReturn(billed.id) },
     );
   };
@@ -102,27 +114,15 @@ export function BillScreen(): JSX.Element {
       )}
 
       {!alreadyBilled && (
-        <div className="card col">
-          <h3 style={{ margin: 0 }}>Service charge</h3>
-          {!serviceChargeAllowed ? (
-            <p className="muted">
-              {staffMeal
-                ? 'A staff or owner meal carries no service charge.'
-                : "This order has no waiter, so a service charge can't be attributed — it must stay zero."}
-            </p>
-          ) : (
-            <div style={{ maxWidth: 240 }}>
-              <label htmlFor="service-charge">Amount (optional)</label>
-              <MoneyInput id="service-charge" valueMinor={serviceChargeMinor} onChange={setServiceChargeMinor} />
-              <p className="muted" style={{ fontSize: 13 }}>
-                Held for the waiter, never revenue.
-              </p>
-            </div>
-          )}
-        </div>
+        <ServiceChargeCard
+          allowed={serviceChargeAllowed}
+          staffMeal={staffMeal}
+          override={chargeOverride}
+          onOverride={setChargeOverride}
+        />
       )}
 
-      <BillTotalsCard order={detail} serviceChargeMinor={serviceChargeAllowed ? serviceChargeMinor : paisa(0)} alreadyBilled={alreadyBilled} />
+      <BillTotalsCard order={detail} chargeOverride={serviceChargeAllowed ? chargeOverride : paisa(0)} alreadyBilled={alreadyBilled} />
 
       <div className="row">
         <button className="ghost big" onClick={() => navigate(`/orders/${orderId}`)}>
@@ -148,6 +148,105 @@ export function BillScreen(): JSX.Element {
 }
 
 /**
+ * What the service charge will be, and the one way to change it.
+ *
+ * The amount itself is not shown here — it is on the totals card
+ * below, computed by the server — because two places showing "the
+ * service charge" is exactly how they come to disagree. This card says
+ * which rule is being applied and lets the cashier waive or adjust it
+ * for this bill, which is recorded as an override rather than as a
+ * rate (docs/decisions: an overridden charge names no percentage,
+ * because no percentage produced it).
+ */
+function ServiceChargeCard({
+  allowed,
+  staffMeal,
+  override,
+  onOverride,
+}: {
+  allowed: boolean;
+  staffMeal: boolean;
+  override: Paisa | null;
+  onOverride: (value: Paisa | null) => void;
+}): JSX.Element {
+  const config = useServiceChargeSettings();
+  const [editing, setEditing] = useState(false);
+
+  return (
+    <div className="card col">
+      <div className="row">
+        <h3 style={{ margin: 0, flex: 1 }}>{config.data?.displayName ?? 'Service charge'}</h3>
+        {override !== null && <span className="pill warn">Overridden</span>}
+      </div>
+
+      {!allowed ? (
+        <p className="muted">
+          {staffMeal
+            ? 'A staff or owner meal carries no service charge.'
+            : "This order has no waiter, so a service charge can't be attributed — it stays zero."}
+        </p>
+      ) : (
+        <ServiceChargeControls config={config.data} override={override} onOverride={onOverride} editing={editing} setEditing={setEditing} />
+      )}
+    </div>
+  );
+}
+
+function ServiceChargeControls({
+  config,
+  override,
+  onOverride,
+  editing,
+  setEditing,
+}: {
+  config: ServiceChargeSettings | undefined;
+  override: Paisa | null;
+  onOverride: (value: Paisa | null) => void;
+  editing: boolean;
+  setEditing: (value: boolean) => void;
+}): JSX.Element {
+  if (!config) return <p className="muted">Loading…</p>;
+
+  // Switched off restaurant-wide: there is nothing to waive, and the
+  // server refuses a non-zero override, so the card explains where the
+  // setting lives instead of offering a field that cannot be used.
+  if (!config.enabled) {
+    return <p className="muted">Switched off for this restaurant. An admin can turn it on under Settings → Service charge.</p>;
+  }
+
+  return (
+    <>
+      <p className="muted" style={{ margin: 0 }}>
+        {config.rateBp / 100}% of net sales
+        {config.dineInOnly ? ', dine-in only' : ''} — held for the waiter, never revenue.
+      </p>
+
+      {editing || override !== null ? (
+        <div style={{ maxWidth: 240 }}>
+          <label htmlFor="service-charge">Charge for this bill</label>
+          <MoneyInput id="service-charge" valueMinor={override ?? paisa(0)} onChange={(value) => onOverride(value)} />
+          <div className="row" style={{ marginTop: 8 }}>
+            <button
+              onClick={() => {
+                onOverride(null);
+                setEditing(false);
+              }}
+            >
+              Use the standard charge
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="row">
+          <button onClick={() => onOverride(paisa(0))}>Waive on this bill</button>
+          <button onClick={() => setEditing(true)}>Change the amount</button>
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
  * The bill's figures, including the rounding adjustment and the actual
  * total — before anything is printed.
  *
@@ -161,14 +260,14 @@ export function BillScreen(): JSX.Element {
  */
 function BillTotalsCard({
   order,
-  serviceChargeMinor,
+  chargeOverride,
   alreadyBilled,
 }: {
   order: OrderDetail;
-  serviceChargeMinor: Paisa;
+  chargeOverride: Paisa | null;
   alreadyBilled: boolean;
 }): JSX.Element {
-  const preview = useBillPreview(alreadyBilled ? null : order.id, serviceChargeMinor);
+  const preview = useBillPreview(alreadyBilled ? null : order.id, chargeOverride ?? undefined);
 
   // Once billed, the stored figures ARE the answer — no prediction
   // needed, and none should be shown in their place.
@@ -179,6 +278,8 @@ function BillTotalsCard({
         netSalesMinor: order.netSalesMinor,
         taxMinor: order.taxMinor,
         serviceChargeMinor: order.serviceChargeMinor,
+        serviceChargeRateBp: order.serviceChargeRateBp,
+        serviceChargeName: 'Service charge',
         roundingAdjustmentMinor: order.roundingAdjustmentMinor,
         totalMinor: order.totalMinor,
       }
@@ -204,7 +305,13 @@ function BillTotalsCard({
         <Money minor={totals?.taxMinor} />
       </div>
       <div className="total-line">
-        <span>Service charge</span>
+        {/* Named and rated as the customer will read it on the printed
+            bill, so what is on screen and what is on paper are the same
+            line. */}
+        <span>
+          {totals?.serviceChargeName ?? 'Service charge'}
+          {totals?.serviceChargeRateBp ? ` (${totals.serviceChargeRateBp / 100}%)` : ''}
+        </span>
         <Money minor={totals?.serviceChargeMinor} />
       </div>
       <div className="total-line">

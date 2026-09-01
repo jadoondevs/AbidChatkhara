@@ -84,6 +84,7 @@ export interface Modifier {
 export interface OrderLineModifier {
   id: number;
   modifierId: number;
+  modifierName: string;
   priceDeltaMinor: Paisa;
   grossMinor: Paisa;
   proratedDiscountMinor: Paisa;
@@ -95,6 +96,9 @@ export type VoidKind = 'correction' | 'void';
 
 export interface OrderLine {
   id: number;
+  /** What the item was called when it was sold — a snapshot, not a
+   * lookup against today's menu. */
+  itemName: string;
   itemId: number;
   qty: number;
   unitPriceMinor: Paisa;
@@ -131,6 +135,8 @@ export interface OrderSummary {
   netSalesMinor: Paisa;
   taxMinor: Paisa;
   serviceChargeMinor: Paisa;
+  /** The configured rate that produced it, or null when none did. */
+  serviceChargeRateBp: number | null;
   roundingAdjustmentMinor: Paisa;
   totalMinor: Paisa;
   version: number;
@@ -153,8 +159,70 @@ export interface BillTotals {
   netSalesMinor: Paisa;
   taxMinor: Paisa;
   serviceChargeMinor: Paisa;
+  serviceChargeRateBp: number | null;
+  serviceChargeName: string;
   roundingAdjustmentMinor: Paisa;
   totalMinor: Paisa;
+}
+
+export interface HistoricalPayment {
+  id: number;
+  methodName: string;
+  methodKind: string;
+  amountMinor: Paisa;
+  referenceNo: string | null;
+  accountId: number | null;
+  accountLabel: string | null;
+  accountNumber: string | null;
+  accountBankName: string | null;
+  tenderedMinor: Paisa | null;
+  changeMinor: Paisa | null;
+  receivedAt: string;
+  receivedByName: string | null;
+  isRefund: boolean;
+  reversedByPaymentId: number | null;
+}
+
+/** The complete record of one order, as it happened. */
+export interface OrderHistory {
+  order: OrderDetail;
+  waiterName: string | null;
+  openedByName: string | null;
+  closedByName: string | null;
+  beneficiaryName: string | null;
+  payments: HistoricalPayment[];
+  paidMinor: Paisa;
+  balanceMinor: Paisa;
+  changeGivenMinor: Paisa;
+  partnerAllocations: {
+    partnerId: number;
+    partnerName: string;
+    amountMinor: Paisa;
+    shareBpSnapshot: number;
+  }[];
+}
+
+export interface ServiceChargeSettings {
+  enabled: boolean;
+  rateBp: number;
+  displayName: string;
+  dineInOnly: boolean;
+}
+
+export interface PartnerRecord {
+  partner: Partner;
+  ownedItems: { itemId: number; itemName: string; shareBp: number }[];
+  recentAllocations: {
+    orderId: number;
+    invoiceNo: number | null;
+    closedAt: string | null;
+    itemName: string;
+    qty: number;
+    shareBpSnapshot: number;
+    amountMinor: Paisa;
+    isReversal: boolean;
+  }[];
+  totalAllocatedMinor: Paisa;
 }
 
 export type PaymentAccountType = 'easypaisa' | 'bank' | 'other';
@@ -226,6 +294,7 @@ export interface PrinterSettings {
 export interface AppSettings {
   restaurant: RestaurantSettings;
   receipt: ReceiptSettings;
+  serviceCharge: ServiceChargeSettings;
 }
 
 export interface ConsumptionDetailLine {
@@ -363,6 +432,7 @@ export interface BlockingOrder {
 
 export interface ZReport {
   shift: Shift;
+  grossSalesMinor: Paisa;
   customerSalesMinor: Paisa;
   consumptionMinor: Paisa;
   combinedSalesMinor: Paisa;
@@ -390,6 +460,10 @@ export interface WaiterPayoutLine {
 }
 
 export interface DailySalesReport {
+  grossSalesMinor: Paisa;
+  discountsMinor: Paisa;
+  serviceChargeMinor: Paisa;
+  totalCollectedMinor: Paisa;
   customerSalesMinor: Paisa;
   consumptionMinor: Paisa;
   combinedSalesMinor: Paisa;

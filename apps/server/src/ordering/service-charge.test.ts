@@ -1,5 +1,6 @@
 import { paisa } from '@pos/shared';
 import { afterEach, describe, expect, it } from 'vitest';
+import { buildBillTicketData, buildReceiptTicketData } from '../billing/printing.js';
 import { recordPayment, createPaymentMethod } from '../billing/service.js';
 import { createCategory, createItem, setItemPrice } from '../catalog/service.js';
 import { createUser } from '../identity/service.js';
@@ -253,5 +254,49 @@ describe('service charge — configured, authoritative, and snapshotted', () => 
     const { actor } = await setup();
     await expect(configure(actor, { enabled: true, rateBp: 9_000 })).rejects.toThrow();
     await expect(configure(actor, { enabled: true, rateBp: -1 })).rejects.toThrow();
+  });
+
+  it('prints the configured wording, with the rate that produced the charge', async () => {
+    const { actor, item } = await setup();
+    await configure(actor, { enabled: true, rateBp: 550, displayName: 'Service fee' });
+
+    const order = await dineInOrder(item, actor);
+    await billOrder(ctx.db, order.id, {}, actor);
+
+    const ticket = await buildBillTicketData(ctx.db, order.id);
+    expect(ticket.serviceChargeLabel).toBe('Service fee (5.5%)');
+    expect(ticket.serviceChargeMinor).toBe(55_00);
+  });
+
+  it('names no rate on a ticket when a cashier overrode the amount', async () => {
+    const { actor, item } = await setup();
+    await configure(actor, { enabled: true, rateBp: 500 });
+
+    const order = await dineInOrder(item, actor);
+    await billOrder(ctx.db, order.id, { serviceChargeMinor: paisa(20_00) }, actor);
+
+    // A percentage on the customer's bill has to be one the amount
+    // actually came from — this one did not.
+    const ticket = await buildBillTicketData(ctx.db, order.id);
+    expect(ticket.serviceChargeLabel).toBe('Service charge');
+    expect(ticket.serviceChargeMinor).toBe(20_00);
+  });
+
+  it('reprints an old receipt at the old rate, however the setting has moved since', async () => {
+    const { actor, item, cash } = await setup();
+    await configure(actor, { enabled: true, rateBp: 500 });
+
+    const order = await dineInOrder(item, actor);
+    const billed = await billOrder(ctx.db, order.id, {}, actor);
+    await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
+
+    await configure(actor, { enabled: true, rateBp: 1_000, displayName: 'Service fee' });
+
+    // The wording is the restaurant's current one — a rename should show
+    // on reprints — but the percentage is the order's own.
+    const receipt = await buildReceiptTicketData(ctx.db, order.id);
+    expect(receipt.serviceChargeLabel).toBe('Service fee (5%)');
+    expect(receipt.serviceChargeMinor).toBe(50_00);
+    expect(receipt.totalMinor).toBe(1_050_00);
   });
 });

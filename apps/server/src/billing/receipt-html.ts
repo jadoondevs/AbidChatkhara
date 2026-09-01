@@ -152,7 +152,7 @@ export function renderBillHtml(data: BillTicketData): string {
     totals.push(row(`Discount${data.discountReason ? ` (${data.discountReason})` : ''}`, `-${format(data.discountMinor)}`));
   }
   if (data.taxMinor > 0) totals.push(row('Tax', format(data.taxMinor)));
-  if (data.serviceChargeMinor > 0) totals.push(row('Service charge', format(data.serviceChargeMinor)));
+  if (data.serviceChargeMinor > 0) totals.push(row(data.serviceChargeLabel, format(data.serviceChargeMinor)));
   if (data.roundingAdjustmentMinor !== 0) totals.push(row('Rounding', format(data.roundingAdjustmentMinor)));
   totals.push(row('TOTAL', format(data.totalMinor), 'grand'));
 
@@ -200,7 +200,7 @@ export function renderReceiptHtml(data: ReceiptTicketData): string {
   const totals: string[] = [row('Subtotal', format(data.subtotalMinor))];
   if (data.discountMinor > 0) totals.push(row('Discount', `-${format(data.discountMinor)}`));
   if (data.taxMinor > 0) totals.push(row('Tax', format(data.taxMinor)));
-  if (data.serviceChargeMinor > 0) totals.push(row('Service charge', format(data.serviceChargeMinor)));
+  if (data.serviceChargeMinor > 0) totals.push(row(data.serviceChargeLabel, format(data.serviceChargeMinor)));
   if (data.roundingAdjustmentMinor !== 0) totals.push(row('Rounding', format(data.roundingAdjustmentMinor)));
   totals.push(row('TOTAL', format(data.totalMinor), 'grand'));
 

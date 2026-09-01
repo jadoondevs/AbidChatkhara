@@ -4,7 +4,7 @@ import type { Kysely } from 'kysely';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../identity/require-auth.js';
 import type { Database } from '../platform/db/types.js';
-import { printerSettingsSchema, receiptSettingsSchema, restaurantSettingsSchema } from './schema.js';
+import { printerSettingsSchema, receiptSettingsSchema, restaurantSettingsSchema, serviceChargeSettingsSchema } from './schema.js';
 import { getAllSettings, getSetting, saveSetting } from './service.js';
 
 export interface SettingsPluginOptions {
@@ -27,7 +27,13 @@ export const settingsRoutes: FastifyPluginAsync<SettingsPluginOptions> = async (
     {
       schema: {
         response: {
-          200: z.object({ restaurant: restaurantSettingsSchema, receipt: receiptSettingsSchema }),
+          200: z.object({
+            restaurant: restaurantSettingsSchema,
+            receipt: receiptSettingsSchema,
+            // Readable by anyone signed in: the bill screen has to show
+            // the charge, and its rate is on the customer's receipt.
+            serviceCharge: serviceChargeSettingsSchema,
+          }),
         },
       },
     },
@@ -35,7 +41,7 @@ export const settingsRoutes: FastifyPluginAsync<SettingsPluginOptions> = async (
       requireAuth(request, reply);
       const all = await getAllSettings(db);
       // Deliberately not the printer group — see the note above.
-      return { restaurant: all.restaurant, receipt: all.receipt };
+      return { restaurant: all.restaurant, receipt: all.receipt, serviceCharge: all.serviceCharge };
     },
   );
 
@@ -63,6 +69,15 @@ export const settingsRoutes: FastifyPluginAsync<SettingsPluginOptions> = async (
     async (request, reply) => {
       const actor = requireRole(request, reply, 'admin');
       return saveSetting(db, 'receipt', request.body, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  app.put(
+    '/api/settings/service-charge',
+    { schema: { body: serviceChargeSettingsSchema, response: { 200: serviceChargeSettingsSchema } } },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'admin');
+      return saveSetting(db, 'serviceCharge', request.body, { actorId: actor.userId, terminalId: actor.terminalId });
     },
   );
 
