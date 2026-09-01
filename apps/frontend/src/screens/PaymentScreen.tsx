@@ -2,8 +2,9 @@ import { paisa, roundUpTo, sub, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../api/client.js';
-import { useOrder, usePaymentOptions, usePeople, usePrintReceipt, useRecordPayment, useSettleConsumption } from '../api/hooks.js';
+import { useOrder, usePaymentOptions, usePeople, usePrintReceipt, useRecordPayment, useRefundOrder, useSettleConsumption } from '../api/hooks.js';
 import type { SettlementType } from '../api/types.js';
+import { PrintDecision } from '../components/PrintDecision.tsx';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 import { orderTitle } from './OrderScreen.tsx';
 
@@ -51,6 +52,7 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
   const options = usePaymentOptions();
   const recordPayment = useRecordPayment();
   const printReceipt = usePrintReceipt();
+  const refundOrder = useRefundOrder();
 
   const [methodId, setMethodId] = useState<number | ''>('');
   const [amountMinor, setAmountMinor] = useState<Paisa>(paisa(0));
@@ -59,6 +61,10 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
   const [changeDue, setChangeDue] = useState<Paisa | null>(null);
   const [settledElsewhere, setSettledElsewhere] = useState<string | null>(null);
   const [printedVia, setPrintedVia] = useState<'thermal' | 'fallback' | null>(null);
+  // Shown when the receipt did NOT go straight to a thermal printer:
+  // only the cashier knows whether anything came out of the Windows
+  // dialog, so the till asks rather than assuming.
+  const [receiptDecision, setReceiptDecision] = useState<{ failed: boolean } | null>(null);
 
   const option = options.data?.find((candidate) => candidate.paymentMethodId === methodId);
   const detail = order.data;
@@ -95,6 +101,18 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
     setReferenceNo('');
   };
 
+  // One place decides what happens after a receipt print, so the
+  // automatic print on settlement and the Reprint button behave
+  // identically.
+  const printHandlers = {
+    onSuccess: (via: 'thermal' | 'fallback') => {
+      setPrintedVia(via);
+      if (via === 'fallback') setReceiptDecision({ failed: false });
+      else setReceiptDecision(null);
+    },
+    onError: () => setReceiptDecision({ failed: true }),
+  };
+
   const submit = () => {
     if (methodId === '' || !canRecord) return;
     // Only send an account when the cashier actually chose one: with a
@@ -120,9 +138,7 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
           // and the change due, and a screen that vanishes on success
           // never told them whether it worked. Printing cannot fail the
           // sale — see the note on the settled card below.
-          if (result.orderClosed) {
-            printReceipt.mutate(orderId, { onSuccess: (via) => setPrintedVia(via) });
-          }
+          if (result.orderClosed) printReceipt.mutate(orderId, printHandlers);
         },
         onError: (error) => {
           if (error instanceof ApiError && error.isDomainError && /already settled/i.test(error.message)) {
@@ -171,7 +187,7 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
         <ErrorBanner error={printReceipt.error} />
 
         <div className="row">
-          <button disabled={printReceipt.isPending} onClick={() => printReceipt.mutate(orderId, { onSuccess: (via) => setPrintedVia(via) })}>
+          <button disabled={printReceipt.isPending} onClick={() => printReceipt.mutate(orderId, printHandlers)}>
             Reprint receipt
           </button>
           {/* The full record is one click away rather than something a
@@ -181,6 +197,32 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
             Back to floor
           </button>
         </div>
+
+        {receiptDecision && (
+          <PrintDecision
+            title={receiptDecision.failed ? 'Printing failed' : 'Receipt sent to Windows printing'}
+            detail={
+              receiptDecision.failed
+                ? 'The payment is recorded and the sale is complete — only the printer failed. Nothing will be charged again.'
+                : 'No POS printer is connected, so the receipt went to the Windows print dialog. If it did not come out, send it again.'
+            }
+            continueLabel="Done"
+            // Money has already changed hands, so "cancel" here means a
+            // refund — a manager's decision, and the server enforces
+            // that whatever this screen offers.
+            cancelLabel="Cancel sale (refund)"
+            busy={printReceipt.isPending || refundOrder.isPending}
+            onContinue={() => setReceiptDecision(null)}
+            onRetry={() => printReceipt.mutate(orderId, printHandlers)}
+            onCancelSale={() =>
+              refundOrder.mutate(
+                { orderId, reason: 'sale cancelled at the receipt' },
+                { onSuccess: () => navigate('/') },
+              )
+            }
+          />
+        )}
+        <ErrorBanner error={refundOrder.error} />
       </div>
     );
   }

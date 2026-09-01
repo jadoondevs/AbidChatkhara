@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   useCreatePartner,
   useItemOwnership,
@@ -34,6 +35,13 @@ export function PartnerConfigScreen(): JSX.Element {
   return (
     <div className="col" style={{ maxWidth: 1100 }}>
       <h1 style={{ margin: 0 }}>Partners</h1>
+      {/* Three screens name people, and a manager should never have to
+          work out which is which by trying them. */}
+      <p className="muted" style={{ marginTop: 0 }}>
+        The people who own items on the menu and are credited a share of what those items sell for. Separate from{' '}
+        <Link to="/config/people">People</Link>, who are whose meals the restaurant tracks, and from{' '}
+        <Link to="/settings">Settings → Users</Link>, who are the accounts that sign in to this till.
+      </p>
       <ErrorBanner error={createPartner.error} />
 
       <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', alignItems: 'start' }}>

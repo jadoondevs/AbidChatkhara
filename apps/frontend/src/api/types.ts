@@ -147,8 +147,21 @@ export interface OrderSummary {
 }
 
 export interface FloorOrder extends OrderSummary {
+  /** Item lines, voided ones included. Zero means the order never
+   * became one and can be deleted rather than voided. */
+  lineCount: number;
   paidMinor: Paisa;
   balanceMinor: Paisa;
+}
+
+/** A row on the Orders screen: enough to recognise an order without a
+ * second request per row. */
+export interface OrderSearchResult extends OrderSummary {
+  paidMinor: Paisa;
+  balanceMinor: Paisa;
+  lineCount: number;
+  waiterName: string | null;
+  settledByName: string | null;
 }
 
 export interface FloorBoard {
@@ -432,6 +445,8 @@ export interface BlockingOrder {
   orderType: string;
   status: string;
   tableLabel: string | null;
+  /** Zero means it can be deleted rather than worked through. */
+  lineCount: number;
 }
 
 export interface ZReport {

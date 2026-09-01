@@ -11,6 +11,7 @@ import {
   addLine,
   billOrder,
   createOrder,
+  deleteEmptyOrder,
   getFloorBoard,
   getOrder,
   listOrders,
@@ -944,6 +945,99 @@ describe('ordering/service', () => {
       await billOrder(ctx.db, order.id, {}, orderActor);
 
       await expect(setLineNote(ctx.db, order.id, added.lines[0]!.id, { note: 'onions after all' }, orderActor)).rejects.toThrow(OrderStateError);
+    });
+  });
+
+  /**
+   * A till accumulates orders that never became orders. They are not
+   * transactions and must not be kept as if they were — but nothing
+   * that IS a transaction may ever go this way.
+   */
+  describe('deleteEmptyOrder', () => {
+    it('removes an open order with nothing on it', async () => {
+      const { orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+
+      await deleteEmptyOrder(ctx.db, order.id, orderActor);
+      expect(await getOrder(ctx.db, order.id)).toBeNull();
+    });
+
+    it('leaves the audit trail behind, because the deletion is itself a fact', async () => {
+      const { orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await deleteEmptyOrder(ctx.db, order.id, orderActor);
+
+      const audit = await ctx.db
+        .selectFrom('audit_log')
+        .selectAll()
+        .where('entity', '=', 'order')
+        .where('entity_id', '=', String(order.id))
+        .where('action', '=', 'order.delete_empty')
+        .executeTakeFirst();
+      expect(audit).toBeDefined();
+      expect(audit?.actor_id).toBe(orderActor.actorId);
+    });
+
+    it('refuses an order that has an item on it', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+
+      await expect(deleteEmptyOrder(ctx.db, order.id, orderActor)).rejects.toThrow(OrderStateError);
+      expect(await getOrder(ctx.db, order.id)).not.toBeNull();
+    });
+
+    it('refuses an order whose only line was voided — that is still a record', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      const detail = await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+      await voidLine(ctx.db, order.id, detail.lines[0]!.id, { reason: 'sent back' }, orderActor);
+
+      // The line is off the bill but the row is still there, and it
+      // says something happened.
+      await expect(deleteEmptyOrder(ctx.db, order.id, orderActor)).rejects.toThrow(OrderStateError);
+    });
+
+    it('refuses a billed order even with no lines left on it', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+      await billOrder(ctx.db, order.id, {}, orderActor);
+
+      // A printed bill was handed to a customer. Whatever is on it now,
+      // it happened.
+      await expect(deleteEmptyOrder(ctx.db, order.id, orderActor)).rejects.toThrow(/only an order that was never billed/);
+    });
+
+    it('refuses a settled order outright', async () => {
+      const { item, orderActor } = await setupMenu();
+      const cash = await createPaymentMethod(ctx.db, { code: 'cash', displayName: 'Cash', kind: 'cash' }, orderActor);
+      const partner = await createPartner(ctx.db, 'Alice', orderActor);
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: partner.id, shareBp: 10_000 }], orderActor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+      const billed = await billOrder(ctx.db, order.id, {}, orderActor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, orderActor);
+
+      await expect(deleteEmptyOrder(ctx.db, order.id, orderActor)).rejects.toThrow(OrderStateError);
+      expect(await getOrder(ctx.db, order.id)).not.toBeNull();
+    });
+
+    it('says so plainly when the order does not exist', async () => {
+      const { orderActor } = await setupMenu();
+      await expect(deleteEmptyOrder(ctx.db, 9_999, orderActor)).rejects.toThrow(/not found/);
+    });
+
+    it('reports zero lines on the floor board, which is what offers the delete', async () => {
+      const { item, orderActor } = await setupMenu();
+      const empty = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      const real = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, real.id, { itemId: item.id, qty: 2 }, orderActor);
+
+      const board = await getFloorBoard(ctx.db);
+      expect(board.open.find((o) => o.id === empty.id)?.lineCount).toBe(0);
+      expect(board.open.find((o) => o.id === real.id)?.lineCount).toBe(1);
     });
   });
 });

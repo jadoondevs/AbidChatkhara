@@ -35,8 +35,12 @@ missed rather than judged, and it belongs in the next pass.
 | Old POS function | Class | Notes |
 | --- | --- | --- |
 | Print a pro-forma bill | Preserved | Clearly marked "not a receipt"; no invoice number until it is paid. |
+| Review the bill without leaving the order | Preserved | The bill is a dialog over the order screen, as it was on the old till, not a separate page. |
+| Go straight from the bill to taking payment | Preserved | Printing the bill opens payment for that order. |
+| "Printing failed — cancel / continue / retry" | Preserved | The old POS asked because a browser or a driver cannot tell a cancelled print from a completed one. Neither can this one, so it asks too. |
 | Order-level discount | Improved | A reason is required for a non-zero discount, and both appear on the record and in the voids-and-discounts report. |
-| Service charge | Improved | Configured once (on/off, rate, name, dine-in only) instead of typed per bill; one calculation feeds every screen; each order keeps the rate it was billed at (`docs/decisions/019`). |
+| Service charge as a rupee amount | Preserved | The cashier types rupees on the bill, as before — never a percentage. |
+| Service charge | Improved | A configured rate does the arithmetic and seeds the field (on/off, rate, name, dine-in only); one calculation feeds every screen; each order keeps the rate it was billed at (`docs/decisions/019`). |
 | Waive the service charge on one bill | Preserved | As an explicit override, recorded as naming no rate. |
 | Bill total on screen before printing | Improved | Previewed by the server's own bill calculation, rounding included, rather than a second implementation in the browser. |
 | Tax | Improved | Rule-driven and configurable, shipped with no rule active (`docs/decisions/010`). |
@@ -68,7 +72,8 @@ missed rather than judged, and it belongs in the next pass.
 
 | Old POS function | Class | Notes |
 | --- | --- | --- |
-| Look up a past order | Improved | The complete record — order, items, financials, payments, partner split — on one read-only page (`docs/decisions/020`). |
+| Look up a past order | Improved | A dedicated Orders section: today by default, any date or range, searchable by order number, invoice, customer, table, staff or payment reference. |
+| See a past order in full | Improved | The complete record — order, items, financials, payments, partner split — on one read-only page (`docs/decisions/020`). |
 | See how a past order was paid | Improved | Per payment: method, amount, account, reference, time, cashier, cash received and change. |
 | Reprint from history | Preserved | |
 | Historical prices and names | Improved | Snapshotted, so editing the menu cannot rewrite a past bill. |
@@ -108,7 +113,7 @@ missed rather than judged, and it belongs in the next pass.
 | Roles and permissions | Preserved | Enforced on the server, not just by hiding buttons. |
 | Partners | Improved | Create, rename, mark as left, bring back, and a full record of what they own and are owed. |
 | Ownership splits | Preserved | Effective-dated; past sales keep their shares. |
-| Payment methods | Preserved | |
+| Payment methods | Improved | In Settings beside the accounts they receive money into, rather than a second configuration screen elsewhere. A code already in use now says so instead of failing with a server error. |
 | Payment accounts | Added | Easypaisa and bank accounts, activatable, never deleted. |
 | Restaurant name and receipt details | Improved | In the database, set from Settings, not compiled in. |
 | Printer address | Improved | Set from Settings; the environment variable is only a fallback. |
@@ -119,6 +124,7 @@ missed rather than judged, and it belongs in the next pass.
 | --- | --- |
 | PIN-pad login | Replaced by a username and password typed on the keyboard, which is what the restaurant asked for. Every existing PIN still works as the password — a PIN was always just a short password, and migration `0011` derives usernames from names without touching a single credential. |
 | A single "current order" per till | Removed deliberately. It is the mechanism by which two cashiers overwrite each other's work, and every screen here addresses an order by its own id instead. |
+| Clearing an order opened by mistake | Preserved as deletion, and only for an order with no items, no payment and no figures (`docs/decisions/021`). Anything real is voided or refunded. |
 | Deleting a menu item, an account or a partner | Removed in favour of deactivation. A deleted row orphans the answer to "what was on that bill" or "where did that money go" on every historical record that referenced it. |
 | Editing a settled order | Removed deliberately. A settled sale is a financial record; corrections happen as refunds and reversals, which leave both the original and the correction visible. |
 

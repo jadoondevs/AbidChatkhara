@@ -1,5 +1,5 @@
 import { add, paisa, proportionalAmount, roundToRupee, sub, type Paisa } from '@pos/shared';
-import type { Kysely, Transaction } from 'kysely';
+import { sql, type Kysely, type Transaction } from 'kysely';
 import { getItem, getModifier, getCurrentPrice, listModifierGroupsForItem } from '../catalog/service.js';
 import { recordAudit } from '../identity/audit.js';
 import type { Database } from '../platform/db/types.js';
@@ -291,6 +291,108 @@ export async function listOrders(db: Kysely<Database>, opts: ListOrdersOptions =
 }
 
 /**
+ * Looking an order up afterwards: by day, by range, or by something the
+ * cashier remembers about it.
+ *
+ * Separate from the floor board on purpose. The board answers "what is
+ * happening now" and is a live thing a cashier watches; this answers
+ * "what happened", is scoped to a date range, and never loads the whole
+ * database — a restaurant six months in has tens of thousands of
+ * orders, and a screen that fetches all of them to show twenty is a
+ * screen that stops working exactly when the business succeeds.
+ *
+ * The default is today, resolved in the restaurant's own local day (see
+ * platform/date-range.ts), because that is what a cashier means when
+ * they open the screen mid-service.
+ *
+ * `q` searches the things someone actually remembers: the order number,
+ * the invoice number, the customer, the table, the cashier who settled
+ * it, or a payment reference. Numbers match the id and invoice
+ * exactly rather than by substring — "12" should find order 12, not
+ * every order from 120 to 129.
+ */
+export interface OrderSearchOptions {
+  readonly fromInclusive?: string | undefined;
+  readonly toExclusive?: string | undefined;
+  readonly q?: string | undefined;
+  readonly limit?: number | undefined;
+}
+
+export interface OrderSearchResult extends OrderSummary {
+  readonly paidMinor: Paisa;
+  readonly balanceMinor: Paisa;
+  readonly lineCount: number;
+  readonly waiterName: string | null;
+  readonly settledByName: string | null;
+}
+
+export async function searchOrders(db: Kysely<Database>, opts: OrderSearchOptions = {}): Promise<OrderSearchResult[]> {
+  const limit = Math.min(opts.limit ?? 200, 500);
+  const term = opts.q?.trim() ?? '';
+  const asNumber = /^\d+$/.test(term) ? Number(term) : null;
+
+  let query = db
+    .selectFrom('order')
+    .leftJoin('user as waiter', 'waiter.id', 'order.waiter_id')
+    .leftJoin('user as settled_by', 'settled_by.id', 'order.closed_by')
+    .selectAll('order')
+    .select(['waiter.name as waiterName', 'settled_by.name as settledByName']);
+
+  // An order is dated by when it FINISHED where it has finished, and by
+  // when it started where it has not: an order opened at 11pm and paid
+  // at 12:10am belongs to the night it was paid for, and one still open
+  // belongs to the day it was started on.
+  const dateColumn = sql<string>`COALESCE("order".closed_at, "order".opened_at)`;
+  if (opts.fromInclusive) query = query.where(dateColumn, '>=', opts.fromInclusive);
+  if (opts.toExclusive) query = query.where(dateColumn, '<', opts.toExclusive);
+
+  if (term !== '') {
+    const like = `%${term.toLowerCase()}%`;
+    query = query.where((eb) =>
+      eb.or([
+        ...(asNumber === null ? [] : [eb('order.id', '=', asNumber), eb('order.invoice_no', '=', asNumber)]),
+        eb(sql<string>`lower(coalesce("order".customer_name, ''))`, 'like', like),
+        eb(sql<string>`lower(coalesce("order".customer_phone, ''))`, 'like', like),
+        eb(sql<string>`lower(coalesce("order".table_label, ''))`, 'like', like),
+        eb(sql<string>`lower(coalesce(waiter.name, ''))`, 'like', like),
+        eb(sql<string>`lower(coalesce(settled_by.name, ''))`, 'like', like),
+        eb(
+          'order.id',
+          'in',
+          db.selectFrom('payment').select('order_id').where(sql<string>`lower(coalesce(payment.reference_no, ''))`, 'like', like),
+        ),
+      ]),
+    );
+  }
+
+  const rows = await query.orderBy(dateColumn, 'desc').orderBy('order.id', 'desc').limit(limit).execute();
+  if (rows.length === 0) return [];
+
+  const orderIds = rows.map((row) => row.id);
+  const paidByOrder = await paidTotals(db, orderIds);
+  const lineCounts = new Map<number, number>();
+  const counted = await db
+    .selectFrom('order_line')
+    .select(({ fn }) => ['order_id as orderId', fn.count<number>('id').as('lines')])
+    .where('order_id', 'in', orderIds)
+    .groupBy('order_id')
+    .execute();
+  for (const row of counted) lineCounts.set(row.orderId, Number(row.lines));
+
+  return rows.map((row) => {
+    const paidMinor = paidByOrder.get(row.id) ?? paisa(0);
+    return {
+      ...toOrderSummary(row),
+      paidMinor,
+      balanceMinor: sub(row.total_minor, paidMinor),
+      lineCount: lineCounts.get(row.id) ?? 0,
+      waiterName: row.waiterName,
+      settledByName: row.settledByName,
+    };
+  });
+}
+
+/**
  * What the floor board shows: every order that is still live, split
  * into the three states an operator actually distinguishes, plus the
  * ones finished during the window they can still be looked up in.
@@ -313,6 +415,9 @@ export async function listOrders(db: Kysely<Database>, opts: ListOrdersOptions =
 export interface FloorOrder extends OrderSummary {
   readonly paidMinor: Paisa;
   readonly balanceMinor: Paisa;
+  /** Item lines on the order, voided ones included. Zero is what makes
+   * an order deletable rather than voidable — see `deleteEmptyOrder`. */
+  readonly lineCount: number;
 }
 
 export interface FloorBoard {
@@ -348,14 +453,30 @@ export async function getFloorBoard(db: Kysely<Database>, opts: FloorBoardOption
     .execute();
 
   const rows = [...live, ...completedRows];
-  const paidByOrder = await paidTotals(
-    db,
-    rows.map((row) => row.id),
-  );
+  const orderIds = rows.map((row) => row.id);
+  const paidByOrder = await paidTotals(db, orderIds);
+
+  // One grouped count for the whole board, so the floor can offer to
+  // delete an order that never became one without a query per row.
+  const lineCounts = new Map<number, number>();
+  if (orderIds.length > 0) {
+    const counted = await db
+      .selectFrom('order_line')
+      .select(({ fn }) => ['order_id as orderId', fn.count<number>('id').as('lines')])
+      .where('order_id', 'in', orderIds)
+      .groupBy('order_id')
+      .execute();
+    for (const row of counted) lineCounts.set(row.orderId, Number(row.lines));
+  }
 
   const decorate = (row: OrderRow): FloorOrder => {
     const paidMinor = paidByOrder.get(row.id) ?? paisa(0);
-    return { ...toOrderSummary(row), paidMinor, balanceMinor: sub(row.total_minor, paidMinor) };
+    return {
+      ...toOrderSummary(row),
+      paidMinor,
+      balanceMinor: sub(row.total_minor, paidMinor),
+      lineCount: lineCounts.get(row.id) ?? 0,
+    };
   };
 
   return {
@@ -984,6 +1105,71 @@ export async function setLineQty(
   });
 }
 
+/**
+ * Remove an order that never became one.
+ *
+ * A till accumulates these: a table opened by mistake, an order started
+ * for a customer who walked out, a double-tap on "New order". They are
+ * not transactions — nothing was ordered, nothing was billed, nothing
+ * was paid — but they sit on the floor at Rs 0.00 and, because a shift
+ * cannot close while any order is still open, they hold the day open at
+ * midnight.
+ *
+ * Voiding them would be the wrong record: a void says "this happened
+ * and was cancelled", and nothing happened here. So the row goes, and
+ * the audit log keeps the fact that it went, by whom, from where.
+ *
+ * Every condition below is checked here rather than in a route, because
+ * "genuinely empty" is the whole of the safety and it must hold for any
+ * caller. A single line — even a voided one — a single payment, a
+ * single non-zero figure, or any status other than `open` means this is
+ * a record of something, and records are not deleted (see
+ * docs/decisions/021).
+ */
+export async function deleteEmptyOrder(db: Kysely<Database>, orderId: number, actor: OrderActor): Promise<void> {
+  await db.transaction().execute(async (trx) => {
+    const order = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirst();
+    if (!order) throw new Error(`order ${orderId} not found`);
+
+    if (order.status !== 'open') {
+      throw new OrderStateError(
+        `order ${orderId} is ${order.status} — only an order that was never billed or paid can be deleted, and this one is part of the record`,
+      );
+    }
+
+    const lines = await trx.selectFrom('order_line').select('id').where('order_id', '=', orderId).execute();
+    if (lines.length > 0) {
+      throw new OrderStateError(
+        `order ${orderId} has ${lines.length} item line(s) — remove them first, or void the order if it needs to stay on the record`,
+      );
+    }
+
+    const payments = await trx.selectFrom('payment').select('id').where('order_id', '=', orderId).execute();
+    if (payments.length > 0) {
+      throw new OrderStateError(`order ${orderId} has money recorded against it and cannot be deleted`);
+    }
+
+    // Belt and braces: an order with no lines should have no figures
+    // either, and if it somehow does, that is not something to delete.
+    if (order.subtotal_minor !== 0 || order.total_minor !== 0 || order.order_discount_minor !== 0 || order.service_charge_minor !== 0) {
+      throw new OrderStateError(`order ${orderId} carries financial figures and cannot be deleted`);
+    }
+
+    // Audited BEFORE the delete: the audit row is the only thing that
+    // will remain, so it carries what the order was.
+    await recordAudit(trx, {
+      actorId: actor.actorId,
+      terminalId: actor.terminalId,
+      action: 'order.delete_empty',
+      entity: 'order',
+      entityId: orderId,
+      before: toOrderSummary(order),
+    });
+
+    await trx.deleteFrom('order').where('id', '=', orderId).execute();
+  });
+}
+
 // ---------------------------------------------------------------------
 // Who the order is for, and what the kitchen was told
 // ---------------------------------------------------------------------
@@ -1189,11 +1375,19 @@ export async function computeServiceCharge(
 ): Promise<{ amountMinor: Paisa; rateBp: number | null; displayName: string }> {
   const config = await getSetting(db, 'serviceCharge');
 
+  // A cashier who types an amount has decided what this one bill
+  // carries, and that decision stands whether or not a rate is
+  // configured: the till is where a customer's "add something for the
+  // staff" is answered, and a restaurant that has never configured a
+  // percentage still takes them. The configuration decides what is
+  // charged by DEFAULT, not what a cashier is permitted to charge.
+  //
+  // Two rules survive, because they are not about policy:
+  // a negative charge is not a charge, and a charge with no waiter has
+  // nobody to be paid out to (gratuity/service.ts writes the payout
+  // entry against a waiter id).
   if (override !== undefined) {
     if (override < 0) throw new OrderStateError('service charge cannot be negative');
-    if (override > 0 && !config.enabled) {
-      throw new OrderStateError('service charge is switched off for this restaurant — enable it in Settings first');
-    }
     if (override > 0 && order.waiter_id === null) {
       throw new OrderStateError('service charge requires a waiter; this order has none');
     }

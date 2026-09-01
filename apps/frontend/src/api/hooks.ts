@@ -26,6 +26,7 @@ import type {
   ModifierGroup,
   OrderDetail,
   OrderStatus,
+  OrderSearchResult,
   OrderSummary,
   OrderType,
   OwnershipShare,
@@ -143,6 +144,18 @@ export function useOrders(statuses: OrderStatus[]): UseQueryResult<OrderSummary[
 /** The floor board's three lists, split by the server — see the note on
  * getFloorBoard. One request, one consistent snapshot, so the lists can
  * never disagree with each other about where an order is. */
+/**
+ * Historical order lookup — a date window and an optional search term,
+ * never the whole database. Defaults to today on the server when no
+ * range is given.
+ */
+export function useOrderSearch(params: { date?: string; from?: string; to?: string; q?: string }): UseQueryResult<OrderSearchResult[]> {
+  return useQuery({
+    queryKey: ['orders', params],
+    queryFn: () => api.get<OrderSearchResult[]>(`/api/orders/search${query(params)}`),
+  });
+}
+
 export function useFloorBoard(): UseQueryResult<FloorBoard> {
   return useQuery({
     queryKey: ['orders', 'board'],
@@ -265,10 +278,31 @@ export function useReopenOrder(): UseMutationResult<OrderDetail, Error, { orderI
   });
 }
 
+/**
+ * Remove an order that never became one — no items, no payment, no
+ * figures. The server refuses anything else, so this cannot become a
+ * way to make a real sale disappear.
+ */
+export function useDeleteEmptyOrder(): UseMutationResult<void, Error, number> {
+  const invalidate = useInvalidateOnSuccess(['order', 'orders', 'board', 'shift']);
+  return useMutation({ mutationFn: (orderId) => api.del<void>(`/api/orders/${orderId}`), onSuccess: invalidate });
+}
+
 export function useVoidOrder(): UseMutationResult<OrderDetail, Error, { orderId: number; reason: string; token?: string }> {
   return useOrderMutation(({ orderId, reason, token }) => {
     const opts: RequestOptions = token !== undefined ? { token } : {};
     return api.post<OrderDetail>(`/api/orders/${orderId}/void`, { reason }, opts);
+  });
+}
+
+/** Reverse a settled order in full. Manager-only on the server; the
+ * till offers it where cancelling a sale is the honest answer, and lets
+ * the 403 speak for itself when the cashier is not one. */
+export function useRefundOrder(): UseMutationResult<{ refundPaymentId: number }, Error, { orderId: number; reason: string }> {
+  const invalidate = useInvalidateOnSuccess(['order', 'orders', 'board', 'order-history']);
+  return useMutation({
+    mutationFn: ({ orderId, reason }) => api.post<{ refundPaymentId: number }>(`/api/orders/${orderId}/refund`, { reason }),
+    onSuccess: invalidate,
   });
 }
 

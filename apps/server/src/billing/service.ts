@@ -94,15 +94,44 @@ export interface CreatePaymentMethodInput {
  * card... adding it later must be seeding a row plus an integration")
  * is exactly this function, called once, with kind: 'card'.
  */
+/**
+ * Thrown when a payment method cannot be created or changed as asked.
+ * Its own type because the answer is always something the admin can
+ * fix in the form in front of them — a code already in use, most of
+ * all, which used to surface as "Internal Server Error" from a raw
+ * UNIQUE constraint and told them nothing.
+ */
+export class PaymentMethodError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PaymentMethodError';
+  }
+}
+
 export async function createPaymentMethod(
   db: Kysely<Database>,
   input: CreatePaymentMethodInput,
   actor: ActorContext,
 ): Promise<PaymentMethodSummary> {
+  // The code is the method's stable identifier — the thing payments,
+  // reports and the seed all refer to — so it is normalised once, here,
+  // rather than left to whatever the form happened to send.
+  const code = input.code.trim().toLowerCase();
+  if (code === '') throw new PaymentMethodError('a payment method needs a code');
+
+  const existing = await db.selectFrom('payment_method').selectAll().where('code', '=', code).executeTakeFirst();
+  if (existing) {
+    throw new PaymentMethodError(
+      existing.active === 1
+        ? `"${code}" is already a payment method (${existing.display_name}) — rename that one instead of adding a second`
+        : `"${code}" is an inactive payment method (${existing.display_name}) — reactivate it rather than adding a second`,
+    );
+  }
+
   const row = await db
     .insertInto('payment_method')
     .values({
-      code: input.code,
+      code,
       display_name: input.displayName,
       kind: input.kind,
       active: 1,

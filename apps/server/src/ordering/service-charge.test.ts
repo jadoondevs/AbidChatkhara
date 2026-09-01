@@ -164,13 +164,28 @@ describe('service charge — configured, authoritative, and snapshotted', () => 
     expect(billed.serviceChargeRateBp).toBeNull();
   });
 
-  it('refuses an override while the charge is switched off, rather than silently dropping it', async () => {
+  it('takes a cashier-entered charge even with no rate configured at all', async () => {
     const { actor, item } = await setup();
     const order = await dineInOrder(item, actor);
 
-    await expect(billOrder(ctx.db, order.id, { serviceChargeMinor: paisa(100_00) }, actor)).rejects.toThrow(
-      /switched off for this restaurant/,
-    );
+    // The configuration decides what a bill carries by DEFAULT. A
+    // customer asking to add something for the staff is answered at the
+    // till, not by an admin editing Settings mid-service.
+    const billed = await billOrder(ctx.db, order.id, { serviceChargeMinor: paisa(100_00) }, actor);
+    expect(billed.serviceChargeMinor).toBe(100_00);
+    expect(billed.serviceChargeRateBp).toBeNull();
+    expect(billed.totalMinor).toBe(1_100_00);
+  });
+
+  it('still keeps a hand-entered charge out of net sales', async () => {
+    const { actor, item } = await setup();
+    const order = await dineInOrder(item, actor);
+
+    const billed = await billOrder(ctx.db, order.id, { serviceChargeMinor: paisa(100_00) }, actor);
+    // Money held for the waiter is not money the restaurant earned
+    // (docs/decisions/008), however it got onto the bill.
+    expect(billed.netSalesMinor).toBe(1_000_00);
+    expect(billed.subtotalMinor).toBe(1_000_00);
   });
 
   it('refuses an override on an order with no waiter', async () => {

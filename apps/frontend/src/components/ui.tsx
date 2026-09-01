@@ -20,12 +20,29 @@ export function ErrorBanner({ error }: { error: unknown }): JSX.Element | null {
   return <div className="error">{message}</div>;
 }
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }): JSX.Element {
+export function Modal({
+  title,
+  onClose,
+  children,
+  wide = false,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  /** For a dialog that carries a whole panel — the bill — rather than
+   * one question. It scrolls either way; this only stops the content
+   * being squeezed into a column narrower than it reads well in. */
+  wide?: boolean;
+}): JSX.Element {
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
-        <div className="row" style={{ marginBottom: 12 }}>
-          <h2 style={{ margin: 0, flex: 1 }}>{title}</h2>
+      <div className={`modal${wide ? ' modal-wide' : ''}`} onClick={(event) => event.stopPropagation()}>
+        {/* A dialog whose content carries its own heading passes an
+            empty title rather than repeating it — the close control
+            still needs somewhere to live. */}
+        <div className={`row modal-header${title ? '' : ' modal-header-bare'}`}>
+          {title && <h2 style={{ margin: 0, flex: 1 }}>{title}</h2>}
+          <span style={{ flex: 1 }} />
           <button className="ghost" onClick={onClose}>
             Close
           </button>

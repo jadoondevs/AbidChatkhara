@@ -4,6 +4,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { Kysely } from 'kysely';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../identity/require-auth.js';
+import { dateFilterSchema, resolveDateRange } from '../platform/date-range.js';
 import type { Database } from '../platform/db/types.js';
 import { getOrderHistory } from './history.js';
 import {
@@ -11,6 +12,7 @@ import {
   billOrder,
   ConcurrentModificationError,
   createOrder,
+  deleteEmptyOrder,
   getFloorBoard,
   getOrder,
   listOrders,
@@ -18,6 +20,7 @@ import {
   previewBillTotals,
   removeLine,
   reopenOrder,
+  searchOrders,
   setDiscount,
   setLineNote,
   setLineQty,
@@ -96,8 +99,17 @@ const orderDetailSchema = orderSummarySchema.extend({
 });
 
 const floorOrderSchema = orderSummarySchema.extend({
+  lineCount: z.number().int(),
   paidMinor: z.number().int(),
   balanceMinor: z.number().int(),
+});
+
+const orderSearchResultSchema = orderSummarySchema.extend({
+  paidMinor: z.number().int(),
+  balanceMinor: z.number().int(),
+  lineCount: z.number().int(),
+  waiterName: z.string().nullable(),
+  settledByName: z.string().nullable(),
 });
 
 const floorBoardSchema = z.object({
@@ -340,6 +352,31 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
 
   // The floor board's three lists in one call — see getFloorBoard for
   // why the split is computed here rather than by each screen.
+  /**
+   * Looking up what happened, as opposed to what is happening — see
+   * `searchOrders`. Registered BEFORE `/api/orders/:id` would be
+   * reachable for the same shape; Fastify matches static segments
+   * first, but keeping them adjacent makes that visible.
+   */
+  app.get(
+    '/api/orders/search',
+    {
+      schema: {
+        querystring: dateFilterSchema.extend({
+          q: z.string().max(120).optional(),
+          limit: z.coerce.number().int().positive().max(500).optional(),
+        }),
+        response: { 200: z.array(orderSearchResultSchema) },
+      },
+    },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      const { q, limit, ...filter } = request.query;
+      const range = resolveDateRange(filter);
+      return searchOrders(db, { ...range, ...(q === undefined ? {} : { q }), ...(limit === undefined ? {} : { limit }) });
+    },
+  );
+
   app.get(
     '/api/orders/board',
     {
@@ -422,6 +459,25 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
    * figures on it are the ones already printed on the customer's own
    * receipt.
    */
+  app.delete(
+    '/api/orders/:id',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        response: { 204: z.null() },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireAuth(request, reply);
+      // Any signed-in user: an order opened by mistake is the cashier's
+      // own mess to clear, and the service refuses anything that is not
+      // genuinely empty whoever asks.
+      await deleteEmptyOrder(db, request.params.id, { actorId: actor.userId, terminalId: actor.terminalId });
+      reply.code(204);
+      return null;
+    },
+  );
+
   app.patch(
     '/api/orders/:id/customer',
     {

@@ -1,7 +1,7 @@
 import { abs, paisa, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { ApiError } from '../api/client.js';
-import { useCloseShiftMutation, useOpenShift, useOpenShiftMutation, usePayoutSheet, useZReport } from '../api/hooks.js';
+import { useCloseShiftMutation, useDeleteEmptyOrder, useOpenShift, useOpenShiftMutation, usePayoutSheet, useZReport } from '../api/hooks.js';
 import type { BlockingOrder, ZReport } from '../api/types.js';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 
@@ -20,6 +20,7 @@ export function ShiftScreen(): JSX.Element {
   const [openingCashMinor, setOpeningCashMinor] = useState<Paisa>(paisa(0));
   const [countedCashMinor, setCountedCashMinor] = useState<Paisa>(paisa(0));
   const [blocking, setBlocking] = useState<BlockingOrder[] | null>(null);
+  const deleteOrder = useDeleteEmptyOrder();
 
   const shift = openShift.data;
   const zReport = useZReport(shift?.id ?? null);
@@ -61,12 +62,14 @@ export function ShiftScreen(): JSX.Element {
         <div className="card">
           <h3 style={{ margin: 0, color: 'var(--warn)' }}>Can&apos;t close yet</h3>
           <p className="muted">These orders are still open or awaiting payment:</p>
+          <ErrorBanner error={deleteOrder.error} />
           <table>
             <thead>
               <tr>
                 <th>Order</th>
                 <th>Type</th>
                 <th>Status</th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -75,6 +78,27 @@ export function ShiftScreen(): JSX.Element {
                   <td>{order.tableLabel ?? `#${order.id}`}</td>
                   <td>{order.orderType.replace('_', ' ')}</td>
                   <td>{order.status}</td>
+                  <td className="num">
+                    {/* An order with nothing on it is holding the day
+                        open for no reason. Clearing it here saves the
+                        manager hunting for it on the floor at
+                        midnight. */}
+                    {order.lineCount === 0 ? (
+                      <button
+                        className="ghost"
+                        disabled={deleteOrder.isPending}
+                        onClick={() =>
+                          deleteOrder.mutate(order.id, {
+                            onSuccess: () => setBlocking((current) => current?.filter((o) => o.id !== order.id) ?? null),
+                          })
+                        }
+                      >
+                        Delete (empty)
+                      </button>
+                    ) : (
+                      <span className="muted">{order.status === 'open' ? 'finish or void it' : 'take payment'}</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

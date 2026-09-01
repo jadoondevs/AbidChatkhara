@@ -15,6 +15,12 @@ import type { PrintOutcome } from './types.js';
  * answered), and printing the main document would print the POS around
  * the receipt.
  *
+ * ONE print job, always. `srcdoc` is set BEFORE the frame is attached,
+ * and the load handler fires at most once: attaching an empty frame
+ * first makes the browser load `about:blank`, which fired the handler
+ * on an empty document and printed it — the empty first PDF a cashier
+ * had to save and throw away before saving the real one.
+ *
  * Resolves once the dialog has been dismissed — printed OR cancelled,
  * which the browser does not distinguish. That is deliberate: a
  * cancelled print is not a failed sale, and nothing downstream may
@@ -44,7 +50,12 @@ export async function printHtmlViaBrowser(html: string): Promise<void> {
       resolve();
     };
 
+    let printed = false;
     iframe.onload = () => {
+      // A second load must never mean a second print job.
+      if (printed) return;
+      printed = true;
+
       const frameWindow = iframe.contentWindow;
       if (!frameWindow) {
         finish();
@@ -67,8 +78,11 @@ export async function printHtmlViaBrowser(html: string): Promise<void> {
       window.setTimeout(finish, 60_000);
     };
 
-    document.body.appendChild(iframe);
+    // Content first, then attach: an iframe attached empty loads
+    // about:blank and would print a blank page before the receipt
+    // arrived.
     iframe.srcdoc = html;
+    document.body.appendChild(iframe);
   });
 }
 

@@ -19,13 +19,15 @@ import {
 } from '../api/hooks.js';
 import type { PaymentAccount, PrinterSettings, ReceiptSettings, RestaurantSettings, Role, ServiceChargeSettings, User } from '../api/types.js';
 import { ErrorBanner, Loading, Modal, PasswordInput } from '../components/ui.tsx';
+import { PaymentMethodsPanel } from './PaymentMethodConfigScreen.tsx';
 
-type Tab = 'restaurant' | 'receipt' | 'service-charge' | 'accounts' | 'printer' | 'users';
+type Tab = 'restaurant' | 'receipt' | 'service-charge' | 'methods' | 'accounts' | 'printer' | 'users';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'restaurant', label: 'Restaurant' },
   { key: 'receipt', label: 'Receipt' },
   { key: 'service-charge', label: 'Service charge' },
+  { key: 'methods', label: 'Payment methods' },
   { key: 'accounts', label: 'Payment accounts' },
   { key: 'printer', label: 'Printer' },
   { key: 'users', label: 'Users' },
@@ -64,13 +66,14 @@ export function SettingsScreen(): JSX.Element {
           admin who came here looking for it should not have to guess
           that. */}
       <p className="muted elsewhere-note">
-        Also configurable: <Link to="/config/menu">menu and prices</Link>, <Link to="/config/partners">partners and ownership</Link>,{' '}
-        <Link to="/config/payment-methods">payment methods</Link>, and <Link to="/config/people">people for staff meals</Link>.
+        Also configurable: <Link to="/config/menu">menu and prices</Link>, <Link to="/config/partners">partners and ownership</Link>, and{' '}
+        <Link to="/config/people">people for staff meals</Link>.
       </p>
 
       {tab === 'restaurant' && <RestaurantPanel />}
       {tab === 'receipt' && <ReceiptPanel />}
       {tab === 'service-charge' && <ServiceChargePanel />}
+      {tab === 'methods' && <PaymentMethodsPanel />}
       {tab === 'accounts' && <AccountsPanel />}
       {tab === 'printer' && <PrinterPanel />}
       {tab === 'users' && <UsersPanel />}
@@ -614,6 +617,10 @@ function UsersPanel(): JSX.Element {
 
   return (
     <div className="card col settings-panel">
+      <p className="muted" style={{ margin: 0 }}>
+        Accounts that sign in to this till. Not the same as <Link to="/config/people">People</Link> (whose meals are tracked) or{' '}
+        <Link to="/config/partners">Partners</Link> (who own menu items) — a cook can be a person without ever having a login.
+      </p>
       <ErrorBanner error={update.error} />
 
       <div className="row">

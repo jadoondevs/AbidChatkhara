@@ -5,6 +5,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { App } from './App.tsx';
 import { AuthProvider } from './auth/AuthContext.tsx';
 import './index.css';
+import { registerServiceWorker } from './pwa.ts';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -19,6 +20,8 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+registerServiceWorker();
 
 const container = document.getElementById('root');
 if (!container) throw new Error('#root not found');

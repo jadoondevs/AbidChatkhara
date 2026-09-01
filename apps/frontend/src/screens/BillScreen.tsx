@@ -1,40 +1,68 @@
 import { paisa, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useBillOrder, useBillPreview, useOrder, usePrintBill, useServiceChargeSettings, useSetDiscount } from '../api/hooks.js';
+import {
+  useBillOrder,
+  useBillPreview,
+  useOrder,
+  usePrintBill,
+  useServiceChargeSettings,
+  useSetDiscount,
+  useVoidOrder,
+} from '../api/hooks.js';
 import type { OrderDetail, ServiceChargeSettings } from '../api/types.js';
+import { PrintDecision } from '../components/PrintDecision.tsx';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 import { orderTitle } from './OrderScreen.tsx';
 
 /**
- * Screen 4: order-level discount with reason, the service charge, the
- * rounded total, and print. Printing the bill returns to the floor view
- * (spec) rather than parking the cashier on a payment screen — payment
- * is picked up later, by whoever is at the till then, from the
- * awaiting-payment list.
+ * The bill: order-level discount with reason, the service charge, the
+ * rounded total, and print.
  *
- * The service charge is the restaurant's configured one, worked out by
- * the server; this screen shows what it will be and offers a waiver,
- * rather than asking a cashier to type the same percentage into every
- * bill and get one of them wrong.
+ * This is a PANEL, not a screen. The cashier meets it as a dialog over
+ * the order they are taking (OrderScreen), because "review the bill" is
+ * a step in taking an order, not a different place to be — leaving the
+ * order screen to look at its own total was a page change that bought
+ * nothing. `/orders/:id/bill` still renders the same panel as a page,
+ * so a bookmarked or reloaded URL keeps working.
+ *
+ * Printing hands straight over to payment for THIS order (see
+ * `onPrinted`): the cashier who just printed a bill is the person about
+ * to take the money for it, and sending them back to the floor to find
+ * the order again was the longest detour in the workflow.
  */
-export function BillScreen(): JSX.Element {
-  const { orderId: orderIdParam } = useParams();
-  const orderId = Number(orderIdParam);
-  const navigate = useNavigate();
-
+export function BillPanel({
+  orderId,
+  onBackToOrder,
+  onPrinted,
+  onCancelled,
+}: {
+  orderId: number;
+  onBackToOrder: () => void;
+  /** Called once the bill is finalised and the cashier is done with the
+   * printer, successfully or not. */
+  onPrinted: (orderId: number) => void;
+  /** Called when the sale was cancelled outright from the print
+   * decision. */
+  onCancelled: () => void;
+}): JSX.Element {
   const order = useOrder(orderId);
   const setDiscount = useSetDiscount();
   const billOrder = useBillOrder();
   const printBill = usePrintBill();
+  const voidOrder = useVoidOrder();
 
   const [discountMinor, setDiscountMinor] = useState<Paisa>(paisa(0));
   const [discountReason, setDiscountReason] = useState('');
   // null means "whatever the restaurant charges" — the normal case, and
-  // the only one that records the rate on the order. A number is a
-  // deliberate override for this one bill.
+  // the only one that records the rate on the order. A number is what
+  // the cashier decided this one bill carries.
   const [chargeOverride, setChargeOverride] = useState<Paisa | null>(null);
   const [printError, setPrintError] = useState<unknown>(null);
+  // Set once the bill is finalised and the ticket has gone somewhere
+  // other than a thermal printer — the point at which only the cashier
+  // knows whether anything came out.
+  const [decision, setDecision] = useState<{ orderId: number; failed: boolean } | null>(null);
 
   if (order.isLoading) return <Loading />;
   if (order.error) return <ErrorBanner error={order.error} />;
@@ -44,47 +72,65 @@ export function BillScreen(): JSX.Element {
   const alreadyBilled = detail.status === 'billed';
   const staffMeal = detail.channel !== 'customer';
   const noWaiter = detail.waiterId === null;
-  // A service charge cannot be attributed without a waiter, and the
-  // server refuses one — so the card explains itself rather than
-  // offering a field that would be rejected.
+  // A service charge is paid out to a waiter, so an order with none has
+  // nobody to attribute it to and the server refuses one — the card
+  // says so rather than offering a field that would be rejected.
   const serviceChargeAllowed = !noWaiter && !staffMeal;
 
   const applyDiscount = () => {
     setDiscount.mutate({ orderId, discountMinor, ...(discountReason.trim() ? { reason: discountReason.trim() } : {}) });
   };
 
-  const printAndReturn = (id: number) => {
+  const print = (id: number) => {
+    setPrintError(null);
     printBill.mutate(id, {
-      onSuccess: () => navigate('/'),
+      onSuccess: (via) => {
+        // A thermal printer either took the ticket or threw. Nothing to
+        // ask, so the cashier goes straight on to taking the money.
+        if (via === 'thermal') {
+          onPrinted(id);
+          return;
+        }
+        setDecision({ orderId: id, failed: false });
+      },
       // A dead printer must never block the flow: the bill is already
-      // finalised server-side, so surface the failure and let the
-      // cashier carry on (see ARCHITECTURE.md on PrintError -> 502).
-      onError: (error) => setPrintError(error),
+      // finalised server-side (see docs/decisions/018), so the cashier
+      // is asked what they want to do, not told the sale failed.
+      onError: (error) => {
+        setPrintError(error);
+        setDecision({ orderId: id, failed: true });
+      },
     });
   };
 
   const finaliseAndPrint = () => {
     if (alreadyBilled) {
-      printAndReturn(orderId);
+      print(orderId);
       return;
     }
-    // Send the override only when there is one. Sending the previewed
-    // amount back would turn the restaurant's rate into a number this
-    // screen typed, and the order would no longer record which rate
-    // produced it.
+    // Send the charge only when the cashier set one. Sending the
+    // previewed amount back would turn the restaurant's own rate into a
+    // number this screen typed, and the order would no longer record
+    // which rate produced it.
     billOrder.mutate(
       { orderId, ...(chargeOverride === null ? {} : { serviceChargeMinor: chargeOverride }) },
-      { onSuccess: (billed) => printAndReturn(billed.id) },
+      { onSuccess: (billed) => print(billed.id) },
     );
   };
 
   return (
-    <div className="col" style={{ maxWidth: 760 }}>
-      <h1 style={{ margin: 0 }}>
+    <div className="col bill-panel">
+      <h2 style={{ margin: 0 }}>
         Bill — {orderTitle(detail)} <span className="muted">#{detail.id}</span>
-      </h1>
+      </h2>
+      <p className="muted" style={{ margin: 0 }}>
+        {detail.orderType.replace(/_/g, ' ')}
+        {detail.tableLabel ? ` · table ${detail.tableLabel}` : ''}
+        {detail.customerName ? ` · ${detail.customerName}` : ''}
+        {detail.invoiceNo !== null ? ` · invoice #${detail.invoiceNo}` : ''}
+      </p>
 
-      <ErrorBanner error={setDiscount.error ?? billOrder.error ?? printError} />
+      <ErrorBanner error={setDiscount.error ?? billOrder.error ?? voidOrder.error ?? printError} />
 
       {!alreadyBilled && (
         <div className="card col">
@@ -115,68 +161,123 @@ export function BillScreen(): JSX.Element {
 
       {!alreadyBilled && (
         <ServiceChargeCard
+          orderId={orderId}
           allowed={serviceChargeAllowed}
           staffMeal={staffMeal}
-          override={chargeOverride}
-          onOverride={setChargeOverride}
+          amount={chargeOverride}
+          onAmount={setChargeOverride}
         />
       )}
 
       <BillTotalsCard order={detail} chargeOverride={serviceChargeAllowed ? chargeOverride : paisa(0)} alreadyBilled={alreadyBilled} />
 
       <div className="row">
-        <button className="ghost big" onClick={() => navigate(`/orders/${orderId}`)}>
+        <button className="ghost big" onClick={onBackToOrder}>
           Back to order
         </button>
         <span className="spacer" style={{ flex: 1 }} />
         <button className="primary big" disabled={billOrder.isPending || printBill.isPending} onClick={finaliseAndPrint}>
-          {alreadyBilled ? 'Reprint bill' : 'Print bill'}
+          {billOrder.isPending || printBill.isPending ? 'Printing…' : alreadyBilled ? 'Reprint bill' : 'Print bill'}
         </button>
       </div>
 
-      {printError !== null && (
-        <div className="card">
-          <p>
-            The bill is finalised — only the printer failed. Fix the printer and reprint, or carry on: payment can still be taken from the
-            awaiting-payment list.
-          </p>
-          <button onClick={() => navigate('/')}>Back to floor</button>
-        </div>
+      {decision && (
+        <PrintDecision
+          title={decision.failed ? 'Printing failed' : 'Bill sent to Windows printing'}
+          detail={
+            decision.failed
+              ? 'The bill is finalised — only the printer failed. Nothing has been charged yet, and payment can still be taken.'
+              : 'No POS printer is connected, so the bill went to the Windows print dialog. If it did not come out, send it again.'
+          }
+          continueLabel="Continue without printing"
+          cancelLabel="Cancel sale"
+          busy={printBill.isPending || voidOrder.isPending}
+          onContinue={() => {
+            setDecision(null);
+            onPrinted(decision.orderId);
+          }}
+          onRetry={() => print(decision.orderId)}
+          onCancelSale={() =>
+            // Nothing has been paid at this point, so cancelling is the
+            // system's ordinary void: the order stays on the record as
+            // voided rather than disappearing.
+            voidOrder.mutate(
+              { orderId: decision.orderId, reason: 'cancelled at the bill, not printed' },
+              {
+                onSuccess: () => {
+                  setDecision(null);
+                  onCancelled();
+                },
+              },
+            )
+          }
+        />
       )}
     </div>
   );
 }
 
 /**
- * What the service charge will be, and the one way to change it.
+ * `/orders/:id/bill` as a page. The normal workflow opens the same
+ * panel as a dialog over the order screen; this exists so a reload, a
+ * bookmark or a direct link still lands somewhere sensible.
+ */
+export function BillScreen(): JSX.Element {
+  const { orderId: orderIdParam } = useParams();
+  const orderId = Number(orderIdParam);
+  const navigate = useNavigate();
+
+  return (
+    <div style={{ maxWidth: 760 }}>
+      <BillPanel
+        orderId={orderId}
+        onBackToOrder={() => navigate(`/orders/${orderId}`)}
+        onPrinted={(id) => navigate(`/orders/${id}/payment`)}
+        onCancelled={() => navigate('/')}
+      />
+    </div>
+  );
+}
+
+/**
+ * The service charge on this bill, in rupees.
  *
- * The amount itself is not shown here — it is on the totals card
- * below, computed by the server — because two places showing "the
- * service charge" is exactly how they come to disagree. This card says
- * which rule is being applied and lets the cashier waive or adjust it
- * for this bill, which is recorded as an override rather than as a
- * rate (docs/decisions: an overridden charge names no percentage,
- * because no percentage produced it).
+ * The cashier types an amount, not a percentage: "add 200 for the
+ * staff" is what a customer says, and asking a busy till to work out 5%
+ * of 4,150 is how a bill gets the wrong number on it. The restaurant's
+ * configured rate does that arithmetic instead — the field is seeded
+ * with what the rate produces, and the cashier is free to change it,
+ * zero it, or leave it alone.
+ *
+ * Leaving it alone is not the same as typing the same number: an
+ * untouched charge records the rate that produced it on the order, and
+ * a typed one records no rate, because no rate produced it
+ * (docs/decisions/019).
  */
 function ServiceChargeCard({
+  orderId,
   allowed,
   staffMeal,
-  override,
-  onOverride,
+  amount,
+  onAmount,
 }: {
+  orderId: number;
   allowed: boolean;
   staffMeal: boolean;
-  override: Paisa | null;
-  onOverride: (value: Paisa | null) => void;
+  amount: Paisa | null;
+  onAmount: (value: Paisa | null) => void;
 }): JSX.Element {
   const config = useServiceChargeSettings();
-  const [editing, setEditing] = useState(false);
+  // What the configured rule would charge, straight from the server's
+  // own calculation — the seed for the field below, and never a second
+  // implementation of the rate.
+  const suggested = useBillPreview(orderId).data?.serviceChargeMinor ?? paisa(0);
 
   return (
     <div className="card col">
       <div className="row">
         <h3 style={{ margin: 0, flex: 1 }}>{config.data?.displayName ?? 'Service charge'}</h3>
-        {override !== null && <span className="pill warn">Overridden</span>}
+        {amount !== null && <span className="pill warn">Set by hand</span>}
       </div>
 
       {!allowed ? (
@@ -186,62 +287,48 @@ function ServiceChargeCard({
             : "This order has no waiter, so a service charge can't be attributed — it stays zero."}
         </p>
       ) : (
-        <ServiceChargeControls config={config.data} override={override} onOverride={onOverride} editing={editing} setEditing={setEditing} />
+        <ServiceChargeAmount config={config.data} amount={amount} suggested={suggested} onAmount={onAmount} />
       )}
     </div>
   );
 }
 
-function ServiceChargeControls({
+function ServiceChargeAmount({
   config,
-  override,
-  onOverride,
-  editing,
-  setEditing,
+  amount,
+  suggested,
+  onAmount,
 }: {
   config: ServiceChargeSettings | undefined;
-  override: Paisa | null;
-  onOverride: (value: Paisa | null) => void;
-  editing: boolean;
-  setEditing: (value: boolean) => void;
+  amount: Paisa | null;
+  suggested: Paisa;
+  onAmount: (value: Paisa | null) => void;
 }): JSX.Element {
-  if (!config) return <p className="muted">Loading…</p>;
-
-  // Switched off restaurant-wide: there is nothing to waive, and the
-  // server refuses a non-zero override, so the card explains where the
-  // setting lives instead of offering a field that cannot be used.
-  if (!config.enabled) {
-    return <p className="muted">Switched off for this restaurant. An admin can turn it on under Settings → Service charge.</p>;
-  }
+  const configured = config?.enabled === true && config.rateBp > 0;
 
   return (
     <>
-      <p className="muted" style={{ margin: 0 }}>
-        {config.rateBp / 100}% of net sales
-        {config.dineInOnly ? ', dine-in only' : ''} — held for the waiter, never revenue.
+      <div style={{ maxWidth: 240 }}>
+        <label htmlFor="service-charge">Amount (optional)</label>
+        <MoneyInput id="service-charge" valueMinor={amount ?? suggested} onChange={(value) => onAmount(value)} />
+      </div>
+
+      <p className="muted field-hint" style={{ margin: 0 }}>
+        {configured
+          ? `${(config?.rateBp ?? 0) / 100}% of net sales${config?.dineInOnly ? ', dine-in only' : ''} — held for the waiter, never revenue. Change it or set it to zero on any bill.`
+          : 'Optional on every bill — held for the waiter, never revenue. Leave it at zero to charge none. An admin can set a standard rate under Settings → Service charge.'}
       </p>
 
-      {editing || override !== null ? (
-        <div style={{ maxWidth: 240 }}>
-          <label htmlFor="service-charge">Charge for this bill</label>
-          <MoneyInput id="service-charge" valueMinor={override ?? paisa(0)} onChange={(value) => onOverride(value)} />
-          <div className="row" style={{ marginTop: 8 }}>
-            <button
-              onClick={() => {
-                onOverride(null);
-                setEditing(false);
-              }}
-            >
-              Use the standard charge
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="row">
-          <button onClick={() => onOverride(paisa(0))}>Waive on this bill</button>
-          <button onClick={() => setEditing(true)}>Change the amount</button>
-        </div>
-      )}
+      <div className="row">
+        <button disabled={amount === null && suggested === 0} onClick={() => onAmount(paisa(0))}>
+          No service charge
+        </button>
+        {configured && (
+          <button disabled={amount === null} onClick={() => onAmount(null)}>
+            Use the standard {(config?.rateBp ?? 0) / 100}%
+          </button>
+        )}
+      </div>
     </>
   );
 }
@@ -322,6 +409,9 @@ function BillTotalsCard({
         <span>Total</span>
         <Money minor={totals?.totalMinor} />
       </div>
+      {/* Net sales is what the restaurant earned; the total is what the
+          customer hands over. The service charge is the difference that
+          belongs to neither — see docs/decisions/008. */}
       {!alreadyBilled && <p className="muted field-hint">This is the amount that will be printed.</p>}
     </div>
   );

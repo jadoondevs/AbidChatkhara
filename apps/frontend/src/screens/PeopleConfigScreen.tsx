@@ -44,8 +44,9 @@ export function PeopleConfigScreen(): JSX.Element {
     <div className="col" style={{ maxWidth: 1000 }}>
       <h1 style={{ margin: 0 }}>People</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        Staff and partners whose meals the restaurant tracks. Login accounts for this POS are separate — they live in{' '}
-        <Link to="/settings">Settings → Users</Link>.
+        Staff and partners whose <strong>meals</strong> the restaurant tracks — a cook who never touches the till, a partner who eats here.
+        Separate from <Link to="/settings">Settings → Users</Link>, the accounts that sign in, and from{' '}
+        <Link to="/config/partners">Partners</Link>, who own items on the menu.
       </p>
       <ErrorBanner error={createPerson.error ?? updatePerson.error} />
 
