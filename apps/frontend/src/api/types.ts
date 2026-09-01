@@ -157,16 +157,43 @@ export interface BillTotals {
   totalMinor: Paisa;
 }
 
+export type PaymentAccountType = 'easypaisa' | 'bank' | 'other';
+
 export interface PaymentAccount {
   id: number;
   paymentMethodId: number;
+  accountType: PaymentAccountType;
   label: string;
   accountTitle: string | null;
   accountNumber: string | null;
   bankName: string | null;
   active: boolean;
   sortOrder: number;
+  createdAt: string;
+  updatedAt: string | null;
 }
+
+/**
+ * Everything the payment screen needs to decide what to offer for one
+ * method. `blockedReason` is the server's own sentence — the screen
+ * shows it rather than composing its own, so the block a cashier reads
+ * is the rule the server will enforce.
+ */
+export interface PaymentOption {
+  paymentMethodId: number;
+  code: string;
+  displayName: string;
+  kind: PaymentMethodKind;
+  requiresAccount: boolean;
+  accounts: PaymentAccount[];
+  blockedReason: string | null;
+}
+
+/** How a ticket was printed. `fallback` carries the ticket as HTML for
+ * the browser's own print dialog — see api/printing.ts. */
+export type PrintOutcome =
+  | { method: 'thermal' }
+  | { method: 'fallback'; reason: 'not_configured' | 'unreachable'; detail: string | null; html: string };
 
 export interface RestaurantSettings {
   name: string;

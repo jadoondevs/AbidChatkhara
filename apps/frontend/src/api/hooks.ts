@@ -1,12 +1,15 @@
 import type { Paisa } from '@pos/shared';
 import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 import { api, query, type RequestOptions } from './client.js';
+import { completePrint } from './printing.js';
 import type {
   AppSettings,
   BillTotals,
   Category,
   FloorBoard,
   PaymentAccount,
+  PaymentOption,
+  PrintOutcome,
   PrinterSettings,
   ReceiptSettings,
   RestaurantSettings,
@@ -297,12 +300,28 @@ export function useSettleConsumption(): UseMutationResult<
   return useOrderMutation(({ orderId, ...body }) => api.post<SettleConsumptionResult>(`/api/orders/${orderId}/settle-consumption`, body));
 }
 
-export function usePrintBill(): UseMutationResult<{ ok: true }, Error, number> {
-  return useMutation({ mutationFn: (orderId: number) => api.post<{ ok: true }>(`/api/orders/${orderId}/print-bill`) });
+/** What each payment method can accept right now — see PaymentOption. */
+export function usePaymentOptions(): UseQueryResult<PaymentOption[]> {
+  return useQuery({ queryKey: ['payment-options'], queryFn: () => api.get<PaymentOption[]>('/api/payment-options') });
 }
 
-export function usePrintReceipt(): UseMutationResult<{ ok: true }, Error, number> {
-  return useMutation({ mutationFn: (orderId: number) => api.post<{ ok: true }>(`/api/orders/${orderId}/print-receipt`) });
+/**
+ * Printing always succeeds as far as the server is concerned: it either
+ * printed to the thermal printer or handed back the ticket as HTML.
+ * `completePrint` then opens the browser's print dialog for the second
+ * case (api/printing.ts), so a caller gets one promise for "the ticket
+ * has been dealt with" however this till prints.
+ */
+export function usePrintBill(): UseMutationResult<'thermal' | 'fallback', Error, number> {
+  return useMutation({
+    mutationFn: async (orderId: number) => completePrint(await api.post<PrintOutcome>(`/api/orders/${orderId}/print-bill`)),
+  });
+}
+
+export function usePrintReceipt(): UseMutationResult<'thermal' | 'fallback', Error, number> {
+  return useMutation({
+    mutationFn: async (orderId: number) => completePrint(await api.post<PrintOutcome>(`/api/orders/${orderId}/print-receipt`)),
+  });
 }
 
 // ---------------------------------------------------------------------

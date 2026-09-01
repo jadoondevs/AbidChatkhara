@@ -686,6 +686,12 @@ th.num {
   max-width: 720px;
 }
 
+/* Wider than the other panels: an account row carries a name, a full
+   account number, a state and two actions. */
+.accounts-panel {
+  max-width: 900px;
+}
+
 .field-hint {
   font-size: 12px;
   margin: 4px 0 0;
@@ -758,4 +764,74 @@ th.num {
 
 .settled-card {
   max-width: 560px;
+}
+
+/* ---------------------------------------------------------------------
+   Payment accounts and blocked payments
+   --------------------------------------------------------------------- */
+
+/* A payment that cannot be taken, and why. Deliberately not styled as
+   an error: nothing has gone wrong — an account has not been set up
+   yet, and the notice says who fixes it and where. */
+.blocked-notice {
+  border-left: 3px solid var(--warn);
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+}
+
+.blocked-notice.info {
+  border-left-color: var(--accent);
+}
+
+.blocked-notice.ok {
+  border-left-color: var(--success);
+}
+
+.blocked-notice p {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.method-blocked {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+}
+
+/* Where the money is going, stated plainly when there is only one
+   account and therefore nothing to choose. */
+.account-note {
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  font-size: 14px;
+}
+
+.account-group {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+/* An account row is a name, a number, a state and two actions. At the
+   panel's default width the number wraps and the actions stack, which
+   reads as two rows for one account — so this panel gets more room and
+   the actions are kept on one line. */
+.account-group table {
+  width: 100%;
+}
+
+.account-group td:last-child {
+  white-space: nowrap;
+}
+
+.account-group td:nth-child(2) {
+  word-break: break-all;
+}
+
+.account-group:first-of-type {
+  border-top: none;
+  padding-top: 0;
 }
