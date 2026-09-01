@@ -228,8 +228,15 @@ function ZReportCard({ zReport, loading }: { zReport: ZReport | undefined; loadi
 
       <section>
         <h4>Sales</h4>
+        {/* What was rung up, before anything was taken off — the figure
+            the discounts below are a deduction FROM. Without it the
+            "taken off bills" section has no denominator. */}
         <div className="total-line">
-          <span>Customer sales</span>
+          <span>Gross sales</span>
+          <Money minor={zReport.grossSalesMinor} />
+        </div>
+        <div className="total-line">
+          <span>Customer sales (after discounts)</span>
           <Money minor={zReport.customerSalesMinor} />
         </div>
         <div className="total-line">

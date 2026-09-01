@@ -165,10 +165,22 @@ function DailySales({ range }: { range: DateRange }): JSX.Element {
 
   return (
     <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', alignItems: 'start' }}>
+      {/* The whole chain, in the order it happens: what was rung up,
+          what was taken off, what that leaves, what was added on top,
+          and what customers actually handed over. A single "sales"
+          figure cannot be reconciled against a cash drawer; this can. */}
       <div className="card">
         <h3 style={{ margin: 0 }}>Sales</h3>
+        <div className="total-line">
+          <span>Gross sales</span>
+          <Money minor={data.grossSalesMinor} />
+        </div>
+        <div className="total-line">
+          <span>Discounts</span>
+          <Money minor={data.discountsMinor} />
+        </div>
         <div className="total-line grand">
-          <span>Customer sales</span>
+          <span>Net customer sales</span>
           <Money minor={data.customerSalesMinor} />
         </div>
         <div className="total-line">
@@ -176,16 +188,27 @@ function DailySales({ range }: { range: DateRange }): JSX.Element {
           <Money minor={data.consumptionMinor} />
         </div>
         <div className="total-line">
-          <span>Combined</span>
+          <span>Combined net sales</span>
           <Money minor={data.combinedSalesMinor} />
         </div>
         <div className="total-line">
           <span>Tax collected</span>
           <Money minor={data.taxCollectedMinor} />
         </div>
+        {/* Held for the waiters, never revenue (docs/decisions/008) —
+            so it is on its own line here and on its own line in the
+            payout breakdown, never folded into sales. */}
+        <div className="total-line">
+          <span>Service charge (owed to waiters)</span>
+          <Money minor={data.serviceChargeMinor} />
+        </div>
         <div className="total-line">
           <span>Rounding adjustments</span>
           <Money minor={data.roundingAdjustmentMinor} />
+        </div>
+        <div className="total-line grand">
+          <span>Total collected</span>
+          <Money minor={data.totalCollectedMinor} />
         </div>
       </div>
 
