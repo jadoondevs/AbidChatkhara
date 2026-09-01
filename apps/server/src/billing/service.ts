@@ -30,6 +30,16 @@ export interface BillingActor {
 // Payment methods
 // ---------------------------------------------------------------------
 
+/**
+ * A payment method is a TYPE of payment — what the customer paid with.
+ * Cash, a wallet, a bank transfer, a card.
+ *
+ * Where the money went is a payment ACCOUNT, which is a different thing
+ * and can exist more than once per method: a restaurant with two
+ * Easypaisa wallets has one method and two accounts. The account
+ * columns that used to live on this table are superseded and no longer
+ * read (see migration 0019 and the note on PaymentMethodTable).
+ */
 export interface PaymentMethodSummary {
   readonly id: number;
   readonly code: string;
@@ -37,11 +47,6 @@ export interface PaymentMethodSummary {
   readonly kind: PaymentMethodKind;
   readonly active: boolean;
   readonly sortOrder: number;
-  readonly printOnBill: boolean;
-  readonly accountTitle: string | null;
-  readonly accountNumber: string | null;
-  readonly bankName: string | null;
-  readonly instructionsLine: string | null;
 }
 
 interface PaymentMethodRow {
@@ -66,11 +71,6 @@ function toPaymentMethodSummary(row: PaymentMethodRow): PaymentMethodSummary {
     kind: row.kind,
     active: row.active === 1,
     sortOrder: row.sort_order,
-    printOnBill: row.print_on_bill === 1,
-    accountTitle: row.account_title,
-    accountNumber: row.account_number,
-    bankName: row.bank_name,
-    instructionsLine: row.instructions_line,
   };
 }
 
@@ -79,11 +79,6 @@ export interface CreatePaymentMethodInput {
   readonly displayName: string;
   readonly kind: PaymentMethodKind;
   readonly sortOrder?: number | undefined;
-  readonly printOnBill?: boolean | undefined;
-  readonly accountTitle?: string | undefined;
-  readonly accountNumber?: string | undefined;
-  readonly bankName?: string | undefined;
-  readonly instructionsLine?: string | undefined;
 }
 
 /**
@@ -136,11 +131,13 @@ export async function createPaymentMethod(
       kind: input.kind,
       active: 1,
       sort_order: input.sortOrder ?? 0,
-      print_on_bill: input.printOnBill ? 1 : 0,
-      account_title: input.accountTitle ?? null,
-      account_number: input.accountNumber ?? null,
-      bank_name: input.bankName ?? null,
-      instructions_line: input.instructionsLine ?? null,
+      // Superseded columns (0019): written as empty so the row is
+      // valid, never read.
+      print_on_bill: 0,
+      account_title: null,
+      account_number: null,
+      bank_name: null,
+      instructions_line: null,
     })
     .returningAll()
     .executeTakeFirstOrThrow();
@@ -168,13 +165,9 @@ export async function listPaymentMethods(
 
 export interface UpdatePaymentMethodInput {
   readonly displayName?: string | undefined;
+  readonly kind?: PaymentMethodKind | undefined;
   readonly active?: boolean | undefined;
   readonly sortOrder?: number | undefined;
-  readonly printOnBill?: boolean | undefined;
-  readonly accountTitle?: string | undefined;
-  readonly accountNumber?: string | undefined;
-  readonly bankName?: string | undefined;
-  readonly instructionsLine?: string | undefined;
 }
 
 export async function updatePaymentMethod(
@@ -189,14 +182,10 @@ export async function updatePaymentMethod(
   const after = await db
     .updateTable('payment_method')
     .set({
-      ...(input.displayName !== undefined ? { display_name: input.displayName } : {}),
+      ...(input.displayName !== undefined ? { display_name: input.displayName.trim() } : {}),
+      ...(input.kind !== undefined ? { kind: input.kind } : {}),
       ...(input.active !== undefined ? { active: input.active ? 1 : 0 } : {}),
       ...(input.sortOrder !== undefined ? { sort_order: input.sortOrder } : {}),
-      ...(input.printOnBill !== undefined ? { print_on_bill: input.printOnBill ? 1 : 0 } : {}),
-      ...(input.accountTitle !== undefined ? { account_title: input.accountTitle } : {}),
-      ...(input.accountNumber !== undefined ? { account_number: input.accountNumber } : {}),
-      ...(input.bankName !== undefined ? { bank_name: input.bankName } : {}),
-      ...(input.instructionsLine !== undefined ? { instructions_line: input.instructionsLine } : {}),
     })
     .where('id', '=', id)
     .returningAll()
@@ -247,6 +236,9 @@ export interface PaymentAccountSummary {
   readonly accountNumber: string | null;
   readonly bankName: string | null;
   readonly active: boolean;
+  /** Whether this account's details print for a customer to pay into.
+   * Independent of `active` — see migration 0019. */
+  readonly printOnReceipt: boolean;
   readonly sortOrder: number;
   readonly createdAt: string;
   readonly updatedAt: string | null;
@@ -260,6 +252,7 @@ interface PaymentAccountRow {
   account_number: string | null;
   bank_name: string | null;
   active: number;
+  print_on_receipt: number;
   sort_order: number;
   created_at: string;
   updated_at: string | null;
@@ -275,6 +268,8 @@ function toPaymentAccountSummary(row: PaymentAccountRow, kind: PaymentMethodKind
     accountNumber: row.account_number,
     bankName: row.bank_name,
     active: row.active === 1,
+    /** Independent of `active` — see migration 0019. */
+    printOnReceipt: row.print_on_receipt === 1,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -287,6 +282,9 @@ export interface CreatePaymentAccountInput {
   readonly accountTitle?: string | undefined;
   readonly accountNumber?: string | undefined;
   readonly bankName?: string | undefined;
+  /** Defaults to true: an account someone has just configured is
+   * normally one they want customers to be able to pay into. */
+  readonly printOnReceipt?: boolean | undefined;
   readonly sortOrder?: number | undefined;
 }
 
@@ -312,6 +310,7 @@ export async function createPaymentAccount(
       account_number: input.accountNumber ?? null,
       bank_name: input.bankName ?? null,
       active: 1,
+      print_on_receipt: input.printOnReceipt === false ? 0 : 1,
       sort_order: input.sortOrder ?? 0,
       created_at: now,
       updated_at: now,
@@ -376,6 +375,7 @@ export interface UpdatePaymentAccountInput {
   readonly accountNumber?: string | undefined;
   readonly bankName?: string | undefined;
   readonly active?: boolean | undefined;
+  readonly printOnReceipt?: boolean | undefined;
   readonly sortOrder?: number | undefined;
 }
 
@@ -407,6 +407,9 @@ export async function updatePaymentAccount(
       ...(input.accountNumber !== undefined ? { account_number: input.accountNumber } : {}),
       ...(input.bankName !== undefined ? { bank_name: input.bankName } : {}),
       ...(input.active !== undefined ? { active: input.active ? 1 : 0 } : {}),
+      // Deliberately independent of `active`: turning an account off a
+      // ticket must not stop it taking money, and vice versa.
+      ...(input.printOnReceipt !== undefined ? { print_on_receipt: input.printOnReceipt ? 1 : 0 } : {}),
       ...(input.sortOrder !== undefined ? { sort_order: input.sortOrder } : {}),
       updated_at: new Date().toISOString(),
     })
@@ -466,7 +469,7 @@ async function resolvePaymentAccount(
   trx: Transaction<Database>,
   method: { id: number; kind: PaymentMethodKind; display_name: string },
   paymentAccountId: number | undefined,
-): Promise<number | null> {
+): Promise<PaymentAccountSummary | null> {
   if (!methodRequiresAccount(method.kind)) {
     if (paymentAccountId !== undefined) {
       throw new PaymentAccountError(`${method.display_name} is taken at the till — it does not land in an account`);
@@ -482,7 +485,7 @@ async function resolvePaymentAccount(
         `No ${method.display_name} account is configured. Add an active ${method.display_name} account in Settings before accepting this payment.`,
       );
     }
-    if (active.length === 1) return (active[0] as PaymentAccountSummary).id;
+    if (active.length === 1) return active[0] as PaymentAccountSummary;
     throw new PaymentAccountError(
       `Choose which ${method.display_name} account received this payment — ${active.length} are configured.`,
     );
@@ -498,7 +501,7 @@ async function resolvePaymentAccount(
       `That account cannot receive a ${method.display_name} payment — it is not an active ${method.display_name} account.`,
     );
   }
-  return chosen.id;
+  return chosen;
 }
 
 // ---------------------------------------------------------------------
@@ -640,7 +643,7 @@ export async function recordPayment(
     if (!method || method.active !== 1) throw new Error(`payment method ${input.paymentMethodId} not found or inactive`);
     if (input.amountMinor <= 0) throw new Error('payment amount must be positive');
 
-    const paymentAccountId = await resolvePaymentAccount(trx, method, input.paymentAccountId);
+    const account = await resolvePaymentAccount(trx, method, input.paymentAccountId);
 
     const priorPayments = await unreversedPayments(trx, orderId);
     const paidSoFar = sum(priorPayments.map((p) => p.amount_minor));
@@ -675,7 +678,16 @@ export async function recordPayment(
         payment_method_id: input.paymentMethodId,
         amount_minor: appliedMinor,
         reference_no: input.referenceNo?.trim() ? input.referenceNo.trim() : null,
-        payment_account_id: paymentAccountId,
+        payment_account_id: account?.id ?? null,
+        // What the method and the account were called, and whether the
+        // account was printing, AT THIS MOMENT. A receipt reprinted
+        // after someone corrects the account holder's name must still
+        // show the account this money actually went to (0019).
+        method_name_snapshot: method.display_name,
+        account_label_snapshot: account?.label ?? null,
+        account_number_snapshot: account?.accountNumber ?? null,
+        account_bank_snapshot: account?.bankName ?? null,
+        account_print_on_receipt_snapshot: account === null ? null : account.printOnReceipt ? 1 : 0,
         tendered_minor: tenderedMinor,
         change_minor: changeMinor,
         received_by: actor.actorId,
@@ -826,7 +838,7 @@ export async function settleConsumption(
       }
       const method = await trx.selectFrom('payment_method').selectAll().where('id', '=', input.paymentMethodId).executeTakeFirst();
       if (!method || method.active !== 1) throw new Error(`payment method ${input.paymentMethodId} not found or inactive`);
-      const paymentAccountId = await resolvePaymentAccount(trx, method, input.paymentAccountId);
+      const account = await resolvePaymentAccount(trx, method, input.paymentAccountId);
 
       paymentRow = await trx
         .insertInto('payment')
@@ -835,7 +847,12 @@ export async function settleConsumption(
           payment_method_id: input.paymentMethodId,
           amount_minor: chargedMinor,
           reference_no: input.referenceNo?.trim() ? input.referenceNo.trim() : null,
-          payment_account_id: paymentAccountId,
+          payment_account_id: account?.id ?? null,
+          method_name_snapshot: method.display_name,
+          account_label_snapshot: account?.label ?? null,
+          account_number_snapshot: account?.accountNumber ?? null,
+          account_bank_snapshot: account?.bankName ?? null,
+          account_print_on_receipt_snapshot: account === null ? null : account.printOnReceipt ? 1 : 0,
           // A staff meal is settled for exactly what is owed — there is
           // no tendering step and so never any change.
           tendered_minor: null,
@@ -952,6 +969,14 @@ export async function refundOrder(db: Kysely<Database>, orderId: number, input: 
         amount_minor: paisa(-amountToRefund),
         reference_no: null,
         payment_account_id: originalPayment.payment_account_id,
+        // The refund carries the ORIGINAL payment's snapshot: money
+        // went back out of the account it came into, under the name it
+        // had then.
+        method_name_snapshot: originalPayment.method_name_snapshot,
+        account_label_snapshot: originalPayment.account_label_snapshot,
+        account_number_snapshot: originalPayment.account_number_snapshot,
+        account_bank_snapshot: originalPayment.account_bank_snapshot,
+        account_print_on_receipt_snapshot: originalPayment.account_print_on_receipt_snapshot,
         tendered_minor: null,
         change_minor: null,
         received_by: actor.actorId,

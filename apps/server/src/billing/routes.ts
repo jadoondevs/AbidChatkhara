@@ -29,6 +29,8 @@ const settlementTypeSchema = z.enum(['house_expense', 'payroll_deduction', 'part
 
 const paymentMethodKindSchema = z.enum(['cash', 'wallet', 'bank_transfer', 'card']);
 
+/** A method is what the customer paid WITH. Where the money went is a
+ * payment account — see `paymentAccountSchema`. */
 const paymentMethodSchema = z.object({
   id: z.number().int(),
   code: z.string(),
@@ -36,11 +38,6 @@ const paymentMethodSchema = z.object({
   kind: paymentMethodKindSchema,
   active: z.boolean(),
   sortOrder: z.number().int(),
-  printOnBill: z.boolean(),
-  accountTitle: z.string().nullable(),
-  accountNumber: z.string().nullable(),
-  bankName: z.string().nullable(),
-  instructionsLine: z.string().nullable(),
 });
 
 const orderSummarySchema = z.object({
@@ -80,6 +77,7 @@ const paymentAccountSchema = z.object({
   accountNumber: z.string().nullable(),
   bankName: z.string().nullable(),
   active: z.boolean(),
+  printOnReceipt: z.boolean(),
   sortOrder: z.number().int(),
   createdAt: z.string(),
   updatedAt: z.string().nullable(),
@@ -205,15 +203,10 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
     {
       schema: {
         body: z.object({
-          code: z.string().min(1),
-          displayName: z.string().min(1),
+          code: z.string().min(1).max(40),
+          displayName: z.string().min(1).max(60),
           kind: paymentMethodKindSchema,
           sortOrder: z.number().int().optional(),
-          printOnBill: z.boolean().optional(),
-          accountTitle: z.string().optional(),
-          accountNumber: z.string().optional(),
-          bankName: z.string().optional(),
-          instructionsLine: z.string().optional(),
         }),
         response: { 201: paymentMethodSchema },
       },
@@ -231,14 +224,10 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
       schema: {
         params: z.object({ id: z.coerce.number().int() }),
         body: z.object({
-          displayName: z.string().min(1).optional(),
+          displayName: z.string().min(1).max(60).optional(),
+          kind: paymentMethodKindSchema.optional(),
           active: z.boolean().optional(),
           sortOrder: z.number().int().optional(),
-          printOnBill: z.boolean().optional(),
-          accountTitle: z.string().optional(),
-          accountNumber: z.string().optional(),
-          bankName: z.string().optional(),
-          instructionsLine: z.string().optional(),
         }),
         response: { 200: paymentMethodSchema },
       },
@@ -282,6 +271,7 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
           accountTitle: z.string().optional(),
           accountNumber: z.string().optional(),
           bankName: z.string().optional(),
+          printOnReceipt: z.boolean().optional(),
           sortOrder: z.number().int().optional(),
         }),
         response: { 201: paymentAccountSchema },
@@ -305,6 +295,9 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
           accountNumber: z.string().optional(),
           bankName: z.string().optional(),
           active: z.boolean().optional(),
+          // Independent of `active`, and settable on its own — an
+          // account comes off the ticket without coming off the till.
+          printOnReceipt: z.boolean().optional(),
           sortOrder: z.number().int().optional(),
         }),
         response: { 200: paymentAccountSchema },

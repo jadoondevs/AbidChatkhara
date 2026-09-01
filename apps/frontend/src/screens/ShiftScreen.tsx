@@ -1,8 +1,16 @@
 import { abs, paisa, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { ApiError } from '../api/client.js';
-import { useCloseShiftMutation, useDeleteEmptyOrder, useOpenShift, useOpenShiftMutation, usePayoutSheet, useZReport } from '../api/hooks.js';
-import type { BlockingOrder, ZReport } from '../api/types.js';
+import {
+  useBlockingOrders,
+  useCloseShiftMutation,
+  useDeleteEmptyOrder,
+  useOpenShift,
+  useOpenShiftMutation,
+  usePayoutSheet,
+  useZReport,
+} from '../api/hooks.js';
+import type { ZReport } from '../api/types.js';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 
 /**
@@ -19,12 +27,15 @@ export function ShiftScreen(): JSX.Element {
 
   const [openingCashMinor, setOpeningCashMinor] = useState<Paisa>(paisa(0));
   const [countedCashMinor, setCountedCashMinor] = useState<Paisa>(paisa(0));
-  const [blocking, setBlocking] = useState<BlockingOrder[] | null>(null);
   const deleteOrder = useDeleteEmptyOrder();
 
   const shift = openShift.data;
   const zReport = useZReport(shift?.id ?? null);
   const payout = usePayoutSheet(shift?.id ?? null);
+  // Live server state, not a copy of a failed close: clearing a blocker
+  // anywhere — here, or on the floor — updates this list and with it
+  // whether the shift can close.
+  const blocking = useBlockingOrders(shift?.id ?? null);
 
   if (openShift.isLoading) return <Loading />;
 
@@ -48,6 +59,7 @@ export function ShiftScreen(): JSX.Element {
   }
 
   const closed = shift.closedAt !== null;
+  const blockers = blocking.data ?? [];
 
   return (
     <div className="col" style={{ maxWidth: 1100 }}>
@@ -58,8 +70,8 @@ export function ShiftScreen(): JSX.Element {
 
       <ErrorBanner error={closeShift.error instanceof ApiError && closeShift.error.isDomainError ? null : closeShift.error} />
 
-      {blocking && blocking.length > 0 && (
-        <div className="card">
+      {blockers.length > 0 && (
+        <div className="card blocking-orders">
           <h3 style={{ margin: 0, color: 'var(--warn)' }}>Can&apos;t close yet</h3>
           <p className="muted">These orders are still open or awaiting payment:</p>
           <ErrorBanner error={deleteOrder.error} />
@@ -73,7 +85,7 @@ export function ShiftScreen(): JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {blocking.map((order) => (
+              {blockers.map((order) => (
                 <tr key={order.id}>
                   <td>{order.tableLabel ?? `#${order.id}`}</td>
                   <td>{order.orderType.replace('_', ' ')}</td>
@@ -87,11 +99,11 @@ export function ShiftScreen(): JSX.Element {
                       <button
                         className="ghost"
                         disabled={deleteOrder.isPending}
-                        onClick={() =>
-                          deleteOrder.mutate(order.id, {
-                            onSuccess: () => setBlocking((current) => current?.filter((o) => o.id !== order.id) ?? null),
-                          })
-                        }
+                        // The mutation invalidates the shift's queries,
+                        // so the row leaves this list because the server
+                        // no longer returns it — not because the screen
+                        // hid it.
+                        onClick={() => deleteOrder.mutate(order.id)}
                       >
                         Delete (empty)
                       </button>
@@ -113,23 +125,14 @@ export function ShiftScreen(): JSX.Element {
             <label htmlFor="counted-cash">Counted cash</label>
             <MoneyInput id="counted-cash" valueMinor={countedCashMinor} onChange={setCountedCashMinor} />
           </div>
+          {/* Disabled while the server would refuse anyway, with the
+              reason on screen above rather than behind a click. */}
           <button
             className="primary big"
-            disabled={closeShift.isPending}
-            onClick={() =>
-              closeShift.mutate(
-                { shiftId: shift.id, countedCashMinor },
-                {
-                  onSuccess: () => setBlocking(null),
-                  onError: (error) => {
-                    const body = error instanceof ApiError ? (error.body as { blockingOrders?: BlockingOrder[] }) : null;
-                    setBlocking(body?.blockingOrders ?? []);
-                  },
-                },
-              )
-            }
+            disabled={closeShift.isPending || blockers.length > 0}
+            onClick={() => closeShift.mutate({ shiftId: shift.id, countedCashMinor })}
           >
-            Count and close
+            {blockers.length > 0 ? `${blockers.length} order${blockers.length === 1 ? '' : 's'} to clear first` : 'Count and close'}
           </button>
         </div>
       )}
