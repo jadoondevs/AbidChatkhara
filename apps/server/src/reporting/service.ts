@@ -384,16 +384,19 @@ async function consumptionDetailLines(
   if (records.length === 0) return [];
   const orderIds = records.map((r) => r.orderId);
 
+  // Names come from the line's own snapshot, not from a join to the
+  // menu: this report says what a person ate on a given day, and
+  // renaming a dish must not rewrite what they were served.
   const lineRows = await db
     .selectFrom('order_line')
-    .innerJoin('item', 'item.id', 'order_line.item_id')
     .innerJoin('order', 'order.id', 'order_line.order_id')
     .select([
       'order_line.id as lineId',
       'order_line.order_id as orderId',
+      'order_line.item_id as itemId',
       'order_line.qty as qty',
       'order_line.net_sales_minor as menuValueMinor',
-      'item.name as itemName',
+      'order_line.item_name_snapshot as itemName',
       'order.invoice_no as invoiceNo',
       'order.closed_at as closedAt',
     ])
@@ -405,8 +408,11 @@ async function consumptionDetailLines(
   const modifierRows = lineRows.length
     ? await db
         .selectFrom('order_line_modifier')
-        .innerJoin('modifier', 'modifier.id', 'order_line_modifier.modifier_id')
-        .select(['order_line_modifier.order_line_id as lineId', 'modifier.name as name'])
+        .select([
+          'order_line_modifier.order_line_id as lineId',
+          'order_line_modifier.modifier_id as modifierId',
+          'order_line_modifier.modifier_name_snapshot as name',
+        ])
         .where(
           'order_line_modifier.order_line_id',
           'in',
@@ -434,10 +440,10 @@ async function consumptionDetailLines(
         invoiceNo: line.invoiceNo,
         personId: record.personId,
         personName: record.personName,
-        itemName: line.itemName,
+        itemName: line.itemName ?? `item ${line.itemId}`,
         modifierNames: modifierRows
           .filter((m) => m.lineId === line.lineId)
-          .map((m) => m.name)
+          .map((m) => m.name ?? `modifier ${m.modifierId}`)
           .join(', '),
         qty: line.qty,
         menuValueMinor: line.menuValueMinor,
