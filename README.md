@@ -17,10 +17,11 @@ credit), tax (configurable rules, shipped with none active), shifts
 (open/close, cash reconciliation, Z-report, waiter payout sheet),
 reporting (all six spec-required reports, each CSV-exportable), and the
 frontend (an installable React PWA covering all twelve screens) are
-done, and the definition-of-done pass is complete** — a seed script,
-plus an executable full-day test that runs the spec's whole scenario
-offline and checks every closing figure it names. See `ARCHITECTURE.md`
-for how it's put together.
+done, the definition-of-done pass is complete** — a seed script, plus
+an executable full-day test that runs the spec's whole scenario offline
+and checks every closing figure it names — **and the service charge,
+partner management and historical-order work described below is in.**
+See `ARCHITECTURE.md` for how it's put together.
 
 ## Requirements
 
@@ -81,6 +82,101 @@ only) holds the restaurant's name and address, the receipt wording, the
 printer, the Easypaisa and bank accounts money arrives in, and the login
 accounts themselves.
 
+### The service charge
+
+The service charge is configured once, under **Settings → Service
+charge**: on or off, a percentage, the name the customer reads, and
+whether it applies to dine-in only. One calculation on the server
+produces it for the bill preview, the bill, the receipt, the reports
+and the Z-report, so those cannot disagree. Switched off, it is zero
+everywhere — including a cashier's attempt to enter one by hand, which
+is refused rather than quietly kept.
+
+A cashier can still waive or adjust the charge on one bill. That is
+recorded as an override, and the ticket then names no percentage,
+because no percentage produced the amount.
+
+**Changing the rate never rewrites the past.** Each order stores the
+rate it was billed at, so an order taken while the charge was 5% still
+reads 5% — on screen and on a reprinted receipt — after an admin sets
+10%. See `docs/decisions/019`.
+
+The charge is money held for the waiter who earned it, not the
+restaurant's revenue (`docs/decisions/008`), so it appears on its own
+line in every report and never inside a sales figure.
+
+### Past orders
+
+Clicking a completed order on the floor opens its full record: the
+order and invoice numbers, type, table, customer, waiter, who opened and
+who settled it, the times, every item with its quantity, unit price,
+line total, modifiers and kitchen note, the whole financial breakdown
+including the service-charge rate that applied, every payment with its
+method, account, reference, cash received and change, and the partner
+split at the shares in force when it closed. From there: reprint the
+receipt, or go back to the floor.
+
+Everything on that page was recorded at the time of the sale — item
+names included, so renaming a dish does not rewrite the bills that sold
+it (`docs/decisions/020`). Opening an order never modifies it.
+
+### Partners
+
+**Partners** manages the people the restaurant shares takings with:
+create, rename, mark as left, bring back, and open a partner's record —
+what they have been credited to date, the items they own today with
+their shares, and their recent allocations at the share each sale was
+written at. Marking a partner as left records a departure; it does not
+reassign what they own, and the confirmation says so, with a count.
+
+Ownership splits still apply **from now forward only**: past sales keep
+the shares they were allocated under (`docs/decisions/006`).
+
+### Payment accounts
+
+Easypaisa and bank payments have to say **which** of the restaurant's
+accounts received the money, so each non-cash method needs at least one
+active account configured under **Settings → Payment accounts** before a
+cashier can accept it:
+
+| Active accounts for the method | What the cashier sees |
+| ------------------------------ | --------------------- |
+| none | The method is flagged "not set up" and the payment is blocked, with the reason and where to fix it |
+| one  | It is selected automatically; the screen names where the money is going |
+| two or more | An account picker, required before the payment can be recorded |
+
+Cash needs no account — it is handed over at the till and lands in the
+drawer. The rule is enforced in the service, not just the screen (see
+`docs/decisions/017`), so it holds for any caller.
+
+Accounts are **deactivated, never deleted**: a payment references the
+account it landed in, and deleting one would orphan that answer on every
+historical payment. Deactivating the last active account for a method is
+the same statement as "we no longer take Easypaisa" — that method is
+then blocked until another is added.
+
+### Printing
+
+Printer configuration is **optional**. Receipts print by whichever route
+is available:
+
+1. **A configured, reachable POS printer** — the receipt goes straight
+   to it as ESC/POS over raw TCP, with no dialog, exactly as before.
+2. **No printer configured, or the configured one cannot be reached** —
+   the server hands the till the same ticket as HTML and the browser
+   opens the normal Windows print dialog, where **Microsoft Print to
+   PDF** and every installed printer are available.
+
+A print is never allowed to fail a sale. By the time a receipt is
+printed the payment is already recorded, so a missing printer, an
+unreachable one, or a cancelled print dialog all leave the sale intact
+and Reprint receipt available. Both paths render the same ticket data,
+so the total on a PDF printed from Windows is the total on the thermal
+ticket to the paisa (see `docs/decisions/018`).
+
+Account numbers are masked to their last four digits on a printed
+ticket.
+
 ### Upgrading an existing database
 
 Sign-in changed from "pick your user id, tap a PIN" to a username and a
@@ -92,8 +188,25 @@ short password and the column has always held a salted hash of whatever
 they type. Two people sharing a first name get `name.id` (`ali.3`), and
 an admin can rename anyone from Settings → Users afterwards.
 
-Nothing needs to be done by hand: start the new server against the
-existing database and it migrates on startup, as always.
+**The service charge arrives switched off.** An upgraded till charges
+nothing until an admin enables it under Settings → Service charge, and
+orders billed before the upgrade keep the charge they were billed with,
+naming no percentage — because a person typed the amount, and no
+percentage produced it.
+
+**One thing does need doing by hand after upgrading**: an existing
+database has no payment accounts, so Easypaisa and bank transfers are
+blocked until an admin adds at least one under Settings → Payment
+accounts. Cash is unaffected and keeps working throughout. The till says
+exactly this when a cashier selects a method with no account, rather
+than failing at the moment of payment — but a restaurant that takes
+Easypaisa should configure it before its next service rather than
+discover it at the counter.
+
+Nothing else needs to be done by hand: start the new server against the
+existing database and it migrates on startup, as always. Historical
+payments recorded before this rule keep their empty account and are left
+untouched.
 
 ### Developing
 

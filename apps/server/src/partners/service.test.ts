@@ -9,7 +9,9 @@ import {
   checkOwnershipIntegrity,
   createPartner,
   getActiveItemOwnership,
+  getPartnerRecord,
   listPartners,
+  renamePartner,
   reverseLineAllocations,
   reverseOrderAllocations,
   scheduleOwnershipIntegrityCheck,
@@ -61,6 +63,123 @@ describe('partners/service', () => {
       expect(deactivated.active).toBe(false);
       expect(deactivated.leftAt).not.toBeNull();
       expect((await listPartners(ctx.db)).map((p) => p.name)).not.toContain('Carol');
+    });
+  });
+
+  describe('partner management', () => {
+    it('renames a partner without touching anything they were allocated', async () => {
+      const { actor, item, alice } = await setupBase();
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: alice.id, shareBp: 10_000 }], actor);
+      const billed = await billedOrder(item, actor);
+      await allocateOrder(ctx.db, billed.id, new Date(), actor);
+
+      const before = await getPartnerRecord(ctx.db, alice.id);
+      const renamed = await renamePartner(ctx.db, alice.id, 'Alice Khan', actor);
+      expect(renamed.name).toBe('Alice Khan');
+
+      const after = await getPartnerRecord(ctx.db, alice.id);
+      expect(after?.totalAllocatedMinor).toBe(before?.totalAllocatedMinor);
+      expect(after?.recentAllocations).toEqual(before?.recentAllocations);
+    });
+
+    it('rejects a blank name', async () => {
+      const { actor, alice } = await setupBase();
+      await expect(renamePartner(ctx.db, alice.id, '   ', actor)).rejects.toThrow();
+    });
+
+    it('brings a partner back after they were marked as left', async () => {
+      const { actor, alice } = await setupBase();
+      await setPartnerActive(ctx.db, alice.id, false, actor);
+      const back = await setPartnerActive(ctx.db, alice.id, true, actor);
+      expect(back.active).toBe(true);
+      expect(back.leftAt).toBeNull();
+      expect((await listPartners(ctx.db)).map((p) => p.name)).toContain('Alice');
+    });
+
+    it('keeps crediting a partner who has left until their items are reassigned', async () => {
+      const { actor, item, alice } = await setupBase();
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: alice.id, shareBp: 10_000 }], actor);
+      await setPartnerActive(ctx.db, alice.id, false, actor);
+
+      // Deactivating records a departure; it does not reassign what
+      // they own, which is exactly why the UI says so before doing it.
+      const billed = await billedOrder(item, actor);
+      await allocateOrder(ctx.db, billed.id, new Date(), actor);
+      const record = await getPartnerRecord(ctx.db, alice.id);
+      expect(record?.totalAllocatedMinor).toBe(1000_00);
+      expect(record?.ownedItems).toHaveLength(1);
+    });
+  });
+
+  describe('getPartnerRecord', () => {
+    it('returns null for a partner who does not exist', async () => {
+      await setupBase();
+      expect(await getPartnerRecord(ctx.db, 9_999)).toBeNull();
+    });
+
+    it('reports what they own today and what they have been credited', async () => {
+      const { actor, item, alice, bob } = await setupBase();
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: alice.id, shareBp: 6_000 }, { partnerId: bob.id, shareBp: 4_000 }], actor);
+      const billed = await billedOrder(item, actor);
+      await allocateOrder(ctx.db, billed.id, new Date(), actor);
+
+      const record = await getPartnerRecord(ctx.db, alice.id);
+      expect(record?.ownedItems).toEqual([{ itemId: item.id, itemName: 'Karahi', shareBp: 6_000 }]);
+      expect(record?.totalAllocatedMinor).toBe(600_00);
+      expect(record?.recentAllocations[0]).toMatchObject({
+        orderId: billed.id,
+        itemName: 'Karahi',
+        qty: 1,
+        shareBpSnapshot: 6_000,
+        amountMinor: 600_00,
+        isReversal: false,
+      });
+    });
+
+    it('shows an allocation at the share it was written at, not today’s', async () => {
+      const { actor, item, alice, bob } = await setupBase();
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: alice.id, shareBp: 10_000 }], actor);
+      const billed = await billedOrder(item, actor);
+      await allocateOrder(ctx.db, billed.id, new Date(), actor);
+
+      // The split changes afterwards. The sale that already happened
+      // was Alice's in full, and stays that way.
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: bob.id, shareBp: 10_000 }], actor);
+
+      const record = await getPartnerRecord(ctx.db, alice.id);
+      expect(record?.recentAllocations[0]?.shareBpSnapshot).toBe(10_000);
+      expect(record?.totalAllocatedMinor).toBe(1000_00);
+      expect(record?.ownedItems).toHaveLength(0);
+    });
+
+    it('shows a reversal as a reversal rather than netting it away', async () => {
+      const { actor, item, alice } = await setupBase();
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: alice.id, shareBp: 10_000 }], actor);
+      const billed = await billedOrder(item, actor);
+      await allocateOrder(ctx.db, billed.id, new Date(), actor);
+      await reverseOrderAllocations(ctx.db, billed.id, actor);
+
+      const record = await getPartnerRecord(ctx.db, alice.id);
+      // A partner asking why a figure moved is owed the entry that
+      // moved it, so both rows are there and the total nets to zero.
+      expect(record?.recentAllocations).toHaveLength(2);
+      expect(record?.recentAllocations.filter((a) => a.isReversal)).toHaveLength(1);
+      expect(record?.totalAllocatedMinor).toBe(0);
+    });
+
+    it('names the item as it was sold, after the menu is renamed', async () => {
+      const { actor, item, alice } = await setupBase();
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: alice.id, shareBp: 10_000 }], actor);
+      const billed = await billedOrder(item, actor);
+      await allocateOrder(ctx.db, billed.id, new Date(), actor);
+
+      const { renameItem } = await import('../catalog/service.js');
+      await renameItem(ctx.db, item.id, 'Chicken Karahi (full)', actor);
+
+      const record = await getPartnerRecord(ctx.db, alice.id);
+      expect(record?.recentAllocations[0]?.itemName).toBe('Karahi');
+      // What they own TODAY is a live question, so that one moves.
+      expect(record?.ownedItems[0]?.itemName).toBe('Chicken Karahi (full)');
     });
   });
 

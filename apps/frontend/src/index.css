@@ -686,6 +686,12 @@ th.num {
   max-width: 720px;
 }
 
+/* Wider than the other panels: an account row carries a name, a full
+   account number, a state and two actions. */
+.accounts-panel {
+  max-width: 900px;
+}
+
 .field-hint {
   font-size: 12px;
   margin: 4px 0 0;
@@ -758,4 +764,221 @@ th.num {
 
 .settled-card {
   max-width: 560px;
+}
+
+/* ---------------------------------------------------------------------
+   Payment accounts and blocked payments
+   --------------------------------------------------------------------- */
+
+/* A payment that cannot be taken, and why. Deliberately not styled as
+   an error: nothing has gone wrong — an account has not been set up
+   yet, and the notice says who fixes it and where. */
+.blocked-notice {
+  border-left: 3px solid var(--warn);
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+}
+
+.blocked-notice.info {
+  border-left-color: var(--accent);
+}
+
+.blocked-notice.ok {
+  border-left-color: var(--success);
+}
+
+.blocked-notice p {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.method-blocked {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+}
+
+/* Where the money is going, stated plainly when there is only one
+   account and therefore nothing to choose. */
+.account-note {
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  font-size: 14px;
+}
+
+.account-group {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+/* An account row is a name, a number, a state and two actions. At the
+   panel's default width the number wraps and the actions stack, which
+   reads as two rows for one account — so this panel gets more room and
+   the actions are kept on one line. */
+.account-group table {
+  width: 100%;
+}
+
+.account-group td:last-child {
+  white-space: nowrap;
+}
+
+.account-group td:nth-child(2) {
+  word-break: break-all;
+}
+
+.account-group:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+/* ---------------------------------------------------------------
+   The historical order record (OrderDetailScreen).
+
+   Two columns on a desk-sized screen — "what this order was" beside
+   "what it came to" — collapsing to one on a narrow till. Everything
+   below runs full width because items and payments are lists, not
+   summaries.
+   --------------------------------------------------------------- */
+.order-detail .detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .order-detail .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Label left, value right, on one line each. The label is allowed to
+   wrap; the value is not, so a time or an amount stays readable. */
+.detail-field {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-field:last-child {
+  border-bottom: none;
+}
+
+.detail-field > span:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Modifiers and void notes hang under the item they belong to rather
+   than taking a row of their own — the eye should read one line per
+   thing that was ordered. */
+.line-modifiers {
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+/* One payment: amount and method on top, the trail underneath. Each
+   payment is a box because a bill settled with cash plus a wallet is
+   two separate events, and running them together loses which
+   reference belonged to which. */
+.payment-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 10px 12px;
+}
+
+/* A refund is money going the other way and must not be mistaken for
+   a payment at a glance. */
+.payment-card.refund {
+  border-left-color: var(--danger);
+}
+
+.payment-card-details {
+  font-size: 13px;
+  margin-top: 6px;
+  display: grid;
+  gap: 2px;
+}
+
+/* ---------------------------------------------------------------
+   Partner management.
+   --------------------------------------------------------------- */
+.partner-list {
+  gap: 8px;
+}
+
+/* Each partner is a small block, not a bullet: a name, whether they
+   are still here, and the two or three things a manager does to
+   them. */
+.partner-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.partner-row.selected {
+  border-color: var(--accent);
+}
+
+.partner-row-actions button {
+  font-size: 13px;
+  padding: 4px 8px;
+}
+
+/* A name that opens a record reads as a name, not as a button — but it
+   is a button, so it keeps keyboard focus and Enter. */
+button.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 3px;
+}
+
+button.link-button:hover {
+  text-decoration-color: var(--accent);
+}
+
+/* Who a takeaway or delivery is for, above the item grid. */
+.customer-bar {
+  align-items: flex-end;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+/* A kitchen instruction, under the line it belongs to. */
+.bill-line-note {
+  font-size: 12px;
+  font-style: italic;
+}
+
+.bill-line-note-button {
+  font-size: 12px;
+  padding: 2px 6px;
+}
+
+/* A pointer to the configuration that lives on its own screens. */
+.elsewhere-note {
+  margin: 0;
+  font-size: 13px;
+}
+
+.elsewhere-note a {
+  color: var(--accent);
 }

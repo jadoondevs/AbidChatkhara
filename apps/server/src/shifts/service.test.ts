@@ -1,12 +1,12 @@
 import { paisa } from '@pos/shared';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createPaymentMethod, recordPayment, refundOrder, settleConsumption } from '../billing/service.js';
+import { createPaymentAccount, createPaymentMethod, recordPayment, refundOrder, settleConsumption } from '../billing/service.js';
 import { createCategory, createItem, setItemPrice } from '../catalog/service.js';
 import { createUser } from '../identity/service.js';
 import { createPerson } from '../consumption/service.js';
 import { addLine, billOrder, createOrder, removeLine, setDiscount, voidLine, voidOrder } from '../ordering/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
-import { createTestDb } from '../platform/db/test-helpers.js';
+import { createTestDb, enableServiceCharge } from '../platform/db/test-helpers.js';
 import { eventBus } from '../platform/events/bus.js';
 import { closeShift, getBlockingOrders, getOpenShift, getZReport, openShift, ShiftCloseBlockedError, ShiftStateError } from './service.js';
 
@@ -21,6 +21,7 @@ describe('shifts/service', () => {
     ctx = createTestDb();
     const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     const actor = { actorId: admin.id, terminalId: 'till-1' };
+    await enableServiceCharge(ctx.db, actor);
 
     const category = await createCategory(ctx.db, { name: 'Mains' }, actor);
     const item = await createItem(ctx.db, { categoryId: category.id, name: 'Karahi' }, actor);
@@ -30,6 +31,9 @@ describe('shifts/service', () => {
     await setItemOwnership(ctx.db, item.id, [{ partnerId: partner.id, shareBp: 10_000 }], actor);
     const cash = await createPaymentMethod(ctx.db, { code: 'cash', displayName: 'Cash', kind: 'cash' }, actor);
     const easypaisa = await createPaymentMethod(ctx.db, { code: 'easypaisa', displayName: 'Easypaisa', kind: 'wallet' }, actor);
+    // A wallet payment now needs an account to land in, so every shift
+    // fixture that takes one configures the account it lands in.
+    await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Counter wallet' }, actor);
 
     return { admin, actor, item, partner, cash, easypaisa };
   }

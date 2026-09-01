@@ -6,7 +6,9 @@ import { createPerson } from '../consumption/service.js';
 import { createUser } from '../identity/service.js';
 import { addLine, billOrder, createOrder, setDiscount, voidLine, voidOrder } from '../ordering/service.js';
 import { createPartner, setItemOwnership, setModifierOwnership } from '../partners/service.js';
-import { createTestDb } from '../platform/db/test-helpers.js';
+import { createTestDb, enableServiceCharge } from '../platform/db/test-helpers.js';
+import { defaultsFor } from '../settings/schema.js';
+import { saveSetting } from '../settings/service.js';
 import { createTaxRule } from '../tax/service.js';
 import {
   allocationReconciliation,
@@ -29,6 +31,7 @@ describe('reporting/service', () => {
     ctx = createTestDb();
     const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
     const actor = { actorId: admin.id, terminalId: 'till-1' };
+    await enableServiceCharge(ctx.db, actor);
     const waiter = await createUser(ctx.db, { name: 'Bilal', username: 'bilal', password: '1111', role: 'server' }, actor);
 
     const category = await createCategory(ctx.db, { name: 'Mains' }, actor);
@@ -373,5 +376,145 @@ describe('reporting/service', () => {
       const report = await dailySalesReport(ctx.db);
       expect(report.taxCollectedMinor).toBe(160_00);
     });
+  });
+
+  describe('dailySalesReport — the accounting breakdown', () => {
+    it('separates gross sales, discounts, tax, service charge and what was collected', async () => {
+      const { actor, item, cash, waiter } = await setupBase();
+
+      const order = await createOrder(ctx.db, { orderType: 'dine_in', tableLabel: 'T1', waiterId: waiter.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor); // Rs 1,000 menu value
+      await setDiscount(ctx.db, order.id, { discountMinor: paisa(100_00), reason: 'regular' }, actor);
+      const billed = await billOrder(ctx.db, order.id, { serviceChargeMinor: paisa(50_00) }, actor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
+
+      const report = await dailySalesReport(ctx.db);
+      expect(report.grossSalesMinor).toBe(1000_00);
+      expect(report.discountsMinor).toBe(100_00);
+      expect(report.customerSalesMinor).toBe(900_00);
+      expect(report.taxCollectedMinor).toBe(0);
+      // Service charge is its own line, never folded into a sales
+      // figure — it is money held for the waiter, not revenue.
+      expect(report.serviceChargeMinor).toBe(50_00);
+      expect(report.customerSalesMinor).not.toBe(report.totalCollectedMinor);
+      expect(report.totalCollectedMinor).toBe(billed.totalMinor);
+    });
+
+    it('adds up: gross - discounts = net sales', async () => {
+      const { actor, item, cash } = await setupBase();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 2 }, actor);
+      await setDiscount(ctx.db, order.id, { discountMinor: paisa(250_00), reason: 'staff friend' }, actor);
+      const billed = await billOrder(ctx.db, order.id, {}, actor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
+
+      const report = await dailySalesReport(ctx.db);
+      expect(report.grossSalesMinor - report.discountsMinor).toBe(report.combinedSalesMinor);
+    });
+
+    it('adds up: what was collected equals the payment breakdown', async () => {
+      const { actor, item, cash, waiter } = await setupBase();
+      const order = await createOrder(ctx.db, { orderType: 'dine_in', tableLabel: 'T2', waiterId: waiter.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      const billed = await billOrder(ctx.db, order.id, { serviceChargeMinor: paisa(75_00) }, actor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
+
+      const report = await dailySalesReport(ctx.db);
+      expect(sum(report.paymentMethodBreakdown.map((line) => line.totalMinor))).toBe(report.totalCollectedMinor);
+    });
+
+    it('reports the service charge even when the waiter is not in the payout grouping', async () => {
+      const { actor, item, cash, waiter } = await setupBase();
+      const order = await createOrder(ctx.db, { orderType: 'dine_in', tableLabel: 'T3', waiterId: waiter.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      const billed = await billOrder(ctx.db, order.id, { serviceChargeMinor: paisa(50_00) }, actor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
+
+      const report = await dailySalesReport(ctx.db);
+      // Same money, two views: one total, and who is owed it.
+      expect(report.serviceChargeMinor).toBe(50_00);
+      expect(sum(report.serviceChargeByWaiter.map((line) => line.totalMinor))).toBe(report.serviceChargeMinor);
+    });
+
+    it('is all zeroes for a period with no sales', async () => {
+      await setupBase();
+      const report = await dailySalesReport(ctx.db);
+      expect(report.grossSalesMinor).toBe(0);
+      expect(report.discountsMinor).toBe(0);
+      expect(report.serviceChargeMinor).toBe(0);
+      expect(report.totalCollectedMinor).toBe(0);
+    });
+  });
+
+  /**
+   * Settings -> bill -> report, end to end: the figure a manager reads
+   * has to be the one the configured rule produced, not a number a
+   * cashier typed and not a recomputation from today's setting.
+   */
+  describe('the configured service charge reaches the reports', () => {
+    it('reports the charge the configured rate produced', async () => {
+      const { actor, item, cash, waiter } = await setupBase();
+      await saveSetting(ctx.db, 'serviceCharge', { ...defaultsFor('serviceCharge'), enabled: true, rateBp: 500 }, actor);
+
+      // No hand-entered amount: the rule decides.
+      const order = await createOrder(ctx.db, { orderType: 'dine_in', tableLabel: 'T1', waiterId: waiter.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      const billed = await billOrder(ctx.db, order.id, {}, actor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
+
+      const report = await dailySalesReport(ctx.db);
+      expect(report.serviceChargeMinor).toBe(50_00);
+      expect(report.grossSalesMinor).toBe(1000_00);
+      expect(report.totalCollectedMinor).toBe(1050_00);
+      // And it is NOT folded into sales — it is money held for the
+      // waiter, not revenue (docs/decisions/008).
+      expect(report.customerSalesMinor).toBe(1000_00);
+      expect(sum(report.serviceChargeByWaiter.map((line) => line.totalMinor))).toBe(report.serviceChargeMinor);
+    });
+
+    it('does not restate an old order when the rate changes', async () => {
+      const { actor, item, cash, waiter } = await setupBase();
+      await saveSetting(ctx.db, 'serviceCharge', { ...defaultsFor('serviceCharge'), enabled: true, rateBp: 500 }, actor);
+      const order = await createOrder(ctx.db, { orderType: 'dine_in', tableLabel: 'T1', waiterId: waiter.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      const billed = await billOrder(ctx.db, order.id, {}, actor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
+
+      await saveSetting(ctx.db, 'serviceCharge', { ...defaultsFor('serviceCharge'), enabled: true, rateBp: 1_000 }, actor);
+
+      const report = await dailySalesReport(ctx.db);
+      expect(report.serviceChargeMinor).toBe(50_00);
+      expect(report.totalCollectedMinor).toBe(1050_00);
+    });
+
+    it('reports zero while the charge is switched off', async () => {
+      const { actor, item, cash, waiter } = await setupBase();
+      await saveSetting(ctx.db, 'serviceCharge', { ...defaultsFor('serviceCharge'), enabled: false, rateBp: 500 }, actor);
+      const order = await createOrder(ctx.db, { orderType: 'dine_in', tableLabel: 'T1', waiterId: waiter.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      const billed = await billOrder(ctx.db, order.id, {}, actor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
+
+      const report = await dailySalesReport(ctx.db);
+      expect(report.serviceChargeMinor).toBe(0);
+      expect(report.serviceChargeByWaiter).toEqual([]);
+    });
+  });
+
+  it('names a consumed item as it was sold, after the menu is renamed', async () => {
+    const { actor, item } = await setupBase();
+    const person = await createPerson(ctx.db, { name: 'Ahmed', kind: 'staff', mealPolicy: 'free' }, actor);
+    const mealOrder = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: person.id }, actor);
+    await addLine(ctx.db, mealOrder.id, { itemId: item.id, qty: 1 }, actor);
+    await billOrder(ctx.db, mealOrder.id, {}, actor);
+    await settleConsumption(ctx.db, mealOrder.id, { settlementType: 'house_expense' }, actor);
+
+    const { renameItem } = await import('../catalog/service.js');
+    await renameItem(ctx.db, item.id, 'Chicken Karahi (full)', actor);
+
+    // The report says what Ahmed ate that day, not what the dish is
+    // called today.
+    const report = await consumptionReport(ctx.db);
+    expect(report.lines[0]?.itemName).toBe('Karahi');
   });
 });

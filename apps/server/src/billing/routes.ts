@@ -10,10 +10,13 @@ import { PrintError, type PrinterTarget } from '../platform/printing/client.js';
 import { getSetting, resolvePrinterTarget } from '../settings/service.js';
 import { printBill, printReceipt } from './printing.js';
 import {
+  activeAccountsForMethod,
   createPaymentAccount,
   createPaymentMethod,
   listPaymentAccounts,
   listPaymentMethods,
+  methodRequiresAccount,
+  PaymentAccountError,
   recordPayment,
   refundOrder,
   settleConsumption,
@@ -61,6 +64,7 @@ const orderSummarySchema = z.object({
   netSalesMinor: z.number().int(),
   taxMinor: z.number().int(),
   serviceChargeMinor: z.number().int(),
+  serviceChargeRateBp: z.number().int().nullable(),
   roundingAdjustmentMinor: z.number().int(),
   totalMinor: z.number().int(),
   version: z.number().int(),
@@ -69,12 +73,27 @@ const orderSummarySchema = z.object({
 const paymentAccountSchema = z.object({
   id: z.number().int(),
   paymentMethodId: z.number().int(),
+  accountType: z.enum(['easypaisa', 'bank', 'other']),
   label: z.string(),
   accountTitle: z.string().nullable(),
   accountNumber: z.string().nullable(),
   bankName: z.string().nullable(),
   active: z.boolean(),
   sortOrder: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string().nullable(),
+});
+
+/** What the payment screen needs to know before it can offer a method:
+ * whether it needs an account at all, and which active ones it has. */
+const paymentOptionSchema = z.object({
+  paymentMethodId: z.number().int(),
+  code: z.string(),
+  displayName: z.string(),
+  kind: paymentMethodKindSchema,
+  requiresAccount: z.boolean(),
+  accounts: z.array(paymentAccountSchema),
+  blockedReason: z.string().nullable(),
 });
 
 const paymentResultSchema = z.object({
@@ -143,8 +162,6 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
   const currentPrinter = async (): Promise<PrinterTarget | null> =>
     resolvePrinterTarget(await getSetting(db, 'printer'), printer);
 
-  const NO_PRINTER = 'no printer configured — set one in Settings, or POS_PRINTER_HOST on the server';
-
   // Same pattern as ordering/routes.ts: domain errors map to specific,
   // cashier-actionable HTTP statuses, scoped to this plugin only.
   app.setErrorHandler((error, _request, reply) => {
@@ -152,7 +169,7 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
       reply.code(409).send({ error: error.message });
       return;
     }
-    if (error instanceof OrderStateError) {
+    if (error instanceof OrderStateError || error instanceof PaymentAccountError) {
       reply.code(422).send({ error: error.message });
       return;
     }
@@ -298,6 +315,41 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
     },
   );
 
+  /**
+   * Everything the payment screen needs in one call: each active method,
+   * whether it needs an account, its active accounts, and — when it
+   * cannot be used at all — the reason, in the words the cashier should
+   * see. The screen renders that reason rather than inventing its own,
+   * so the block a cashier reads is the same rule the server enforces.
+   */
+  app.get(
+    '/api/payment-options',
+    { schema: { response: { 200: z.array(paymentOptionSchema) } } },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      const methods = await listPaymentMethods(db);
+
+      return Promise.all(
+        methods.map(async (method) => {
+          const requiresAccount = methodRequiresAccount(method.kind);
+          const accounts = requiresAccount ? await activeAccountsForMethod(db, method.id) : [];
+          return {
+            paymentMethodId: method.id,
+            code: method.code,
+            displayName: method.displayName,
+            kind: method.kind,
+            requiresAccount,
+            accounts,
+            blockedReason:
+              requiresAccount && accounts.length === 0
+                ? `No ${method.displayName} account is configured. Add an active ${method.displayName} account in Settings before accepting this payment.`
+                : null,
+          };
+        }),
+      );
+    },
+  );
+
   // ---- payments and closing ----
 
   app.post(
@@ -364,23 +416,39 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
 
   // ---- printing ----
 
+  /**
+   * Both print routes always answer 200. Printing is not something that
+   * can fail here: either the configured thermal printer took the
+   * ticket, or the response carries the same ticket as HTML for the
+   * till to put through the browser's own print dialog — which is how a
+   * cashier reaches Microsoft Print to PDF or any other Windows printer
+   * on a machine with no POS printer attached.
+   *
+   * A missing or broken printer used to be a 503/502, which the till
+   * showed as "Something went wrong". It is not a fault: it is a
+   * restaurant that prints its receipts a different way.
+   */
+  const printOutcomeSchema = z.discriminatedUnion('method', [
+    z.object({ method: z.literal('thermal') }),
+    z.object({
+      method: z.literal('fallback'),
+      reason: z.enum(['not_configured', 'unreachable']),
+      detail: z.string().nullable(),
+      html: z.string(),
+    }),
+  ]);
+
   app.post(
     '/api/orders/:id/print-bill',
     {
       schema: {
         params: z.object({ id: z.coerce.number().int() }),
-        response: { 200: z.object({ ok: z.literal(true) }), 503: z.object({ error: z.string() }) },
+        response: { 200: printOutcomeSchema },
       },
     },
     async (request, reply) => {
       requireAuth(request, reply);
-      const target = await currentPrinter();
-      if (!target) {
-        reply.code(503);
-        return { error: NO_PRINTER };
-      }
-      await printBill(db, request.params.id, target);
-      return { ok: true as const };
+      return printBill(db, request.params.id, await currentPrinter());
     },
   );
 
@@ -389,18 +457,12 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
     {
       schema: {
         params: z.object({ id: z.coerce.number().int() }),
-        response: { 200: z.object({ ok: z.literal(true) }), 503: z.object({ error: z.string() }) },
+        response: { 200: printOutcomeSchema },
       },
     },
     async (request, reply) => {
       requireAuth(request, reply);
-      const target = await currentPrinter();
-      if (!target) {
-        reply.code(503);
-        return { error: NO_PRINTER };
-      }
-      await printReceipt(db, request.params.id, target);
-      return { ok: true as const };
+      return printReceipt(db, request.params.id, await currentPrinter());
     },
   );
 };

@@ -13,6 +13,10 @@ export interface OrderTable {
   order_type: OrderType;
   channel: OrderChannel;
   table_label: string | null;
+  /** Who the order is for — a delivery or a takeaway that has to be
+   * called for. Free text, and null on most dine-in orders (0018). */
+  customer_name: string | null;
+  customer_phone: string | null;
   waiter_id: number | null;
   beneficiary_person_id: number | null;
   shift_id: number | null;
@@ -31,6 +35,9 @@ export interface OrderTable {
   net_sales_minor: Paisa;
   tax_minor: Paisa;
   service_charge_minor: Paisa;
+  /** The configured rate that produced `service_charge_minor`, or null
+   * when none did — see migration 0016. */
+  service_charge_rate_bp: number | null;
   rounding_adjustment_minor: Paisa;
   total_minor: Paisa;
   version: number;
@@ -40,6 +47,10 @@ export interface OrderLineTable {
   id: Generated<number>;
   order_id: number;
   item_id: number;
+  /** What the item was called when it was sold (migration 0017).
+   * Nullable only because SQLite cannot add a NOT NULL column without a
+   * default; every row is backfilled and the service never writes null. */
+  item_name_snapshot: string | null;
   qty: number;
   unit_price_minor: Paisa;
   gross_minor: Paisa;
@@ -50,12 +61,17 @@ export interface OrderLineTable {
   void_reason: string | null;
   void_approved_by: number | null;
   void_kind: VoidKind | null;
+  /** What the kitchen was told about this line — "no onions", "well
+   * done". Part of the record of the sale (0018). */
+  note: string | null;
 }
 
 export interface OrderLineModifierTable {
   id: Generated<number>;
   order_line_id: number;
   modifier_id: number;
+  /** What the modifier was called when it was sold — see migration 0017. */
+  modifier_name_snapshot: string | null;
   price_delta_minor: Paisa;
   gross_minor: Paisa;
   prorated_discount_minor: Paisa;

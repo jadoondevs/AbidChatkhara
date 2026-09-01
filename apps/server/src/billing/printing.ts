@@ -1,10 +1,11 @@
 import { format, paisa, sum, type Paisa } from '@pos/shared';
 import type { Kysely } from 'kysely';
 import { ReceiptBuilder } from '../platform/printing/escpos.js';
-import { sendToPrinter, type PrinterTarget } from '../platform/printing/client.js';
+import { PrintError, sendToPrinter, type PrinterTarget } from '../platform/printing/client.js';
+import { renderBillHtml, renderReceiptHtml } from './receipt-html.js';
 import type { Database } from '../platform/db/types.js';
 import { getAllSettings } from '../settings/service.js';
-import type { ReceiptSettings, RestaurantSettings } from '../settings/schema.js';
+import type { ReceiptSettings, RestaurantSettings, ServiceChargeSettings } from '../settings/schema.js';
 
 const RECEIPT_WIDTH = 42; // characters — a standard 80mm thermal printer at font A
 
@@ -12,6 +13,9 @@ export interface TicketLine {
   readonly itemName: string;
   readonly qty: number;
   readonly modifierNames: readonly string[];
+  /** The kitchen instruction, printed under the line so the customer's
+   * copy says what was actually asked for. */
+  readonly note: string | null;
   readonly lineTotalMinor: Paisa;
 }
 
@@ -55,6 +59,9 @@ export interface BillTicketData {
   readonly discountReason: string | null;
   readonly taxMinor: Paisa;
   readonly serviceChargeMinor: Paisa;
+  /** What the customer reads for the charge, rate included — worked out
+   * from the rate stored on THIS order, never from today's setting. */
+  readonly serviceChargeLabel: string;
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
   readonly printedAt: string;
@@ -122,6 +129,7 @@ export function renderBillTicket(data: BillTicketData): Buffer {
   for (const line of data.lines) {
     b.line(twoColumn(`${line.qty} x ${line.itemName}`, format(line.lineTotalMinor)));
     for (const modifierName of line.modifierNames) b.line(`   + ${modifierName}`);
+    if (line.note) b.line(`   * ${line.note}`);
   }
   b.rule();
 
@@ -130,7 +138,7 @@ export function renderBillTicket(data: BillTicketData): Buffer {
     b.line(twoColumn(`Discount${data.discountReason ? ` (${data.discountReason})` : ''}`, `-${format(data.discountMinor)}`));
   }
   if (data.taxMinor > 0) b.line(twoColumn('Tax', format(data.taxMinor)));
-  if (data.serviceChargeMinor > 0) b.line(twoColumn('Service charge', format(data.serviceChargeMinor)));
+  if (data.serviceChargeMinor > 0) b.line(twoColumn(data.serviceChargeLabel, format(data.serviceChargeMinor)));
   if (data.roundingAdjustmentMinor !== 0) b.line(twoColumn('Rounding', format(data.roundingAdjustmentMinor)));
   b.rule();
   b.bold(true).line(twoColumn('TOTAL', format(data.totalMinor))).bold(false);
@@ -174,6 +182,7 @@ export interface ReceiptTicketData {
   readonly discountMinor: Paisa;
   readonly taxMinor: Paisa;
   readonly serviceChargeMinor: Paisa;
+  readonly serviceChargeLabel: string;
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
   readonly payments: readonly PaymentLine[];
@@ -203,13 +212,14 @@ export function renderReceiptTicket(data: ReceiptTicketData): Buffer {
   for (const line of data.lines) {
     b.line(twoColumn(`${line.qty} x ${line.itemName}`, format(line.lineTotalMinor)));
     for (const modifierName of line.modifierNames) b.line(`   + ${modifierName}`);
+    if (line.note) b.line(`   * ${line.note}`);
   }
   b.rule();
 
   b.line(twoColumn('Subtotal', format(data.subtotalMinor)));
   if (data.discountMinor > 0) b.line(twoColumn('Discount', `-${format(data.discountMinor)}`));
   if (data.taxMinor > 0) b.line(twoColumn('Tax', format(data.taxMinor)));
-  if (data.serviceChargeMinor > 0) b.line(twoColumn('Service charge', format(data.serviceChargeMinor)));
+  if (data.serviceChargeMinor > 0) b.line(twoColumn(data.serviceChargeLabel, format(data.serviceChargeMinor)));
   if (data.roundingAdjustmentMinor !== 0) b.line(twoColumn('Rounding', format(data.roundingAdjustmentMinor)));
   b.rule();
   b.bold(true).line(twoColumn('TOTAL', format(data.totalMinor))).bold(false);
@@ -236,11 +246,26 @@ export function renderReceiptTicket(data: ReceiptTicketData): Buffer {
 // Assembling ticket data from the database
 // ---------------------------------------------------------------------
 
+/**
+ * The lines as they were sold.
+ *
+ * Names come from the order line's own snapshot, never from a join to
+ * `item` — a receipt reprinted after the menu was renamed must still
+ * say what the customer bought (migration 0017). The fallbacks only
+ * fire for rows written before that migration, which the migration
+ * itself backfilled.
+ */
 async function loadTicketLines(db: Kysely<Database>, orderId: number): Promise<TicketLine[]> {
   const lines = await db
     .selectFrom('order_line')
-    .innerJoin('item', 'item.id', 'order_line.item_id')
-    .select(['order_line.id as id', 'order_line.qty as qty', 'order_line.net_sales_minor as lineTotalMinor', 'item.name as itemName'])
+    .select([
+      'order_line.id as id',
+      'order_line.item_id as itemId',
+      'order_line.qty as qty',
+      'order_line.net_sales_minor as lineTotalMinor',
+      'order_line.item_name_snapshot as itemName',
+      'order_line.note as note',
+    ])
     .where('order_line.order_id', '=', orderId)
     .where('order_line.voided', '=', 0)
     .orderBy('order_line.id', 'asc')
@@ -248,8 +273,11 @@ async function loadTicketLines(db: Kysely<Database>, orderId: number): Promise<T
 
   const modifierRows = await db
     .selectFrom('order_line_modifier')
-    .innerJoin('modifier', 'modifier.id', 'order_line_modifier.modifier_id')
-    .select(['order_line_modifier.order_line_id as orderLineId', 'modifier.name as name'])
+    .select([
+      'order_line_modifier.order_line_id as orderLineId',
+      'order_line_modifier.modifier_id as modifierId',
+      'order_line_modifier.modifier_name_snapshot as name',
+    ])
     .where(
       'order_line_modifier.order_line_id',
       'in',
@@ -258,17 +286,38 @@ async function loadTicketLines(db: Kysely<Database>, orderId: number): Promise<T
     .execute();
 
   return lines.map((line) => ({
-    itemName: line.itemName,
+    itemName: line.itemName ?? `item ${line.itemId}`,
     qty: line.qty,
+    note: line.note,
     lineTotalMinor: line.lineTotalMinor,
-    modifierNames: modifierRows.filter((m) => m.orderLineId === line.id).map((m) => m.name),
+    modifierNames: modifierRows
+      .filter((m) => m.orderLineId === line.id)
+      .map((m) => m.name ?? `modifier ${m.modifierId}`),
   }));
 }
 
-/** The configured branding both renderers need, fetched once. */
-async function loadBranding(db: Kysely<Database>): Promise<TicketBranding> {
+/** The configured branding and charge wording both renderers need,
+ * fetched once. */
+async function loadTicketConfig(db: Kysely<Database>): Promise<{ branding: TicketBranding; serviceCharge: ServiceChargeSettings }> {
   const settings = await getAllSettings(db);
-  return { restaurant: settings.restaurant, receipt: settings.receipt };
+  return {
+    branding: { restaurant: settings.restaurant, receipt: settings.receipt },
+    serviceCharge: settings.serviceCharge,
+  };
+}
+
+/**
+ * What to call the service charge on a ticket.
+ *
+ * The wording is the restaurant's current one — renaming "Service
+ * charge" to "Service fee" should change every ticket, including
+ * reprints. The RATE is not: it comes from the order itself, so a
+ * receipt reprinted today for a bill taken when the rate was 5% still
+ * reads 5%. A charge a cashier overrode carries no rate at all,
+ * because no rate produced it.
+ */
+export function serviceChargeLabel(config: ServiceChargeSettings, rateBp: number | null): string {
+  return rateBp === null ? config.displayName : `${config.displayName} (${rateBp / 100}%)`;
 }
 
 export async function buildBillTicketData(db: Kysely<Database>, orderId: number): Promise<BillTicketData> {
@@ -284,8 +333,10 @@ export async function buildBillTicketData(db: Kysely<Database>, orderId: number)
     .orderBy('label', 'asc')
     .execute();
 
+  const config = await loadTicketConfig(db);
+
   return {
-    branding: await loadBranding(db),
+    branding: config.branding,
     orderId: order.id,
     tableLabel: order.table_label,
     orderType: order.order_type,
@@ -296,6 +347,7 @@ export async function buildBillTicketData(db: Kysely<Database>, orderId: number)
     discountReason: order.discount_reason,
     taxMinor: order.tax_minor,
     serviceChargeMinor: order.service_charge_minor,
+    serviceChargeLabel: serviceChargeLabel(config.serviceCharge, order.service_charge_rate_bp),
     roundingAdjustmentMinor: order.rounding_adjustment_minor,
     totalMinor: order.total_minor,
     printedAt: order.billed_at ?? new Date().toISOString(),
@@ -340,8 +392,10 @@ export async function buildReceiptTicketData(db: Kysely<Database>, orderId: numb
 
   const cashRows = paymentRows.filter((p) => p.kind === 'cash' && p.tenderedMinor !== null);
 
+  const config = await loadTicketConfig(db);
+
   return {
-    branding: await loadBranding(db),
+    branding: config.branding,
     orderId: order.id,
     invoiceNo: order.invoice_no,
     closedAt: order.closed_at,
@@ -353,6 +407,7 @@ export async function buildReceiptTicketData(db: Kysely<Database>, orderId: numb
     discountMinor: order.order_discount_minor,
     taxMinor: order.tax_minor,
     serviceChargeMinor: order.service_charge_minor,
+    serviceChargeLabel: serviceChargeLabel(config.serviceCharge, order.service_charge_rate_bp),
     roundingAdjustmentMinor: order.rounding_adjustment_minor,
     totalMinor: order.total_minor,
     payments: paymentRows.map((p) => ({
@@ -367,16 +422,58 @@ export async function buildReceiptTicketData(db: Kysely<Database>, orderId: numb
   };
 }
 
+/**
+ * What happened when a ticket was printed.
+ *
+ * `thermal` means the configured printer took it and the cashier can
+ * tear it off. Anything else hands back `html` — the same ticket,
+ * rendered for the browser's own print dialog — so the till can offer
+ * Windows printing (and therefore "Microsoft Print to PDF") instead of
+ * telling the cashier the print failed.
+ *
+ * `reason` distinguishes the two fallback cases for the message the
+ * cashier sees, and for the logs: nothing configured at all is a
+ * settings choice, an unreachable printer is a fault someone may want
+ * to fix.
+ */
+export type PrintOutcome =
+  | { readonly method: 'thermal' }
+  | { readonly method: 'fallback'; readonly reason: 'not_configured' | 'unreachable'; readonly detail: string | null; readonly html: string };
+
+/**
+ * Try the configured thermal printer, and fall back to browser-printable
+ * HTML rather than failing.
+ *
+ * A print is never allowed to be the thing that fails: by the time
+ * either of these is called the bill is already finalised or the
+ * payment already recorded, and a printer that is off, missing or
+ * misconfigured is not a reason to tell a cashier their sale did not
+ * work. The worst case is that they print from Windows instead.
+ */
+async function printOrFallBack(target: PrinterTarget | null, bytes: Buffer, html: string): Promise<PrintOutcome> {
+  if (!target) return { method: 'fallback', reason: 'not_configured', detail: null, html };
+  try {
+    await sendToPrinter(target, bytes);
+    return { method: 'thermal' };
+  } catch (error) {
+    // Only a printer/transport failure falls back. Anything else is a
+    // real fault in this server and must surface, not be papered over
+    // with a print dialog.
+    if (!(error instanceof PrintError)) throw error;
+    return { method: 'fallback', reason: 'unreachable', detail: error.message, html };
+  }
+}
+
 /** Print the pro-forma bill — may be called any number of times without
  * changing any state (spec). */
-export async function printBill(db: Kysely<Database>, orderId: number, target: PrinterTarget): Promise<void> {
+export async function printBill(db: Kysely<Database>, orderId: number, target: PrinterTarget | null): Promise<PrintOutcome> {
   const data = await buildBillTicketData(db, orderId);
-  await sendToPrinter(target, renderBillTicket(data));
+  return printOrFallBack(target, renderBillTicket(data), renderBillHtml(data));
 }
 
 /** Print the final receipt, kicking the cash drawer only if a cash
  * payment was part of this order's settlement. */
-export async function printReceipt(db: Kysely<Database>, orderId: number, target: PrinterTarget): Promise<void> {
+export async function printReceipt(db: Kysely<Database>, orderId: number, target: PrinterTarget | null): Promise<PrintOutcome> {
   const data = await buildReceiptTicketData(db, orderId);
-  await sendToPrinter(target, renderReceiptTicket(data));
+  return printOrFallBack(target, renderReceiptTicket(data), renderReceiptHtml(data));
 }

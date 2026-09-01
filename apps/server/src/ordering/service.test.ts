@@ -5,7 +5,7 @@ import { createPaymentMethod, recordPayment } from '../billing/service.js';
 import { createPerson } from '../consumption/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createUser } from '../identity/service.js';
-import { createTestDb } from '../platform/db/test-helpers.js';
+import { createTestDb, enableServiceCharge } from '../platform/db/test-helpers.js';
 import { eventBus } from '../platform/events/bus.js';
 import {
   addLine,
@@ -20,7 +20,9 @@ import {
   removeLine,
   reopenOrder,
   setDiscount,
+  setLineNote,
   setLineQty,
+  setOrderCustomer,
   voidLine,
   voidOrder,
 } from './service.js';
@@ -55,6 +57,9 @@ describe('ordering/service', () => {
     await linkModifierGroup(ctx.db, itemWithModifiers.id, group.id, catalogActor);
 
     const orderActor = { actorId: server.id, terminalId: 'till-1' };
+    // Several tests here bill with a hand-entered service charge,
+    // which a disabled charge refuses (see computeServiceCharge).
+    await enableServiceCharge(ctx.db, catalogActor);
     return { admin, server, item, itemWithModifiers, group, mild, extraHot, orderActor };
   }
 
@@ -830,6 +835,115 @@ describe('ordering/service', () => {
       expect(after?.status).toBe('open');
       expect(after?.billedAt).toBeNull();
       expect(after?.totalMinor).toBe(0);
+    });
+  });
+
+  /**
+   * Who the order was for and what the kitchen was told (migration
+   * 0018). Neither touches a money field; both are part of the record
+   * of what happened, so both stop being editable when the order does.
+   */
+  describe('customer details and line notes', () => {
+    it('records the customer at order creation', async () => {
+      const { orderActor } = await setupMenu();
+      const order = await createOrder(
+        ctx.db,
+        { orderType: 'delivery', customerName: 'A. Customer', customerPhone: '0300-0000000' },
+        orderActor,
+      );
+      expect(order.customerName).toBe('A. Customer');
+      expect(order.customerPhone).toBe('0300-0000000');
+    });
+
+    it('leaves the customer null when none was given', async () => {
+      const { orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      expect(order.customerName).toBeNull();
+      expect(order.customerPhone).toBeNull();
+    });
+
+    it('adds the customer to an order already taken, one field at a time', async () => {
+      const { orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'delivery' }, orderActor);
+
+      const named = await setOrderCustomer(ctx.db, order.id, { customerName: 'A. Customer' }, orderActor);
+      expect(named.customerName).toBe('A. Customer');
+
+      // Sending only the phone must not wipe the name.
+      const phoned = await setOrderCustomer(ctx.db, order.id, { customerPhone: '0300-0000000' }, orderActor);
+      expect(phoned.customerName).toBe('A. Customer');
+      expect(phoned.customerPhone).toBe('0300-0000000');
+    });
+
+    it('clears a field given an empty string', async () => {
+      const { orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'delivery', customerName: 'Wrong Person' }, orderActor);
+      const cleared = await setOrderCustomer(ctx.db, order.id, { customerName: '' }, orderActor);
+      expect(cleared.customerName).toBeNull();
+    });
+
+    it('refuses to change the customer once the order is settled', async () => {
+      const { item, orderActor } = await setupMenu();
+      const cash = await createPaymentMethod(ctx.db, { code: 'cash', displayName: 'Cash', kind: 'cash' }, orderActor);
+      // Closing an order allocates it, and allocation needs an owner.
+      const partner = await createPartner(ctx.db, 'Alice', orderActor);
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: partner.id, shareBp: 10_000 }], orderActor);
+      const order = await createOrder(ctx.db, { orderType: 'takeaway', customerName: 'A. Customer' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+      const billed = await billOrder(ctx.db, order.id, {}, orderActor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, orderActor);
+
+      await expect(setOrderCustomer(ctx.db, order.id, { customerName: 'Someone Else' }, orderActor)).rejects.toThrow(OrderStateError);
+    });
+
+    it('keeps a line note on the line it was written for', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      const detail = await addLine(ctx.db, order.id, { itemId: item.id, qty: 1, note: 'no onions' }, orderActor);
+      expect(detail.lines[0]?.note).toBe('no onions');
+    });
+
+    it('never merges two lines that were ordered differently', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1, note: 'no onions' }, orderActor);
+      const detail = await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+
+      // Merging these would send one instruction to the kitchen and
+      // silently drop the other.
+      expect(detail.lines).toHaveLength(2);
+      expect(detail.lines.map((line) => line.note)).toEqual(['no onions', null]);
+    });
+
+    it('merges two lines with the same note', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1, note: 'no onions' }, orderActor);
+      const detail = await addLine(ctx.db, order.id, { itemId: item.id, qty: 1, note: 'no onions' }, orderActor);
+      expect(detail.lines).toHaveLength(1);
+      expect(detail.lines[0]?.qty).toBe(2);
+    });
+
+    it('changes a note on an open order and clears it with an empty string', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      const added = await addLine(ctx.db, order.id, { itemId: item.id, qty: 1, note: 'no onions' }, orderActor);
+      const lineId = added.lines[0]!.id;
+
+      const changed = await setLineNote(ctx.db, order.id, lineId, { note: 'extra spicy' }, orderActor);
+      expect(changed.lines[0]?.note).toBe('extra spicy');
+
+      const cleared = await setLineNote(ctx.db, order.id, lineId, { note: '  ' }, orderActor);
+      expect(cleared.lines[0]?.note).toBeNull();
+    });
+
+    it('refuses to rewrite a note once the bill is printed', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      const added = await addLine(ctx.db, order.id, { itemId: item.id, qty: 1, note: 'no onions' }, orderActor);
+      await billOrder(ctx.db, order.id, {}, orderActor);
+
+      await expect(setLineNote(ctx.db, order.id, added.lines[0]!.id, { note: 'onions after all' }, orderActor)).rejects.toThrow(OrderStateError);
     });
   });
 });

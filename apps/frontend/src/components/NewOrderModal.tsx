@@ -29,6 +29,8 @@ export function NewOrderModal({ onClose, onCreated }: { onClose: () => void; onC
 
   const [orderType, setOrderType] = useState<OrderType>('dine_in');
   const [tableLabel, setTableLabel] = useState('');
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
   const [waiterId, setWaiterId] = useState<number | ''>(session?.userId ?? '');
 
   const dineIn = orderType === 'dine_in';
@@ -44,6 +46,8 @@ export function NewOrderModal({ onClose, onCreated }: { onClose: () => void; onC
       {
         orderType,
         ...(tableLabel.trim() ? { tableLabel: tableLabel.trim() } : {}),
+        ...(customerName.trim() ? { customerName: customerName.trim() } : {}),
+        ...(customerPhone.trim() ? { customerPhone: customerPhone.trim() } : {}),
         ...(dineIn && waiterId !== '' ? { waiterId: Number(waiterId) } : {}),
       },
       { onSuccess: (order) => onCreated(order.id) },
@@ -81,6 +85,30 @@ export function NewOrderModal({ onClose, onCreated }: { onClose: () => void; onC
               placeholder={dineIn ? 'T1 — or leave blank' : 'Usually blank'}
             />
           </div>
+
+          {/* Only where it is used. A delivery needs a name and a
+              number to arrive at all; a dine-in table does not, and a
+              field nobody fills is a field everyone tabs past. Both
+              stay optional and both can be added later from the order
+              screen. */}
+          {!dineIn && (
+            <div className="row">
+              <div style={{ flex: 2 }}>
+                <label htmlFor="customer-name-new">Customer (optional)</label>
+                <input id="customer-name-new" maxLength={120} value={customerName} onChange={(event) => setCustomerName(event.target.value)} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label htmlFor="customer-phone-new">Phone</label>
+                <input
+                  id="customer-phone-new"
+                  maxLength={40}
+                  inputMode="tel"
+                  value={customerPhone}
+                  onChange={(event) => setCustomerPhone(event.target.value)}
+                />
+              </div>
+            </div>
+          )}
 
           {dineIn && (
             <div>

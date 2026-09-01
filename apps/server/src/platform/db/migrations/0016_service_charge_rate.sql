@@ -1,0 +1,14 @@
+-- The service-charge rate that actually applied to this order.
+--
+-- `service_charge_minor` already records the AMOUNT, but not where it
+-- came from. Once the rate is configurable, an order billed at 5% and
+-- one billed at 10% are indistinguishable by amount alone, and a
+-- historical order would have to be re-derived from today's setting to
+-- show a percentage — which is exactly the reconstruction this system
+-- exists to avoid.
+--
+-- NULL means "no rate produced this": either there was no service
+-- charge, or a cashier overrode the computed amount by hand. Both are
+-- real cases, and neither should be shown to a manager as a percentage
+-- that was never applied.
+ALTER TABLE "order" ADD COLUMN service_charge_rate_bp INTEGER;

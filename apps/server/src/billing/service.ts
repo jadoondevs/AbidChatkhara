@@ -189,15 +189,38 @@ export async function updatePaymentMethod(
 // Payment accounts
 // ---------------------------------------------------------------------
 
+/**
+ * What kind of thing money lands in. Derived from the owning payment
+ * method's `kind` rather than stored on the account — see
+ * docs/decisions/016. A wallet method is an Easypaisa-style account, a
+ * bank_transfer method is a bank account, and anything else is 'other'.
+ */
+export type PaymentAccountType = 'easypaisa' | 'bank' | 'other';
+
+export function accountTypeForKind(kind: PaymentMethodKind): PaymentAccountType {
+  if (kind === 'wallet') return 'easypaisa';
+  if (kind === 'bank_transfer') return 'bank';
+  return 'other';
+}
+
+/** Cash is handed over, not transferred — it lands in the drawer, and
+ * there is no account for it to arrive in. */
+export function methodRequiresAccount(kind: PaymentMethodKind): boolean {
+  return kind !== 'cash';
+}
+
 export interface PaymentAccountSummary {
   readonly id: number;
   readonly paymentMethodId: number;
+  readonly accountType: PaymentAccountType;
   readonly label: string;
   readonly accountTitle: string | null;
   readonly accountNumber: string | null;
   readonly bankName: string | null;
   readonly active: boolean;
   readonly sortOrder: number;
+  readonly createdAt: string;
+  readonly updatedAt: string | null;
 }
 
 interface PaymentAccountRow {
@@ -209,18 +232,23 @@ interface PaymentAccountRow {
   bank_name: string | null;
   active: number;
   sort_order: number;
+  created_at: string;
+  updated_at: string | null;
 }
 
-function toPaymentAccountSummary(row: PaymentAccountRow): PaymentAccountSummary {
+function toPaymentAccountSummary(row: PaymentAccountRow, kind: PaymentMethodKind): PaymentAccountSummary {
   return {
     id: row.id,
     paymentMethodId: row.payment_method_id,
+    accountType: accountTypeForKind(kind),
     label: row.label,
     accountTitle: row.account_title,
     accountNumber: row.account_number,
     bankName: row.bank_name,
     active: row.active === 1,
     sortOrder: row.sort_order,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -238,10 +266,14 @@ export async function createPaymentAccount(
   input: CreatePaymentAccountInput,
   actor: ActorContext,
 ): Promise<PaymentAccountSummary> {
-  const method = await db.selectFrom('payment_method').select('id').where('id', '=', input.paymentMethodId).executeTakeFirst();
+  const method = await db.selectFrom('payment_method').select(['id', 'kind']).where('id', '=', input.paymentMethodId).executeTakeFirst();
   if (!method) throw new Error(`payment method ${input.paymentMethodId} not found`);
+  if (!methodRequiresAccount(method.kind)) {
+    throw new PaymentAccountError(`${method.kind} payments are handed over at the till — they have no account to land in`);
+  }
   if (!input.label.trim()) throw new Error('a payment account needs a label');
 
+  const now = new Date().toISOString();
   const row = await db
     .insertInto('payment_account')
     .values({
@@ -252,12 +284,13 @@ export async function createPaymentAccount(
       bank_name: input.bankName ?? null,
       active: 1,
       sort_order: input.sortOrder ?? 0,
-      created_at: new Date().toISOString(),
+      created_at: now,
+      updated_at: now,
     })
     .returningAll()
     .executeTakeFirstOrThrow();
 
-  const summary = toPaymentAccountSummary(row);
+  const summary = toPaymentAccountSummary(row, method.kind);
   await recordAudit(db, {
     actorId: actor.actorId,
     terminalId: actor.terminalId,
@@ -273,11 +306,39 @@ export async function listPaymentAccounts(
   db: Kysely<Database>,
   opts: { paymentMethodId?: number | undefined; includeInactive?: boolean | undefined } = {},
 ): Promise<PaymentAccountSummary[]> {
-  let query = db.selectFrom('payment_account').selectAll();
-  if (opts.paymentMethodId !== undefined) query = query.where('payment_method_id', '=', opts.paymentMethodId);
-  if (!opts.includeInactive) query = query.where('active', '=', 1);
-  const rows = await query.orderBy('sort_order', 'asc').orderBy('label', 'asc').execute();
-  return rows.map(toPaymentAccountSummary);
+  let query = db
+    .selectFrom('payment_account')
+    .innerJoin('payment_method', 'payment_method.id', 'payment_account.payment_method_id')
+    .selectAll('payment_account')
+    .select('payment_method.kind as kind');
+  if (opts.paymentMethodId !== undefined) query = query.where('payment_account.payment_method_id', '=', opts.paymentMethodId);
+  if (!opts.includeInactive) query = query.where('payment_account.active', '=', 1);
+
+  const rows = await query.orderBy('payment_account.sort_order', 'asc').orderBy('payment_account.label', 'asc').execute();
+  return rows.map((row) => toPaymentAccountSummary(row, row.kind));
+}
+
+/**
+ * The active accounts a payment by this method could land in — the one
+ * query both the payment rule and the payment screen are built on, so
+ * what the cashier is offered and what the server will accept cannot
+ * disagree.
+ */
+export async function activeAccountsForMethod(
+  db: Kysely<Database> | Transaction<Database>,
+  paymentMethodId: number,
+): Promise<PaymentAccountSummary[]> {
+  const rows = await db
+    .selectFrom('payment_account')
+    .innerJoin('payment_method', 'payment_method.id', 'payment_account.payment_method_id')
+    .selectAll('payment_account')
+    .select('payment_method.kind as kind')
+    .where('payment_account.payment_method_id', '=', paymentMethodId)
+    .where('payment_account.active', '=', 1)
+    .orderBy('payment_account.sort_order', 'asc')
+    .orderBy('payment_account.label', 'asc')
+    .execute();
+  return rows.map((row) => toPaymentAccountSummary(row, row.kind));
 }
 
 export interface UpdatePaymentAccountInput {
@@ -303,6 +364,11 @@ export async function updatePaymentAccount(
 ): Promise<PaymentAccountSummary> {
   const before = await db.selectFrom('payment_account').selectAll().where('id', '=', id).executeTakeFirst();
   if (!before) throw new Error(`payment account ${id} not found`);
+  const method = await db
+    .selectFrom('payment_method')
+    .select('kind')
+    .where('id', '=', before.payment_method_id)
+    .executeTakeFirstOrThrow();
 
   const after = await db
     .updateTable('payment_account')
@@ -313,6 +379,7 @@ export async function updatePaymentAccount(
       ...(input.bankName !== undefined ? { bank_name: input.bankName } : {}),
       ...(input.active !== undefined ? { active: input.active ? 1 : 0 } : {}),
       ...(input.sortOrder !== undefined ? { sort_order: input.sortOrder } : {}),
+      updated_at: new Date().toISOString(),
     })
     .where('id', '=', id)
     .returningAll()
@@ -324,30 +391,85 @@ export async function updatePaymentAccount(
     action: 'payment_account.update',
     entity: 'payment_account',
     entityId: id,
-    before: toPaymentAccountSummary(before),
-    after: toPaymentAccountSummary(after),
+    before: toPaymentAccountSummary(before, method.kind),
+    after: toPaymentAccountSummary(after, method.kind),
   });
-  return toPaymentAccountSummary(after);
+  return toPaymentAccountSummary(after, method.kind);
 }
 
 /**
- * Validate the account a payment claims to have landed in: it must
- * exist, be active, and belong to the method being paid with. Passing
- * none is always allowed — a restaurant that has configured no accounts
- * must still be able to take money, and cash has no account at all.
+ * Thrown when a payment cannot name the account the money landed in.
+ * Its own type so routes can answer 422 with a sentence a cashier can
+ * act on — the fix is always either "configure an account" or "choose
+ * one", never "try again".
+ */
+export class PaymentAccountError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PaymentAccountError';
+  }
+}
+
+/**
+ * Decide which account a payment landed in, and refuse the payment if
+ * that cannot be answered.
+ *
+ * Cash is handed over at the till and lands in the drawer, so it has no
+ * account and never needs one. Every other method moves money into a
+ * specific wallet or bank account, and a payment that cannot say which
+ * one is a payment nobody can reconcile — so:
+ *
+ *   no active account for this method  -> refuse; nothing to configure
+ *                                         the payment against yet
+ *   exactly one                        -> use it, without making the
+ *                                         cashier pick from a list of one
+ *   two or more, none chosen           -> refuse; picking one arbitrarily
+ *                                         would file the money in the
+ *                                         wrong place silently
+ *   one chosen                         -> validate it: exists, active,
+ *                                         and belongs to THIS method
+ *
+ * This is enforced here, in the service, not only in the payment
+ * screen: the screen disables what it can, but a business rule about
+ * money has to hold for any caller.
  */
 async function resolvePaymentAccount(
   trx: Transaction<Database>,
-  paymentMethodId: number,
+  method: { id: number; kind: PaymentMethodKind; display_name: string },
   paymentAccountId: number | undefined,
 ): Promise<number | null> {
-  if (paymentAccountId === undefined) return null;
-  const account = await trx.selectFrom('payment_account').selectAll().where('id', '=', paymentAccountId).executeTakeFirst();
-  if (!account || account.active !== 1) throw new Error(`payment account ${paymentAccountId} not found or inactive`);
-  if (account.payment_method_id !== paymentMethodId) {
-    throw new OrderStateError(`account "${account.label}" does not belong to the payment method being used`);
+  if (!methodRequiresAccount(method.kind)) {
+    if (paymentAccountId !== undefined) {
+      throw new PaymentAccountError(`${method.display_name} is taken at the till — it does not land in an account`);
+    }
+    return null;
   }
-  return account.id;
+
+  const active = await activeAccountsForMethod(trx, method.id);
+
+  if (paymentAccountId === undefined) {
+    if (active.length === 0) {
+      throw new PaymentAccountError(
+        `No ${method.display_name} account is configured. Add an active ${method.display_name} account in Settings before accepting this payment.`,
+      );
+    }
+    if (active.length === 1) return (active[0] as PaymentAccountSummary).id;
+    throw new PaymentAccountError(
+      `Choose which ${method.display_name} account received this payment — ${active.length} are configured.`,
+    );
+  }
+
+  const chosen = active.find((account) => account.id === paymentAccountId);
+  if (!chosen) {
+    // Deliberately one message for "no such account", "inactive" and
+    // "belongs to another method": all three mean the same thing to the
+    // cashier — the account they picked is not one this payment can go
+    // to — and distinguishing them would only leak which accounts exist.
+    throw new PaymentAccountError(
+      `That account cannot receive a ${method.display_name} payment — it is not an active ${method.display_name} account.`,
+    );
+  }
+  return chosen.id;
 }
 
 // ---------------------------------------------------------------------
@@ -489,7 +611,7 @@ export async function recordPayment(
     if (!method || method.active !== 1) throw new Error(`payment method ${input.paymentMethodId} not found or inactive`);
     if (input.amountMinor <= 0) throw new Error('payment amount must be positive');
 
-    const paymentAccountId = await resolvePaymentAccount(trx, method.id, input.paymentAccountId);
+    const paymentAccountId = await resolvePaymentAccount(trx, method, input.paymentAccountId);
 
     const priorPayments = await unreversedPayments(trx, orderId);
     const paidSoFar = sum(priorPayments.map((p) => p.amount_minor));
@@ -558,6 +680,8 @@ export async function recordPayment(
       orderType: order.order_type,
       channel: order.channel,
       tableLabel: order.table_label,
+      customerName: order.customer_name,
+      customerPhone: order.customer_phone,
       waiterId: order.waiter_id,
       beneficiaryPersonId: order.beneficiary_person_id,
       shiftId: order.shift_id,
@@ -574,6 +698,7 @@ export async function recordPayment(
       netSalesMinor: order.net_sales_minor,
       taxMinor: order.tax_minor,
       serviceChargeMinor: order.service_charge_minor,
+      serviceChargeRateBp: order.service_charge_rate_bp,
       roundingAdjustmentMinor: order.rounding_adjustment_minor,
       totalMinor: order.total_minor,
       version: order.version,
@@ -672,7 +797,7 @@ export async function settleConsumption(
       }
       const method = await trx.selectFrom('payment_method').selectAll().where('id', '=', input.paymentMethodId).executeTakeFirst();
       if (!method || method.active !== 1) throw new Error(`payment method ${input.paymentMethodId} not found or inactive`);
-      const paymentAccountId = await resolvePaymentAccount(trx, method.id, input.paymentAccountId);
+      const paymentAccountId = await resolvePaymentAccount(trx, method, input.paymentAccountId);
 
       paymentRow = await trx
         .insertInto('payment')

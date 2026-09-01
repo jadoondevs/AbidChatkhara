@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   useCreatePaymentAccount,
   useCreateUser,
@@ -8,20 +9,23 @@ import {
   useSaveReceiptSettings,
   useSavePrinterSettings,
   useSaveRestaurantSettings,
+  useSaveServiceChargeSettings,
   useSetUserPassword,
+  useServiceChargeSettings,
   useSettings,
   useUpdatePaymentAccount,
   useUpdateUser,
   useUsers,
 } from '../api/hooks.js';
-import type { PaymentAccount, PrinterSettings, ReceiptSettings, RestaurantSettings, Role, User } from '../api/types.js';
+import type { PaymentAccount, PrinterSettings, ReceiptSettings, RestaurantSettings, Role, ServiceChargeSettings, User } from '../api/types.js';
 import { ErrorBanner, Loading, Modal, PasswordInput } from '../components/ui.tsx';
 
-type Tab = 'restaurant' | 'receipt' | 'accounts' | 'printer' | 'users';
+type Tab = 'restaurant' | 'receipt' | 'service-charge' | 'accounts' | 'printer' | 'users';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'restaurant', label: 'Restaurant' },
   { key: 'receipt', label: 'Receipt' },
+  { key: 'service-charge', label: 'Service charge' },
   { key: 'accounts', label: 'Payment accounts' },
   { key: 'printer', label: 'Printer' },
   { key: 'users', label: 'Users' },
@@ -55,8 +59,18 @@ export function SettingsScreen(): JSX.Element {
         ))}
       </div>
 
+      {/* The rest of the configuration lives on screens of its own,
+          because a manager needs it and this screen is admin-only. An
+          admin who came here looking for it should not have to guess
+          that. */}
+      <p className="muted elsewhere-note">
+        Also configurable: <Link to="/config/menu">menu and prices</Link>, <Link to="/config/partners">partners and ownership</Link>,{' '}
+        <Link to="/config/payment-methods">payment methods</Link>, and <Link to="/config/people">people for staff meals</Link>.
+      </p>
+
       {tab === 'restaurant' && <RestaurantPanel />}
       {tab === 'receipt' && <ReceiptPanel />}
+      {tab === 'service-charge' && <ServiceChargePanel />}
       {tab === 'accounts' && <AccountsPanel />}
       {tab === 'printer' && <PrinterPanel />}
       {tab === 'users' && <UsersPanel />}
@@ -193,6 +207,112 @@ function ReceiptPanel(): JSX.Element {
   );
 }
 
+/**
+ * Service charge, in one place.
+ *
+ * The rate set here is what the bill screen previews, what the receipt
+ * prints, what the reports total and what the waiter payout sheet
+ * divides — there is one calculation on the server and this panel is
+ * its only input (see `computeServiceCharge`). Switching it off makes
+ * it zero everywhere at once rather than leaving it applied on some
+ * screens.
+ *
+ * Changing the rate does NOT rewrite history: every order records the
+ * rate that produced its own charge, so a bill taken while the rate was
+ * 5% still reads 5% after this panel is set to 10%.
+ */
+function ServiceChargePanel(): JSX.Element {
+  const current = useServiceChargeSettings();
+  const save = useSaveServiceChargeSettings();
+  const [draft, setDraft] = useState<ServiceChargeSettings | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  if (current.isLoading) return <Loading />;
+  if (current.error) return <ErrorBanner error={current.error} />;
+  const config = draft ?? current.data;
+  if (!config) return <Loading />;
+
+  const update = (patch: Partial<ServiceChargeSettings>) => {
+    setSaved(false);
+    setDraft({ ...config, ...patch });
+  };
+
+  // Basis points on the wire, percent in the box: an admin thinks in
+  // "5%", and the server stores 500 so a half-percent is expressible
+  // without a float ever touching money.
+  const percentText = (config.rateBp / 100).toString();
+
+  return (
+    <div className="card col settings-panel">
+      <ErrorBanner error={save.error} />
+
+      <label className="checkbox-row">
+        <input type="checkbox" checked={config.enabled} onChange={(event) => update({ enabled: event.target.checked })} />
+        Charge a service charge
+      </label>
+      <p className="muted field-hint" style={{ marginTop: 0 }}>
+        Switched off, no bill carries one and the figure is zero on every report. Orders already billed keep the charge they were billed with.
+      </p>
+
+      <div style={{ maxWidth: 200 }}>
+        <label htmlFor="sc-rate">Rate (%)</label>
+        <input
+          id="sc-rate"
+          inputMode="decimal"
+          disabled={!config.enabled}
+          value={percentText}
+          onChange={(event) => {
+            // Only digits and one dot, then to basis points — 5.5%
+            // becomes 550, and anything above 50% is refused by the
+            // server anyway.
+            const cleaned = event.target.value.replace(/[^0-9.]/g, '');
+            const percent = Number(cleaned === '' || cleaned === '.' ? 0 : cleaned);
+            if (!Number.isFinite(percent)) return;
+            update({ rateBp: Math.min(5000, Math.max(0, Math.round(percent * 100))) });
+          }}
+        />
+        <p className="muted field-hint">Applied to net sales, after any discount.</p>
+      </div>
+
+      <div>
+        <label htmlFor="sc-name">Name on the bill</label>
+        <input
+          id="sc-name"
+          maxLength={40}
+          disabled={!config.enabled}
+          value={config.displayName}
+          onChange={(event) => update({ displayName: event.target.value })}
+        />
+        <p className="muted field-hint">What the customer reads — “Service charge”, “Service fee”, or your own wording.</p>
+      </div>
+
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          disabled={!config.enabled}
+          checked={config.dineInOnly}
+          onChange={(event) => update({ dineInOnly: event.target.checked })}
+        />
+        Dine-in only
+      </label>
+      <p className="muted field-hint" style={{ marginTop: 0 }}>
+        A takeaway or delivery order has no table to serve, so it carries no charge. Staff and owner meals never do either way.
+      </p>
+
+      <div className="row">
+        <button
+          className="primary"
+          disabled={save.isPending || (config.enabled && config.displayName.trim() === '')}
+          onClick={() => save.mutate({ ...config, displayName: config.displayName.trim() }, { onSuccess: () => setSaved(true) })}
+        >
+          {save.isPending ? 'Saving…' : 'Save'}
+        </button>
+        <SavedNote saved={saved} />
+      </div>
+    </div>
+  );
+}
+
 function PrinterPanel(): JSX.Element {
   const printer = usePrinterSettings(true);
   const save = useSavePrinterSettings();
@@ -213,12 +333,28 @@ function PrinterPanel(): JSX.Element {
     <div className="card col settings-panel">
       <ErrorBanner error={save.error} />
 
+      {/* Configuring a printer is optional, and a till with none is a
+          supported setup — not a broken one. Saying so here is what
+          stops an operator hunting for a fault that isn't there. */}
+      <div className={current.host.trim() === '' ? 'blocked-notice info' : 'blocked-notice ok'}>
+        <strong>
+          {current.host.trim() === ''
+            ? 'No POS printer configured — receipts use Windows printing.'
+            : `Receipts print directly to ${current.host.trim()}:${current.port}.`}
+        </strong>
+        <p className="muted">
+          {current.host.trim() === ''
+            ? 'Printing opens the normal Windows print dialog, where you can choose any installed printer or Microsoft Print to PDF. Set an address below to print straight to a thermal POS printer instead.'
+            : 'If that printer cannot be reached, printing falls back to the Windows print dialog rather than failing.'}
+        </p>
+      </div>
+
       <div>
-        <label htmlFor="printer-host">Printer address</label>
+        <label htmlFor="printer-host">Printer address (optional)</label>
         <input id="printer-host" value={current.host} onChange={(event) => update({ host: event.target.value })} placeholder="e.g. 192.168.1.50" />
         <p className="muted field-hint">
           The receipt printer’s address on the restaurant’s own network. Leave blank to use whatever the server was started with
-          (POS_PRINTER_HOST).
+          (POS_PRINTER_HOST), or to print through Windows.
         </p>
       </div>
 
@@ -238,7 +374,7 @@ function PrinterPanel(): JSX.Element {
         Printing enabled
       </label>
       <p className="muted field-hint">
-        Turn this off while the printer is away for repair: printing then fails immediately with a clear message instead of every bill
+        Turn this off while the printer is away for repair: printing then goes straight to the Windows dialog instead of every receipt
         waiting on a connection that will never answer.
       </p>
 
@@ -258,138 +394,199 @@ function PrinterPanel(): JSX.Element {
  * rather than deleted — deleting one would orphan that answer on every
  * historical payment.
  */
+/**
+ * The Easypaisa wallets and bank accounts money can actually arrive in.
+ *
+ * A non-cash payment cannot be taken at all until at least one active
+ * account exists for its method, so this screen is the difference
+ * between a cashier being able to accept a transfer and not. It says so
+ * where an account list is empty, rather than leaving them to discover
+ * it at the till.
+ *
+ * Accounts are deactivated, never deleted: a `payment` references the
+ * one it landed in, and deleting it would orphan that answer on every
+ * historical payment.
+ */
 function AccountsPanel(): JSX.Element {
   const methods = usePaymentMethods();
   const accounts = usePaymentAccounts(undefined, true);
+  const update = useUpdatePaymentAccount();
+
+  const [adding, setAdding] = useState<number | null>(null);
+  const [editing, setEditing] = useState<PaymentAccount | null>(null);
+
+  // Cash is handed over at the till — there is no account for it to
+  // arrive in, so it gets no section here.
+  const eligible = (methods.data ?? []).filter((method) => method.kind !== 'cash');
+
+  if (methods.isLoading || accounts.isLoading) return <Loading />;
+
+  return (
+    <div className="card col settings-panel accounts-panel">
+      <ErrorBanner error={update.error} />
+      <p className="muted" style={{ marginTop: 0 }}>
+        Easypaisa and bank payments must say which account received the money, so each of these needs at least one active account before
+        a cashier can accept it.
+      </p>
+
+      {eligible.map((method) => {
+        const forMethod = (accounts.data ?? []).filter((account) => account.paymentMethodId === method.id);
+        const active = forMethod.filter((account) => account.active);
+        return (
+          <section key={method.id} className="account-group">
+            <div className="row">
+              <h3 style={{ margin: 0, flex: 1 }}>{method.displayName}</h3>
+              <button className="primary" onClick={() => setAdding(method.id)}>
+                Add account
+              </button>
+            </div>
+
+            {active.length === 0 && (
+              <div className="blocked-notice">
+                <strong>No active {method.displayName} account.</strong>
+                <p className="muted">Cashiers cannot accept {method.displayName} payments until one is added here.</p>
+              </div>
+            )}
+
+            {forMethod.length > 0 && (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Account</th>
+                    <th>Status</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {forMethod.map((account) => (
+                    <tr key={account.id} className={account.active ? '' : 'muted'}>
+                      <td>{account.label}</td>
+                      <td>
+                        {account.accountNumber ?? '—'}
+                        {account.bankName && <span className="muted"> · {account.bankName}</span>}
+                      </td>
+                      <td>{account.active ? 'Active' : 'Inactive'}</td>
+                      <td className="num">
+                        <button className="ghost" onClick={() => setEditing(account)}>
+                          Edit
+                        </button>
+                        <button
+                          className="ghost"
+                          disabled={update.isPending}
+                          onClick={() => update.mutate({ id: account.id, active: !account.active })}
+                        >
+                          {account.active ? 'Deactivate' : 'Reactivate'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        );
+      })}
+
+      {eligible.length === 0 && <p className="muted">No payment methods need an account — only cash is configured.</p>}
+
+      {adding !== null && (
+        <AccountDialog
+          methodId={adding}
+          methodName={eligible.find((method) => method.id === adding)?.displayName ?? 'account'}
+          isBank={eligible.find((method) => method.id === adding)?.kind === 'bank_transfer'}
+          onClose={() => setAdding(null)}
+        />
+      )}
+      {editing && (
+        <AccountDialog
+          account={editing}
+          methodId={editing.paymentMethodId}
+          methodName={eligible.find((method) => method.id === editing.paymentMethodId)?.displayName ?? 'account'}
+          isBank={editing.accountType === 'bank'}
+          onClose={() => setEditing(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** One dialog for adding and editing — the fields are identical, and a
+ * second copy would be a second place for them to drift. */
+function AccountDialog({
+  account,
+  methodId,
+  methodName,
+  isBank,
+  onClose,
+}: {
+  account?: PaymentAccount;
+  methodId: number;
+  methodName: string;
+  isBank: boolean;
+  onClose: () => void;
+}): JSX.Element {
   const create = useCreatePaymentAccount();
   const update = useUpdatePaymentAccount();
 
-  const [adding, setAdding] = useState(false);
-  const [paymentMethodId, setPaymentMethodId] = useState<number | ''>('');
-  const [label, setLabel] = useState('');
-  const [accountTitle, setAccountTitle] = useState('');
-  const [accountNumber, setAccountNumber] = useState('');
-  const [bankName, setBankName] = useState('');
+  const [label, setLabel] = useState(account?.label ?? '');
+  const [accountTitle, setAccountTitle] = useState(account?.accountTitle ?? '');
+  const [accountNumber, setAccountNumber] = useState(account?.accountNumber ?? '');
+  const [bankName, setBankName] = useState(account?.bankName ?? '');
 
-  // Cash has no account to arrive in, so it is not offered.
-  const eligible = (methods.data ?? []).filter((method) => method.kind !== 'cash');
+  const pending = create.isPending || update.isPending;
+  const valid = label.trim() !== '';
 
-  const reset = () => {
-    setAdding(false);
-    setPaymentMethodId('');
-    setLabel('');
-    setAccountTitle('');
-    setAccountNumber('');
-    setBankName('');
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!valid || pending) return;
+    const fields = {
+      label: label.trim(),
+      accountTitle: accountTitle.trim(),
+      accountNumber: accountNumber.trim(),
+      ...(isBank ? { bankName: bankName.trim() } : {}),
+    };
+    if (account) update.mutate({ id: account.id, ...fields }, { onSuccess: onClose });
+    else create.mutate({ paymentMethodId: methodId, ...fields }, { onSuccess: onClose });
   };
 
-  const methodName = (id: number) => methods.data?.find((method) => method.id === id)?.displayName ?? `method ${id}`;
-  const isBank = eligible.find((method) => method.id === paymentMethodId)?.kind === 'bank_transfer';
-
   return (
-    <div className="card col settings-panel">
-      <ErrorBanner error={create.error ?? update.error} />
-
-      <div className="row">
-        <h3 style={{ margin: 0, flex: 1 }}>Accounts</h3>
-        <button className="primary" onClick={() => setAdding(true)}>
-          Add account
-        </button>
-      </div>
-
-      {accounts.isLoading && <Loading />}
-      {accounts.data?.length === 0 && <p className="muted">No accounts configured yet. Add one so cashiers can record where a transfer landed.</p>}
-
-      <table>
-        <thead>
-          <tr>
-            <th>Label</th>
-            <th>Method</th>
-            <th>Account</th>
-            <th>Status</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {accounts.data?.map((account: PaymentAccount) => (
-            <tr key={account.id} className={account.active ? '' : 'muted'}>
-              <td>{account.label}</td>
-              <td>{methodName(account.paymentMethodId)}</td>
-              <td>
-                {account.accountNumber ?? '—'}
-                {account.bankName && <span className="muted"> · {account.bankName}</span>}
-              </td>
-              <td>{account.active ? 'Active' : 'Inactive'}</td>
-              <td className="num">
-                <button className="ghost" onClick={() => update.mutate({ id: account.id, active: !account.active })}>
-                  {account.active ? 'Deactivate' : 'Reactivate'}
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      {adding && (
-        <Modal title="Add payment account" onClose={reset}>
-          <div className="col">
-            <ErrorBanner error={create.error} />
-            <div>
-              <label htmlFor="account-method">Payment method</label>
-              <select
-                id="account-method"
-                value={paymentMethodId}
-                onChange={(event) => setPaymentMethodId(event.target.value === '' ? '' : Number(event.target.value))}
-              >
-                <option value="">Select…</option>
-                {eligible.map((method) => (
-                  <option key={method.id} value={method.id}>
-                    {method.displayName}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label htmlFor="account-label">Label</label>
-              <input id="account-label" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Counter wallet" />
-              <p className="muted field-hint">What a cashier picks from a list — keep it short and unambiguous.</p>
-            </div>
-            <div>
-              <label htmlFor="account-title">Account title</label>
-              <input id="account-title" value={accountTitle} onChange={(event) => setAccountTitle(event.target.value)} />
-            </div>
-            <div>
-              <label htmlFor="account-number">Account number / IBAN</label>
-              <input id="account-number" value={accountNumber} onChange={(event) => setAccountNumber(event.target.value)} />
-            </div>
-            {isBank && (
-              <div>
-                <label htmlFor="account-bank">Bank name</label>
-                <input id="account-bank" value={bankName} onChange={(event) => setBankName(event.target.value)} />
-              </div>
-            )}
-            <button
-              className="primary big"
-              disabled={create.isPending || paymentMethodId === '' || !label.trim()}
-              onClick={() =>
-                create.mutate(
-                  {
-                    paymentMethodId: Number(paymentMethodId),
-                    label: label.trim(),
-                    ...(accountTitle.trim() ? { accountTitle: accountTitle.trim() } : {}),
-                    ...(accountNumber.trim() ? { accountNumber: accountNumber.trim() } : {}),
-                    ...(bankName.trim() ? { bankName: bankName.trim() } : {}),
-                  },
-                  { onSuccess: reset },
-                )
-              }
-            >
-              Add account
-            </button>
+    <Modal title={account ? `Edit ${account.label}` : `Add ${methodName} account`} onClose={onClose}>
+      <form onSubmit={submit}>
+        <div className="col">
+          <ErrorBanner error={create.error ?? update.error} />
+          <div>
+            <label htmlFor="account-label">Name</label>
+            <input
+              id="account-label"
+              autoFocus
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              placeholder={isBank ? 'HBL current' : 'Counter wallet'}
+            />
+            <p className="muted field-hint">What a cashier picks from a list — keep it short and unambiguous.</p>
           </div>
-        </Modal>
-      )}
-    </div>
+          <div>
+            <label htmlFor="account-title">Account title</label>
+            <input id="account-title" value={accountTitle} onChange={(event) => setAccountTitle(event.target.value)} />
+          </div>
+          <div>
+            <label htmlFor="account-number">{isBank ? 'Account number / IBAN' : 'Mobile number'}</label>
+            <input id="account-number" value={accountNumber} onChange={(event) => setAccountNumber(event.target.value)} />
+            <p className="muted field-hint">Only the last four digits are printed on a receipt.</p>
+          </div>
+          {isBank && (
+            <div>
+              <label htmlFor="account-bank">Bank name</label>
+              <input id="account-bank" value={bankName} onChange={(event) => setBankName(event.target.value)} />
+            </div>
+          )}
+          <button className="primary big" type="submit" disabled={!valid || pending}>
+            {pending ? 'Saving…' : account ? 'Save' : 'Add account'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

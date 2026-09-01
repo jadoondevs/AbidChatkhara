@@ -1,15 +1,21 @@
 import type { Paisa } from '@pos/shared';
 import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 import { api, query, type RequestOptions } from './client.js';
+import { completePrint } from './printing.js';
 import type {
   AppSettings,
   BillTotals,
   Category,
   FloorBoard,
   PaymentAccount,
+  OrderHistory,
+  PartnerRecord,
+  PaymentOption,
+  PrintOutcome,
   PrinterSettings,
   ReceiptSettings,
   RestaurantSettings,
+  ServiceChargeSettings,
   Role,
   RosterEntry,
   ConsumptionReport,
@@ -145,13 +151,27 @@ export function useFloorBoard(): UseQueryResult<FloorBoard> {
   });
 }
 
+/** The complete record of one order, as it happened — see the server's
+ * getOrderHistory. Read-only; opening an order changes nothing. */
+export function useOrderHistory(orderId: number | null): UseQueryResult<OrderHistory> {
+  return useQuery({
+    queryKey: ['order-history', orderId],
+    queryFn: () => api.get<OrderHistory>(`/api/orders/${orderId}/history`),
+    enabled: orderId !== null,
+  });
+}
+
 /** What this order WILL total if billed with the given service charge —
  * computed by the same server code that will do the billing, so the
  * figure on screen is the figure that prints. */
-export function useBillPreview(orderId: number | null, serviceChargeMinor: Paisa): UseQueryResult<BillTotals> {
+export function useBillPreview(orderId: number | null, serviceChargeMinor?: Paisa): UseQueryResult<BillTotals> {
   return useQuery({
-    queryKey: ['bill-preview', orderId, serviceChargeMinor],
-    queryFn: () => api.get<BillTotals>(`/api/orders/${orderId}/bill-preview${query({ serviceChargeMinor })}`),
+    queryKey: ['bill-preview', orderId, serviceChargeMinor ?? null],
+    queryFn: () =>
+      // No override means "what would the configured rule charge?",
+      // which is what the bill screen asks before a cashier touches
+      // anything.
+      api.get<BillTotals>(`/api/orders/${orderId}/bill-preview${query(serviceChargeMinor === undefined ? {} : { serviceChargeMinor })}`),
     enabled: orderId !== null,
   });
 }
@@ -181,6 +201,8 @@ export interface CreateOrderVars {
   orderType: OrderType;
   channel?: 'staff_meal' | 'owner_meal';
   tableLabel?: string;
+  customerName?: string;
+  customerPhone?: string;
   waiterId?: number;
   beneficiaryPersonId?: number;
 }
@@ -189,8 +211,23 @@ export function useCreateOrder(): UseMutationResult<OrderSummary, Error, CreateO
   return useOrderMutation((vars: CreateOrderVars) => api.post<OrderSummary>('/api/orders', vars));
 }
 
-export function useAddLine(): UseMutationResult<OrderDetail, Error, { orderId: number; itemId: number; qty: number; modifierIds?: number[] }> {
+export function useAddLine(): UseMutationResult<
+  OrderDetail,
+  Error,
+  { orderId: number; itemId: number; qty: number; modifierIds?: number[]; note?: string }
+> {
   return useOrderMutation(({ orderId, ...body }) => api.post<OrderDetail>(`/api/orders/${orderId}/lines`, body));
+}
+
+/** Who the order is for. Both fields optional: saving a phone number
+ * must not require re-sending the name. */
+export function useSetOrderCustomer(): UseMutationResult<OrderDetail, Error, { orderId: number; customerName?: string; customerPhone?: string }> {
+  return useOrderMutation(({ orderId, ...body }) => api.patch<OrderDetail>(`/api/orders/${orderId}/customer`, body));
+}
+
+/** What the kitchen is told about one line. An empty string clears it. */
+export function useSetLineNote(): UseMutationResult<OrderDetail, Error, { orderId: number; lineId: number; note: string }> {
+  return useOrderMutation(({ orderId, lineId, note }) => api.patch<OrderDetail>(`/api/orders/${orderId}/lines/${lineId}/note`, { note }));
 }
 
 export function useSetLineQty(): UseMutationResult<OrderDetail, Error, { orderId: number; lineId: number; qty: number }> {
@@ -297,12 +334,28 @@ export function useSettleConsumption(): UseMutationResult<
   return useOrderMutation(({ orderId, ...body }) => api.post<SettleConsumptionResult>(`/api/orders/${orderId}/settle-consumption`, body));
 }
 
-export function usePrintBill(): UseMutationResult<{ ok: true }, Error, number> {
-  return useMutation({ mutationFn: (orderId: number) => api.post<{ ok: true }>(`/api/orders/${orderId}/print-bill`) });
+/** What each payment method can accept right now — see PaymentOption. */
+export function usePaymentOptions(): UseQueryResult<PaymentOption[]> {
+  return useQuery({ queryKey: ['payment-options'], queryFn: () => api.get<PaymentOption[]>('/api/payment-options') });
 }
 
-export function usePrintReceipt(): UseMutationResult<{ ok: true }, Error, number> {
-  return useMutation({ mutationFn: (orderId: number) => api.post<{ ok: true }>(`/api/orders/${orderId}/print-receipt`) });
+/**
+ * Printing always succeeds as far as the server is concerned: it either
+ * printed to the thermal printer or handed back the ticket as HTML.
+ * `completePrint` then opens the browser's print dialog for the second
+ * case (api/printing.ts), so a caller gets one promise for "the ticket
+ * has been dealt with" however this till prints.
+ */
+export function usePrintBill(): UseMutationResult<'thermal' | 'fallback', Error, number> {
+  return useMutation({
+    mutationFn: async (orderId: number) => completePrint(await api.post<PrintOutcome>(`/api/orders/${orderId}/print-bill`)),
+  });
+}
+
+export function usePrintReceipt(): UseMutationResult<'thermal' | 'fallback', Error, number> {
+  return useMutation({
+    mutationFn: async (orderId: number) => completePrint(await api.post<PrintOutcome>(`/api/orders/${orderId}/print-receipt`)),
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -516,6 +569,21 @@ export function useCreatePartner(): UseMutationResult<Partner, Error, { name: st
   return useMutation({ mutationFn: (body) => api.post<Partner>('/api/partners', body), onSuccess: invalidate });
 }
 
+export function useUpdatePartner(): UseMutationResult<Partner, Error, { id: number; name?: string; active?: boolean }> {
+  const invalidate = useInvalidateOnSuccess(['partners', 'partner-record']);
+  return useMutation({ mutationFn: ({ id, ...body }) => api.patch<Partner>(`/api/partners/${id}`, body), onSuccess: invalidate });
+}
+
+/** What a partner owns today, and what they have actually been credited
+ * — at the share each sale was written at. */
+export function usePartnerRecord(partnerId: number | null): UseQueryResult<PartnerRecord> {
+  return useQuery({
+    queryKey: ['partner-record', partnerId],
+    queryFn: () => api.get<PartnerRecord>(`/api/partners/${partnerId}/record`),
+    enabled: partnerId !== null,
+  });
+}
+
 export function useOpenShiftMutation(): UseMutationResult<Shift, Error, { openingCashMinor: Paisa }> {
   const invalidate = useInvalidateOnSuccess(['shift']);
   return useMutation({ mutationFn: (body) => api.post<Shift>('/api/shifts', body), onSuccess: invalidate });
@@ -554,6 +622,19 @@ export function usePrinterSettings(enabled: boolean): UseQueryResult<PrinterSett
 export function useSaveRestaurantSettings(): UseMutationResult<RestaurantSettings, Error, RestaurantSettings> {
   const invalidate = useInvalidateOnSuccess(['settings']);
   return useMutation({ mutationFn: (body) => api.put<RestaurantSettings>('/api/settings/restaurant', body), onSuccess: invalidate });
+}
+
+export function useServiceChargeSettings(): UseQueryResult<ServiceChargeSettings> {
+  return useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<AppSettings>('/api/settings'),
+    select: (settings) => settings.serviceCharge,
+  });
+}
+
+export function useSaveServiceChargeSettings(): UseMutationResult<ServiceChargeSettings, Error, ServiceChargeSettings> {
+  const invalidate = useInvalidateOnSuccess(['settings', 'bill-preview', 'order']);
+  return useMutation({ mutationFn: (body) => api.put<ServiceChargeSettings>('/api/settings/service-charge', body), onSuccess: invalidate });
 }
 
 export function useSaveReceiptSettings(): UseMutationResult<ReceiptSettings, Error, ReceiptSettings> {

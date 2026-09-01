@@ -1,9 +1,10 @@
-import { add, paisa, roundToRupee, sub, type Paisa } from '@pos/shared';
+import { add, paisa, proportionalAmount, roundToRupee, sub, type Paisa } from '@pos/shared';
 import type { Kysely, Transaction } from 'kysely';
 import { getItem, getModifier, getCurrentPrice, listModifierGroupsForItem } from '../catalog/service.js';
 import { recordAudit } from '../identity/audit.js';
 import type { Database } from '../platform/db/types.js';
 import { eventBus } from '../platform/events/bus.js';
+import { getSetting } from '../settings/service.js';
 import { computeTaxForOrder } from '../tax/service.js';
 import { computeOrderPipeline, type LineInput } from './pipeline.js';
 import type { OrderChannel, OrderStatus, OrderType, VoidKind } from './tables.js';
@@ -75,6 +76,10 @@ export interface OrderSummary {
   readonly orderType: OrderType;
   readonly channel: OrderChannel;
   readonly tableLabel: string | null;
+  /** Who the order is for. Optional everywhere — a dine-in customer
+   * rarely gives a name, a delivery always does (migration 0018). */
+  readonly customerName: string | null;
+  readonly customerPhone: string | null;
   readonly waiterId: number | null;
   readonly beneficiaryPersonId: number | null;
   readonly shiftId: number | null;
@@ -93,6 +98,8 @@ export interface OrderSummary {
   readonly netSalesMinor: Paisa;
   readonly taxMinor: Paisa;
   readonly serviceChargeMinor: Paisa;
+  /** The rate that produced it, or null — see migration 0016. */
+  readonly serviceChargeRateBp: number | null;
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
   readonly version: number;
@@ -104,6 +111,8 @@ interface OrderRow {
   order_type: OrderType;
   channel: OrderChannel;
   table_label: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
   waiter_id: number | null;
   beneficiary_person_id: number | null;
   shift_id: number | null;
@@ -120,6 +129,7 @@ interface OrderRow {
   net_sales_minor: Paisa;
   tax_minor: Paisa;
   service_charge_minor: Paisa;
+  service_charge_rate_bp: number | null;
   rounding_adjustment_minor: Paisa;
   total_minor: Paisa;
   version: number;
@@ -132,6 +142,8 @@ function toOrderSummary(row: OrderRow): OrderSummary {
     orderType: row.order_type,
     channel: row.channel,
     tableLabel: row.table_label,
+    customerName: row.customer_name,
+    customerPhone: row.customer_phone,
     waiterId: row.waiter_id,
     beneficiaryPersonId: row.beneficiary_person_id,
     shiftId: row.shift_id,
@@ -148,6 +160,7 @@ function toOrderSummary(row: OrderRow): OrderSummary {
     netSalesMinor: row.net_sales_minor,
     taxMinor: row.tax_minor,
     serviceChargeMinor: row.service_charge_minor,
+    serviceChargeRateBp: row.service_charge_rate_bp,
     roundingAdjustmentMinor: row.rounding_adjustment_minor,
     totalMinor: row.total_minor,
     version: row.version,
@@ -157,6 +170,8 @@ function toOrderSummary(row: OrderRow): OrderSummary {
 export interface OrderLineModifierDetail {
   readonly id: number;
   readonly modifierId: number;
+  /** What it was called when it was sold, not what it is called now. */
+  readonly modifierName: string;
   readonly priceDeltaMinor: Paisa;
   readonly grossMinor: Paisa;
   readonly proratedDiscountMinor: Paisa;
@@ -167,6 +182,8 @@ export interface OrderLineModifierDetail {
 export interface OrderLineDetail {
   readonly id: number;
   readonly itemId: number;
+  /** What it was called when it was sold, not what it is called now. */
+  readonly itemName: string;
   readonly qty: number;
   readonly unitPriceMinor: Paisa;
   readonly grossMinor: Paisa;
@@ -177,6 +194,8 @@ export interface OrderLineDetail {
   readonly voidReason: string | null;
   readonly voidApprovedBy: number | null;
   readonly voidKind: VoidKind | null;
+  /** What the kitchen was told — "no onions", "well done". */
+  readonly note: string | null;
   // Not `readonly` (unlike the fields above): this is serialized
   // straight through a Zod response schema at the HTTP layer, and Zod's
   // inferred array type there is mutable — a readonly array isn't
@@ -213,6 +232,7 @@ async function loadLines(
   return lineRows.map((line) => ({
     id: line.id,
     itemId: line.item_id,
+    itemName: line.item_name_snapshot ?? `item ${line.item_id}`,
     qty: line.qty,
     unitPriceMinor: line.unit_price_minor,
     grossMinor: line.gross_minor,
@@ -223,11 +243,13 @@ async function loadLines(
     voidReason: line.void_reason,
     voidApprovedBy: line.void_approved_by,
     voidKind: line.void_kind,
+    note: line.note,
     modifiers: modifierRows
       .filter((m) => m.order_line_id === line.id)
       .map((m) => ({
         id: m.id,
         modifierId: m.modifier_id,
+        modifierName: m.modifier_name_snapshot ?? `modifier ${m.modifier_id}`,
         priceDeltaMinor: m.price_delta_minor,
         grossMinor: m.gross_minor,
         proratedDiscountMinor: m.prorated_discount_minor,
@@ -381,6 +403,11 @@ export interface CreateOrderInput {
    * a dine_in order. */
   readonly channel?: OrderChannel | undefined;
   readonly tableLabel?: string | undefined;
+  /** Optional on every order type. A delivery that has neither cannot
+   * be delivered, but that is the driver's problem to raise, not a
+   * reason for the till to refuse the sale. */
+  readonly customerName?: string | undefined;
+  readonly customerPhone?: string | undefined;
   readonly waiterId?: number | undefined;
   readonly beneficiaryPersonId?: number | undefined;
 }
@@ -447,6 +474,8 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
       order_type: input.orderType,
       channel,
       table_label: input.tableLabel?.trim() ? input.tableLabel.trim() : null,
+      customer_name: input.customerName?.trim() ? input.customerName.trim() : null,
+      customer_phone: input.customerPhone?.trim() ? input.customerPhone.trim() : null,
       waiter_id: input.waiterId ?? null,
       beneficiary_person_id: input.beneficiaryPersonId ?? null,
       shift_id: openShift?.id ?? null,
@@ -463,6 +492,7 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
       net_sales_minor: paisa(0),
       tax_minor: paisa(0),
       service_charge_minor: paisa(0),
+      service_charge_rate_bp: null,
       rounding_adjustment_minor: paisa(0),
       total_minor: paisa(0),
       version: 0,
@@ -626,6 +656,9 @@ export interface AddLineInput {
   readonly itemId: number;
   readonly qty: number;
   readonly modifierIds?: readonly number[] | undefined;
+  /** A kitchen instruction for this line. Two otherwise identical lines
+   * with different notes are different things and never merge. */
+  readonly note?: string | undefined;
 }
 
 /**
@@ -640,13 +673,18 @@ async function findMergeableLine(
   orderId: number,
   itemId: number,
   modifierKey: string,
+  note: string | null,
 ): Promise<{ id: number; qty: number } | null> {
   const candidates = await trx
     .selectFrom('order_line')
-    .select(['id', 'qty'])
+    .select(['id', 'qty', 'note'])
     .where('order_id', '=', orderId)
     .where('item_id', '=', itemId)
     .where('voided', '=', 0)
+    // A Karahi "no onions" is not the same thing as a Karahi, so it
+    // gets its own line — merging them would send one of the two
+    // instructions to the kitchen and drop the other.
+    .where('note', note === null ? 'is' : '=', note)
     .orderBy('id', 'asc')
     .execute();
   if (candidates.length === 0) return null;
@@ -699,11 +737,12 @@ export async function addLine(db: Kysely<Database>, orderId: number, input: AddL
   const modifiers = await Promise.all(modifierIds.map((id) => getModifier(db, id)));
 
   const modifierKey = [...modifierIds].sort((a, b) => a - b).join(',');
+  const note = input.note?.trim() ? input.note.trim() : null;
 
   return db.transaction().execute(async (trx) => {
     const order = await requireOpenOrder(trx, orderId);
 
-    const mergeTarget = order.first_billed_at === null ? await findMergeableLine(trx, orderId, input.itemId, modifierKey) : null;
+    const mergeTarget = order.first_billed_at === null ? await findMergeableLine(trx, orderId, input.itemId, modifierKey, note) : null;
     if (mergeTarget) {
       const mergedQty = mergeTarget.qty + input.qty;
       if (mergedQty > MAX_LINE_QTY) {
@@ -731,6 +770,9 @@ export async function addLine(db: Kysely<Database>, orderId: number, input: AddL
       .values({
         order_id: orderId,
         item_id: input.itemId,
+        // The name is snapshotted alongside the price: a bill must not
+        // change when the menu does (migration 0017).
+        item_name_snapshot: item.name,
         qty: input.qty,
         unit_price_minor: unitPriceMinor,
         gross_minor: paisa(0),
@@ -741,6 +783,7 @@ export async function addLine(db: Kysely<Database>, orderId: number, input: AddL
         void_reason: null,
         void_approved_by: null,
         void_kind: null,
+        note,
       })
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -753,6 +796,7 @@ export async function addLine(db: Kysely<Database>, orderId: number, input: AddL
         .values({
           order_line_id: lineRow.id,
           modifier_id: m.id,
+          modifier_name_snapshot: m.name,
           price_delta_minor: m.priceDeltaMinor,
           gross_minor: paisa(0),
           prorated_discount_minor: paisa(0),
@@ -941,6 +985,109 @@ export async function setLineQty(
 }
 
 // ---------------------------------------------------------------------
+// Who the order is for, and what the kitchen was told
+// ---------------------------------------------------------------------
+
+export interface SetOrderCustomerInput {
+  readonly customerName?: string | undefined;
+  readonly customerPhone?: string | undefined;
+}
+
+/**
+ * Record (or correct) the customer on an order.
+ *
+ * Separate from order creation because that is how it actually happens:
+ * the phone rings, the order goes in, and the name and number are read
+ * back while the kitchen is already cooking. Editable until the order
+ * closes and not after — a settled order is a record of what happened,
+ * and this is part of that record.
+ *
+ * Passing an empty string clears the field; omitting it leaves it
+ * alone, so the delivery screen can save a phone number without having
+ * to re-send the name.
+ */
+export async function setOrderCustomer(
+  db: Kysely<Database>,
+  orderId: number,
+  input: SetOrderCustomerInput,
+  actor: OrderActor,
+): Promise<OrderDetail> {
+  return db.transaction().execute(async (trx) => {
+    const order = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirst();
+    if (!order) throw new Error(`order ${orderId} not found`);
+    if (order.status === 'closed' || order.status === 'voided') {
+      throw new OrderStateError(`order ${orderId} is ${order.status} — its customer details can no longer be changed`);
+    }
+
+    const patch: { customer_name?: string | null; customer_phone?: string | null } = {};
+    if (input.customerName !== undefined) patch.customer_name = input.customerName.trim() || null;
+    if (input.customerPhone !== undefined) patch.customer_phone = input.customerPhone.trim() || null;
+
+    if (Object.keys(patch).length > 0) {
+      await versionedUpdate(trx, orderId, order.version, patch);
+      await recordAudit(trx, {
+        actorId: actor.actorId,
+        terminalId: actor.terminalId,
+        action: 'order.set_customer',
+        entity: 'order',
+        entityId: orderId,
+        before: { customerName: order.customer_name, customerPhone: order.customer_phone },
+        after: {
+          customerName: patch.customer_name ?? order.customer_name,
+          customerPhone: patch.customer_phone ?? order.customer_phone,
+        },
+      });
+    }
+
+    const updated = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirstOrThrow();
+    return toOrderDetail(trx, updated, await loadLines(trx, orderId));
+  });
+}
+
+export interface SetLineNoteInput {
+  readonly note: string;
+}
+
+/**
+ * Change what the kitchen is told about one line.
+ *
+ * Only while the order is still open: once a bill is printed the note
+ * has already been acted on, and rewriting it would change a record of
+ * what was actually cooked. It does not touch a single money field, so
+ * nothing is recomputed — but it is audited, because "who told the
+ * kitchen to leave the onions out" is a real question.
+ */
+export async function setLineNote(
+  db: Kysely<Database>,
+  orderId: number,
+  lineId: number,
+  input: SetLineNoteInput,
+  actor: OrderActor,
+): Promise<OrderDetail> {
+  return db.transaction().execute(async (trx) => {
+    const order = await requireOpenOrder(trx, orderId);
+    const line = await trx.selectFrom('order_line').selectAll().where('id', '=', lineId).where('order_id', '=', orderId).executeTakeFirst();
+    if (!line) throw new Error(`line ${lineId} not found on order ${orderId}`);
+    if (line.voided === 1) throw new OrderStateError(`line ${lineId} is off this order — its note cannot be changed`);
+
+    const note = input.note.trim() || null;
+    await trx.updateTable('order_line').set({ note }).where('id', '=', lineId).execute();
+
+    await recordAudit(trx, {
+      actorId: actor.actorId,
+      terminalId: actor.terminalId,
+      action: 'order.set_line_note',
+      entity: 'order_line',
+      entityId: lineId,
+      before: { note: line.note },
+      after: { note },
+    });
+
+    return toOrderDetail(trx, order, await loadLines(trx, orderId));
+  });
+}
+
+// ---------------------------------------------------------------------
 // Order-level discount
 // ---------------------------------------------------------------------
 
@@ -1009,8 +1156,67 @@ export interface BillTotals {
   readonly netSalesMinor: Paisa;
   readonly taxMinor: Paisa;
   readonly serviceChargeMinor: Paisa;
+  /** The configured rate this service charge came from, or null when
+   * none did — no charge, or a cashier-entered amount. Carried through
+   * so a bill can say "Service charge (5%)" rather than leaving a
+   * manager to work out which rate was in force that day. */
+  readonly serviceChargeRateBp: number | null;
+  readonly serviceChargeName: string;
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
+}
+
+/**
+ * What this order's service charge should be, from the restaurant's
+ * configured rule — and, so a historical bill can say so, the rate that
+ * produced it.
+ *
+ * THE one place a service charge is worked out. Nothing else in the
+ * system multiplies a rate by a total: `billOrder` persists what this
+ * returns, `previewBillTotals` shows what this returns, and the receipt
+ * prints the amount that was persisted. A screen that did its own
+ * percentage would be a second answer.
+ *
+ * A cashier may still override the amount — waiving service on a
+ * complaint is ordinary restaurant practice, and the old POS allowed it
+ * — but an override records `rateBp: null`, because no rate produced
+ * it and claiming one would be a lie on the receipt.
+ */
+export async function computeServiceCharge(
+  db: Kysely<Database> | Transaction<Database>,
+  order: Pick<OrderRow, 'order_type' | 'waiter_id' | 'net_sales_minor' | 'channel'>,
+  override: Paisa | undefined,
+): Promise<{ amountMinor: Paisa; rateBp: number | null; displayName: string }> {
+  const config = await getSetting(db, 'serviceCharge');
+
+  if (override !== undefined) {
+    if (override < 0) throw new OrderStateError('service charge cannot be negative');
+    if (override > 0 && !config.enabled) {
+      throw new OrderStateError('service charge is switched off for this restaurant — enable it in Settings first');
+    }
+    if (override > 0 && order.waiter_id === null) {
+      throw new OrderStateError('service charge requires a waiter; this order has none');
+    }
+    return { amountMinor: override, rateBp: null, displayName: config.displayName };
+  }
+
+  // Every reason there is no charge, in one place, so "disabled means
+  // zero" cannot be true on one screen and not another.
+  const applies =
+    config.enabled &&
+    config.rateBp > 0 &&
+    order.waiter_id !== null &&
+    // A staff or owner meal is not table service being sold.
+    order.channel === 'customer' &&
+    (!config.dineInOnly || order.order_type === 'dine_in');
+
+  if (!applies) return { amountMinor: paisa(0), rateBp: null, displayName: config.displayName };
+
+  return {
+    amountMinor: proportionalAmount(order.net_sales_minor, config.rateBp, 10_000),
+    rateBp: config.rateBp,
+    displayName: config.displayName,
+  };
 }
 
 /**
@@ -1024,18 +1230,15 @@ export interface BillTotals {
  * total before printing is that it is the total that gets printed.
  */
 async function computeBillTotals(
-  trx: Transaction<Database>,
+  trx: Kysely<Database> | Transaction<Database>,
   order: OrderRow,
-  serviceChargeMinor: Paisa,
+  serviceChargeOverride: Paisa | undefined,
   at: Date,
 ): Promise<BillTotals> {
-  if (serviceChargeMinor < 0) throw new OrderStateError('service charge cannot be negative');
-  if (serviceChargeMinor > 0 && order.waiter_id === null) {
-    throw new OrderStateError('service charge requires a waiter; this order has none');
-  }
+  const serviceCharge = await computeServiceCharge(trx, order, serviceChargeOverride);
 
   const { taxMinor } = await computeTaxForOrder(trx, order.id, order.order_type, at);
-  const preRound = add(add(order.net_sales_minor, taxMinor), serviceChargeMinor);
+  const preRound = add(add(order.net_sales_minor, taxMinor), serviceCharge.amountMinor);
   const { total, adjustment } = roundToRupee(preRound);
 
   return {
@@ -1043,7 +1246,9 @@ async function computeBillTotals(
     orderDiscountMinor: order.order_discount_minor,
     netSalesMinor: order.net_sales_minor,
     taxMinor,
-    serviceChargeMinor,
+    serviceChargeMinor: serviceCharge.amountMinor,
+    serviceChargeRateBp: serviceCharge.rateBp,
+    serviceChargeName: serviceCharge.displayName,
     roundingAdjustmentMinor: adjustment,
     totalMinor: total,
   };
@@ -1060,13 +1265,11 @@ async function computeBillTotals(
 export async function previewBillTotals(
   db: Kysely<Database>,
   orderId: number,
-  serviceChargeMinor: Paisa,
+  serviceChargeOverride?: Paisa,
 ): Promise<BillTotals> {
-  return db.transaction().execute(async (trx) => {
-    const order = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirst();
-    if (!order) throw new Error(`order ${orderId} not found`);
-    return computeBillTotals(trx, order, serviceChargeMinor, new Date());
-  });
+  const order = await db.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirst();
+  if (!order) throw new Error(`order ${orderId} not found`);
+  return computeBillTotals(db, order, serviceChargeOverride, new Date());
 }
 
 /**
@@ -1094,7 +1297,7 @@ export async function billOrder(db: Kysely<Database>, orderId: number, input: Bi
     }
 
     const now = new Date();
-    const totals = await computeBillTotals(trx, order, input.serviceChargeMinor ?? paisa(0), now);
+    const totals = await computeBillTotals(trx, order, input.serviceChargeMinor, now);
 
     const updated = await versionedUpdate(trx, orderId, order.version, {
       status: 'billed',
@@ -1104,6 +1307,7 @@ export async function billOrder(db: Kysely<Database>, orderId: number, input: Bi
       first_billed_at: order.first_billed_at ?? now.toISOString(),
       tax_minor: totals.taxMinor,
       service_charge_minor: totals.serviceChargeMinor,
+      service_charge_rate_bp: totals.serviceChargeRateBp,
       rounding_adjustment_minor: totals.roundingAdjustmentMinor,
       total_minor: totals.totalMinor,
     });

@@ -2,7 +2,7 @@ import { paisa, roundUpTo, sub, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../api/client.js';
-import { useOrder, usePaymentAccounts, usePaymentMethods, usePeople, usePrintReceipt, useRecordPayment, useSettleConsumption } from '../api/hooks.js';
+import { useOrder, usePaymentOptions, usePeople, usePrintReceipt, useRecordPayment, useSettleConsumption } from '../api/hooks.js';
 import type { SettlementType } from '../api/types.js';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 import { orderTitle } from './OrderScreen.tsx';
@@ -48,7 +48,7 @@ export function PaymentScreen(): JSX.Element {
 function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
   const navigate = useNavigate();
   const order = useOrder(orderId);
-  const methods = usePaymentMethods();
+  const options = usePaymentOptions();
   const recordPayment = useRecordPayment();
   const printReceipt = usePrintReceipt();
 
@@ -58,36 +58,57 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
   const [accountId, setAccountId] = useState<number | ''>('');
   const [changeDue, setChangeDue] = useState<Paisa | null>(null);
   const [settledElsewhere, setSettledElsewhere] = useState<string | null>(null);
+  const [printedVia, setPrintedVia] = useState<'thermal' | 'fallback' | null>(null);
 
-  const method = methods.data?.find((candidate) => candidate.id === methodId);
-  const accounts = usePaymentAccounts(method && method.kind !== 'cash' ? method.id : undefined);
-
+  const option = options.data?.find((candidate) => candidate.paymentMethodId === methodId);
   const detail = order.data;
   if (!detail) return <Loading />;
 
-  const isCash = method?.kind === 'cash';
-  const takesReference = method?.kind === 'wallet' || method?.kind === 'bank_transfer';
-  // What is still owed, straight from the server. The payment screen is
-  // reachable directly by URL, so it cannot assume a cashier arrived
-  // here from a floor board that already knew.
-  const balanceMinor = detail.balanceMinor;
+  const isCash = option?.kind === 'cash';
+  const takesReference = option?.kind === 'wallet' || option?.kind === 'bank_transfer';
 
-  // A local preview of what the server will do, so the cashier can read
-  // the change off the screen BEFORE committing. The server does this
-  // arithmetic again and its answer is the one that is recorded.
+  // Which account this payment will land in. With exactly one active
+  // account there is nothing to choose — the server picks it too, so
+  // the screen shows it rather than asking a question with one answer.
+  const accounts = option?.accounts ?? [];
+  const soleAccount = option?.requiresAccount && accounts.length === 1 ? accounts[0] : undefined;
+  const needsAccountChoice = (option?.requiresAccount ?? false) && accounts.length > 1;
+  const blocked = option?.blockedReason ?? null;
+
+  const balanceMinor = detail.balanceMinor;
   const overpaying = isCash && amountMinor > balanceMinor;
   const changeIfCash = overpaying ? sub(amountMinor, balanceMinor) : paisa(0);
   const appliedMinor = overpaying ? balanceMinor : amountMinor;
 
+  const canRecord =
+    !recordPayment.isPending &&
+    methodId !== '' &&
+    amountMinor > 0 &&
+    blocked === null &&
+    (!needsAccountChoice || accountId !== '');
+
+  const selectMethod = (id: number) => {
+    setMethodId(id);
+    // Don't carry a choice across methods — an account belongs to
+    // exactly one, and the server rejects a mismatch.
+    setAccountId('');
+    setReferenceNo('');
+  };
+
   const submit = () => {
-    if (methodId === '') return;
+    if (methodId === '' || !canRecord) return;
+    // Only send an account when the cashier actually chose one: with a
+    // single account the server selects it, and sending our own copy
+    // would be a second place for that choice to be made.
+    const chosenAccountId = needsAccountChoice && accountId !== '' ? Number(accountId) : undefined;
+
     recordPayment.mutate(
       {
         orderId,
         paymentMethodId: Number(methodId),
         amountMinor,
         ...(takesReference && referenceNo.trim() ? { referenceNo: referenceNo.trim() } : {}),
-        ...(accountId !== '' ? { paymentAccountId: Number(accountId) } : {}),
+        ...(chosenAccountId === undefined ? {} : { paymentAccountId: chosenAccountId }),
       },
       {
         onSuccess: (result) => {
@@ -95,11 +116,13 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
           setReferenceNo('');
           setAmountMinor(paisa(0));
           // Settling prints the receipt and then STAYS on the
-          // confirmation, rather than snapping back to the floor: the
-          // cashier needs to read the invoice number and the change due,
-          // and a screen that vanishes on success is a screen that never
-          // told them whether it worked. A failed print never blocks it.
-          if (result.orderClosed) printReceipt.mutate(orderId);
+          // confirmation: the cashier needs to read the invoice number
+          // and the change due, and a screen that vanishes on success
+          // never told them whether it worked. Printing cannot fail the
+          // sale — see the note on the settled card below.
+          if (result.orderClosed) {
+            printReceipt.mutate(orderId, { onSuccess: (via) => setPrintedVia(via) });
+          }
         },
         onError: (error) => {
           if (error instanceof ApiError && error.isDomainError && /already settled/i.test(error.message)) {
@@ -112,7 +135,7 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
 
   if (settledElsewhere) {
     return (
-      <div className="card col" style={{ maxWidth: 560 }}>
+      <div className="card col settled-card">
         <h2 style={{ margin: 0 }}>Already settled</h2>
         <p>{settledElsewhere}</p>
         <p className="muted">Another terminal closed this bill first — nothing was double-charged.</p>
@@ -135,11 +158,25 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
             Change due: <Money minor={changeDue} />
           </p>
         )}
+
+        {/* The sale is done. What the printer did is information, never
+            a failure — a cancelled print or a missing printer does not
+            un-take the money. */}
+        {printReceipt.isPending && <p className="muted">Printing the receipt…</p>}
+        {printedVia === 'fallback' && (
+          <p className="muted">
+            No POS printer is connected, so the receipt was sent to Windows printing. Use Reprint receipt if you closed the dialog.
+          </p>
+        )}
         <ErrorBanner error={printReceipt.error} />
+
         <div className="row">
-          <button onClick={() => printReceipt.mutate(orderId)}>Reprint receipt</button>
-          {/* Focused, so Enter takes the cashier straight back to the
-              floor without reaching for the mouse. */}
+          <button disabled={printReceipt.isPending} onClick={() => printReceipt.mutate(orderId, { onSuccess: (via) => setPrintedVia(via) })}>
+            Reprint receipt
+          </button>
+          {/* The full record is one click away rather than something a
+              cashier has to go back to the floor to find. */}
+          <button onClick={() => navigate(`/orders/${orderId}/detail`)}>Order details</button>
           <button className="primary big" autoFocus onClick={() => navigate('/')}>
             Back to floor
           </button>
@@ -179,72 +216,97 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
         <div>
           <label>Method</label>
           <div className="tabs">
-            {methods.data?.map((candidate) => (
+            {options.data?.map((candidate) => (
               <button
-                key={candidate.id}
-                className={candidate.id === methodId ? 'active' : ''}
-                onClick={() => {
-                  setMethodId(candidate.id);
-                  setAccountId('');
-                }}
+                key={candidate.paymentMethodId}
+                className={candidate.paymentMethodId === methodId ? 'active' : ''}
+                onClick={() => selectMethod(candidate.paymentMethodId)}
               >
                 {candidate.displayName}
+                {/* Flagged on the button itself, so a cashier sees which
+                    methods are unusable before choosing one. */}
+                {candidate.blockedReason && <span className="method-blocked"> · not set up</span>}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="row">
-          <div style={{ flex: 1 }}>
-            <label htmlFor="amount">{isCash ? 'Cash tendered' : 'Amount'}</label>
-            <MoneyInput id="amount" valueMinor={amountMinor} onChange={setAmountMinor} />
-            {isCash && <p className="muted field-hint">Type what the customer handed over. Change is worked out below.</p>}
-          </div>
-
-          {takesReference && (
-            <div style={{ flex: 1 }}>
-              <label htmlFor="reference">Reference number (optional)</label>
-              <input id="reference" value={referenceNo} onChange={(event) => setReferenceNo(event.target.value)} />
-            </div>
-          )}
-        </div>
-
-        {method && method.kind !== 'cash' && (accounts.data?.length ?? 0) > 0 && (
-          <div>
-            <label htmlFor="account">Which account received it?</label>
-            <select id="account" value={accountId} onChange={(event) => setAccountId(event.target.value === '' ? '' : Number(event.target.value))}>
-              <option value="">Not recorded</option>
-              {accounts.data?.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.label}
-                  {account.accountNumber ? ` · ${account.accountNumber}` : ''}
-                </option>
-              ))}
-            </select>
+        {blocked && (
+          <div className="blocked-notice">
+            <strong>{blocked}</strong>
+            <p className="muted">
+              An admin can add one under Settings → Payment accounts. Take this payment another way in the meantime.
+            </p>
           </div>
         )}
 
-        {isCash && amountMinor > 0 && (
-          <div className="cash-summary">
-            <div className="total-line">
-              <span>Applied to bill</span>
-              <Money minor={appliedMinor} />
-            </div>
-            <div className="total-line grand">
-              <span>Change</span>
-              <Money minor={changeIfCash} />
-            </div>
-          </div>
-        )}
+        {option && !blocked && (
+          <>
+            <div className="row">
+              <div style={{ flex: 1 }}>
+                <label htmlFor="amount">{isCash ? 'Cash tendered' : 'Amount'}</label>
+                <MoneyInput id="amount" valueMinor={amountMinor} onChange={setAmountMinor} />
+                {isCash && <p className="muted field-hint">Type what the customer handed over. Change is worked out below.</p>}
+              </div>
 
-        <div className="row">
-          <button onClick={() => setAmountMinor(balanceMinor)}>Exact amount</button>
-          {isCash && <QuickCash total={balanceMinor} onPick={setAmountMinor} />}
-          <span style={{ flex: 1 }} />
-          <button className="primary big" disabled={recordPayment.isPending || methodId === '' || amountMinor <= 0} onClick={submit}>
-            Record payment
-          </button>
-        </div>
+              {takesReference && (
+                <div style={{ flex: 1 }}>
+                  <label htmlFor="reference">Reference number (optional)</label>
+                  <input id="reference" value={referenceNo} onChange={(event) => setReferenceNo(event.target.value)} />
+                </div>
+              )}
+            </div>
+
+            {soleAccount && (
+              <p className="account-note">
+                Money goes to <strong>{soleAccount.label}</strong>
+                {soleAccount.accountNumber ? ` · ${soleAccount.accountNumber}` : ''}
+              </p>
+            )}
+
+            {needsAccountChoice && (
+              <div>
+                <label htmlFor="account">Which account received it?</label>
+                <select
+                  id="account"
+                  value={accountId}
+                  onChange={(event) => setAccountId(event.target.value === '' ? '' : Number(event.target.value))}
+                >
+                  <option value="">Choose an account…</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.label}
+                      {account.accountNumber ? ` · ${account.accountNumber}` : ''}
+                    </option>
+                  ))}
+                </select>
+                {accountId === '' && <p className="muted field-hint">Required — {accounts.length} accounts are configured.</p>}
+              </div>
+            )}
+
+            {isCash && amountMinor > 0 && (
+              <div className="cash-summary">
+                <div className="total-line">
+                  <span>Applied to bill</span>
+                  <Money minor={appliedMinor} />
+                </div>
+                <div className="total-line grand">
+                  <span>Change</span>
+                  <Money minor={changeIfCash} />
+                </div>
+              </div>
+            )}
+
+            <div className="row">
+              <button onClick={() => setAmountMinor(balanceMinor)}>Exact amount</button>
+              {isCash && <QuickCash total={balanceMinor} onPick={setAmountMinor} />}
+              <span style={{ flex: 1 }} />
+              <button className="primary big" disabled={!canRecord} onClick={submit}>
+                Record payment
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       <button className="ghost" onClick={() => navigate('/')}>
@@ -284,7 +346,7 @@ function QuickCash({ total, onPick }: { total: Paisa; onPick: (amount: Paisa) =>
 function ConsumptionSettlement({ orderId }: { orderId: number }): JSX.Element {
   const navigate = useNavigate();
   const order = useOrder(orderId);
-  const methods = usePaymentMethods();
+  const options = usePaymentOptions();
   const people = usePeople();
   const settle = useSettleConsumption();
 
@@ -292,8 +354,11 @@ function ConsumptionSettlement({ orderId }: { orderId: number }): JSX.Element {
   const [methodId, setMethodId] = useState<number | ''>('');
   const [accountId, setAccountId] = useState<number | ''>('');
 
-  const selectedMethod = methods.data?.find((candidate) => candidate.id === methodId);
-  const accounts = usePaymentAccounts(selectedMethod && selectedMethod.kind !== 'cash' ? selectedMethod.id : undefined);
+  const option = options.data?.find((candidate) => candidate.paymentMethodId === methodId);
+  const accounts = option?.accounts ?? [];
+  const soleAccount = option?.requiresAccount && accounts.length === 1 ? accounts[0] : undefined;
+  const needsAccountChoice = (option?.requiresAccount ?? false) && accounts.length > 1;
+  const blocked = option?.blockedReason ?? null;
 
   const detail = order.data;
   if (!detail) return <Loading />;
@@ -310,9 +375,12 @@ function ConsumptionSettlement({ orderId }: { orderId: number }): JSX.Element {
       <div className="card col" style={{ maxWidth: 560 }}>
         <h2 style={{ margin: 0 }}>Meal settled</h2>
         <p>Invoice #{detail.invoiceNo}</p>
-        <button className="primary big" onClick={() => navigate('/')}>
-          Back to floor
-        </button>
+        <div className="row">
+          <button onClick={() => navigate(`/orders/${orderId}/detail`)}>Order details</button>
+          <button className="primary big" onClick={() => navigate('/')}>
+            Back to floor
+          </button>
+        </div>
       </div>
     );
   }
@@ -343,22 +411,36 @@ function ConsumptionSettlement({ orderId }: { orderId: number }): JSX.Element {
             <div>
               <label>Payment method (for the charged portion)</label>
               <div className="tabs">
-                {methods.data?.map((candidate) => (
+                {options.data?.map((candidate) => (
                   <button
-                    key={candidate.id}
-                    className={candidate.id === methodId ? 'active' : ''}
+                    key={candidate.paymentMethodId}
+                    className={candidate.paymentMethodId === methodId ? 'active' : ''}
                     onClick={() => {
-                      setMethodId(candidate.id);
+                      setMethodId(candidate.paymentMethodId);
                       setAccountId('');
                     }}
                   >
                     {candidate.displayName}
+                    {candidate.blockedReason && <span className="method-blocked"> · not set up</span>}
                   </button>
                 ))}
               </div>
             </div>
 
-            {selectedMethod && selectedMethod.kind !== 'cash' && (accounts.data?.length ?? 0) > 0 && (
+            {blocked && (
+              <div className="blocked-notice">
+                <strong>{blocked}</strong>
+                <p className="muted">An admin can add one under Settings → Payment accounts.</p>
+              </div>
+            )}
+
+            {soleAccount && (
+              <p className="account-note">
+                Money goes to <strong>{soleAccount.label}</strong>
+              </p>
+            )}
+
+            {needsAccountChoice && (
               <div>
                 <label htmlFor="settle-account">Which account received it?</label>
                 <select
@@ -366,8 +448,8 @@ function ConsumptionSettlement({ orderId }: { orderId: number }): JSX.Element {
                   value={accountId}
                   onChange={(event) => setAccountId(event.target.value === '' ? '' : Number(event.target.value))}
                 >
-                  <option value="">Not recorded</option>
-                  {accounts.data?.map((account) => (
+                  <option value="">Choose an account…</option>
+                  {accounts.map((account) => (
                     <option key={account.id} value={account.id}>
                       {account.label}
                     </option>
@@ -393,14 +475,14 @@ function ConsumptionSettlement({ orderId }: { orderId: number }): JSX.Element {
 
         <button
           className="primary big"
-          disabled={settle.isPending || (collectsMoney && methodId === '')}
+          disabled={settle.isPending || (collectsMoney && (methodId === '' || blocked !== null || (needsAccountChoice && accountId === '')))}
           onClick={() =>
             settle.mutate(
               {
                 orderId,
                 ...(leavesGap ? { settlementType } : {}),
                 ...(collectsMoney && methodId !== '' ? { paymentMethodId: Number(methodId) } : {}),
-                ...(collectsMoney && accountId !== '' ? { paymentAccountId: Number(accountId) } : {}),
+                ...(collectsMoney && needsAccountChoice && accountId !== '' ? { paymentAccountId: Number(accountId) } : {}),
               },
               { onSuccess: () => navigate('/') },
             )

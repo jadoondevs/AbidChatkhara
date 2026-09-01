@@ -8,6 +8,7 @@ import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createTestDb } from '../platform/db/test-helpers.js';
 import { eventBus } from '../platform/events/bus.js';
 import {
+  activeAccountsForMethod,
   createPaymentAccount,
   createPaymentMethod,
   listPaymentAccounts,
@@ -40,8 +41,15 @@ describe('billing/service', () => {
 
     const cash = await createPaymentMethod(ctx.db, { code: 'cash', displayName: 'Cash', kind: 'cash' }, actor);
     const easypaisa = await createPaymentMethod(ctx.db, { code: 'easypaisa', displayName: 'Easypaisa', kind: 'wallet' }, actor);
+    const bank = await createPaymentMethod(ctx.db, { code: 'bank', displayName: 'Bank transfer', kind: 'bank_transfer' }, actor);
 
-    return { admin, actor, item, partner, cash, easypaisa };
+    return { admin, actor, item, partner, cash, easypaisa, bank };
+  }
+
+  /** An active account for a method — the thing a non-cash payment now
+   * requires before it can be taken at all. */
+  async function addAccount(methodId: number, label: string, actor: { actorId: number; terminalId: string }) {
+    return createPaymentAccount(ctx.db, { paymentMethodId: methodId, label, accountNumber: '0000-0000000' }, actor);
   }
 
   async function billedOrder(item: { id: number }, actor: { actorId: number; terminalId: string }) {
@@ -53,18 +61,18 @@ describe('billing/service', () => {
   describe('payment methods', () => {
     it('creates, lists (active by default), and updates a payment method', async () => {
       const { actor } = await setupBase();
-      const bank = await createPaymentMethod(
+      const card = await createPaymentMethod(
         ctx.db,
-        { code: 'bank', displayName: 'Bank transfer', kind: 'bank_transfer', printOnBill: true, accountTitle: 'Restaurant Ltd', accountNumber: '123', bankName: 'HBL' },
+        { code: 'card', displayName: 'Card', kind: 'card', printOnBill: true, accountTitle: 'Restaurant Ltd', accountNumber: '123', bankName: 'HBL' },
         actor,
       );
-      expect(bank).toMatchObject({ kind: 'bank_transfer', printOnBill: true, accountTitle: 'Restaurant Ltd' });
+      expect(card).toMatchObject({ kind: 'card', printOnBill: true, accountTitle: 'Restaurant Ltd' });
 
-      expect((await listPaymentMethods(ctx.db)).map((m) => m.code)).toEqual(expect.arrayContaining(['cash', 'easypaisa', 'bank']));
+      expect((await listPaymentMethods(ctx.db)).map((m) => m.code)).toEqual(expect.arrayContaining(['cash', 'easypaisa', 'bank', 'card']));
 
-      const updated = await updatePaymentMethod(ctx.db, bank.id, { active: false }, actor);
+      const updated = await updatePaymentMethod(ctx.db, card.id, { active: false }, actor);
       expect(updated.active).toBe(false);
-      expect((await listPaymentMethods(ctx.db)).map((m) => m.code)).not.toContain('bank');
+      expect((await listPaymentMethods(ctx.db)).map((m) => m.code)).not.toContain('card');
     });
 
     it('card is supported by the schema but never seeded here', async () => {
@@ -111,6 +119,7 @@ describe('billing/service', () => {
 
     it('takes a wallet payment with no reference number — a reference is optional', async () => {
       const { actor, item, easypaisa } = await setupBase();
+      await addAccount(easypaisa.id, 'Counter wallet', actor);
       const billed = await billedOrder(item, actor);
 
       const result = await recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor }, actor);
@@ -120,6 +129,7 @@ describe('billing/service', () => {
 
     it('keeps a reference number when one is given, and treats a blank one as none', async () => {
       const { actor, item, easypaisa } = await setupBase();
+      await addAccount(easypaisa.id, 'Counter wallet', actor);
 
       const withRef = await billedOrder(item, actor);
       const kept = await recordPayment(
@@ -142,6 +152,7 @@ describe('billing/service', () => {
 
     it('rejects a NON-CASH payment that would exceed the remaining balance', async () => {
       const { actor, item, easypaisa } = await setupBase();
+      await addAccount(easypaisa.id, 'Counter wallet', actor);
       const billed = await billedOrder(item, actor);
       await expect(
         recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: paisa(billed.totalMinor + 1) }, actor),
@@ -254,6 +265,7 @@ describe('billing/service', () => {
   describe('recordPayment — split payments', () => {
     it('stays billed until payments sum to the total, then closes on the payment that completes it', async () => {
       const { actor, item, cash, easypaisa } = await setupBase();
+      await addAccount(easypaisa.id, 'Counter wallet', actor);
       const billed = await billedOrder(item, actor); // Rs 1000
 
       const first = await recordPayment(ctx.db, billed.id, { paymentMethodId: cash.id, amountMinor: paisa(400_00) }, actor);
@@ -444,43 +456,132 @@ describe('billing/service', () => {
     });
   });
 
-  describe('payment accounts', () => {
-    it('records which configured account received a non-cash payment', async () => {
+  describe('payment accounts — which account received the money', () => {
+    // ---- Easypaisa: zero / one / many ----
+
+    it('refuses an Easypaisa payment when NO account is configured, and creates nothing', async () => {
       const { actor, item, easypaisa } = await setupBase();
-      const account = await createPaymentAccount(
-        ctx.db,
-        { paymentMethodId: easypaisa.id, label: 'Counter wallet', accountNumber: '0000-0000000' },
-        actor,
-      );
+      const billed = await billedOrder(item, actor);
+
+      await expect(
+        recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor }, actor),
+      ).rejects.toThrow(/No Easypaisa account is configured/);
+
+      // Nothing was written and the order is still awaiting payment —
+      // the whole point of refusing rather than recording a payment
+      // nobody can reconcile.
+      expect(await ctx.db.selectFrom('payment').selectAll().where('order_id', '=', billed.id).execute()).toEqual([]);
+      const after = await getOrder(ctx.db, billed.id);
+      expect(after?.status).toBe('billed');
+      expect(after?.invoiceNo).toBeNull();
+    });
+
+    it('auto-selects the single active Easypaisa account, with no choice to make', async () => {
+      const { actor, item, easypaisa } = await setupBase();
+      const account = await addAccount(easypaisa.id, 'Counter wallet', actor);
+      const billed = await billedOrder(item, actor);
+
+      const result = await recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor }, actor);
+      expect(result.orderClosed).toBe(true);
+      expect(result.payment.paymentAccountId).toBe(account.id);
+    });
+
+    it('refuses to guess when two Easypaisa accounts are active', async () => {
+      const { actor, item, easypaisa } = await setupBase();
+      await addAccount(easypaisa.id, 'Counter wallet', actor);
+      await addAccount(easypaisa.id, 'Delivery wallet', actor);
+      const billed = await billedOrder(item, actor);
+
+      await expect(
+        recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor }, actor),
+      ).rejects.toThrow(/Choose which Easypaisa account/);
+      expect(await ctx.db.selectFrom('payment').selectAll().where('order_id', '=', billed.id).execute()).toEqual([]);
+    });
+
+    it('records the chosen account when two are active', async () => {
+      const { actor, item, easypaisa } = await setupBase();
+      await addAccount(easypaisa.id, 'Counter wallet', actor);
+      const delivery = await addAccount(easypaisa.id, 'Delivery wallet', actor);
       const billed = await billedOrder(item, actor);
 
       const result = await recordPayment(
         ctx.db,
         billed.id,
-        { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor, paymentAccountId: account.id },
+        { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor, paymentAccountId: delivery.id },
         actor,
       );
+      expect(result.payment.paymentAccountId).toBe(delivery.id);
+    });
+
+    // ---- Bank transfer: zero / one / many ----
+
+    it('refuses a bank transfer when NO bank account is configured', async () => {
+      const { actor, item, bank } = await setupBase();
+      const billed = await billedOrder(item, actor);
+
+      await expect(
+        recordPayment(ctx.db, billed.id, { paymentMethodId: bank.id, amountMinor: billed.totalMinor }, actor),
+      ).rejects.toThrow(/No Bank transfer account is configured/);
+      expect(await ctx.db.selectFrom('payment').selectAll().where('order_id', '=', billed.id).execute()).toEqual([]);
+    });
+
+    it('auto-selects the single active bank account', async () => {
+      const { actor, item, bank } = await setupBase();
+      const account = await addAccount(bank.id, 'HBL current', actor);
+      const billed = await billedOrder(item, actor);
+
+      const result = await recordPayment(ctx.db, billed.id, { paymentMethodId: bank.id, amountMinor: billed.totalMinor }, actor);
       expect(result.payment.paymentAccountId).toBe(account.id);
     });
 
-    it('refuses an account that belongs to a different payment method', async () => {
-      const { actor, item, cash, easypaisa } = await setupBase();
-      const account = await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Counter wallet' }, actor);
+    it('records the chosen bank account when two are active', async () => {
+      const { actor, item, bank } = await setupBase();
+      await addAccount(bank.id, 'HBL current', actor);
+      const meezan = await addAccount(bank.id, 'Meezan current', actor);
+      const billed = await billedOrder(item, actor);
+
+      const result = await recordPayment(
+        ctx.db,
+        billed.id,
+        { paymentMethodId: bank.id, amountMinor: billed.totalMinor, paymentAccountId: meezan.id },
+        actor,
+      );
+      expect(result.payment.paymentAccountId).toBe(meezan.id);
+    });
+
+    // ---- what the accounts of one method mean for another ----
+
+    it('never lets a successful non-cash payment carry a null account', async () => {
+      const { actor, item, easypaisa, bank } = await setupBase();
+      await addAccount(easypaisa.id, 'Counter wallet', actor);
+      await addAccount(bank.id, 'HBL current', actor);
+
+      for (const method of [easypaisa, bank]) {
+        const billed = await billedOrder(item, actor);
+        const result = await recordPayment(ctx.db, billed.id, { paymentMethodId: method.id, amountMinor: billed.totalMinor }, actor);
+        expect(result.payment.paymentAccountId).not.toBeNull();
+      }
+    });
+
+    it("refuses an account that belongs to a different payment method", async () => {
+      const { actor, item, easypaisa, bank } = await setupBase();
+      const wallet = await addAccount(easypaisa.id, 'Counter wallet', actor);
+      await addAccount(bank.id, 'HBL current', actor);
       const billed = await billedOrder(item, actor);
 
       await expect(
         recordPayment(
           ctx.db,
           billed.id,
-          { paymentMethodId: cash.id, amountMinor: billed.totalMinor, paymentAccountId: account.id },
+          { paymentMethodId: bank.id, amountMinor: billed.totalMinor, paymentAccountId: wallet.id },
           actor,
         ),
-      ).rejects.toThrow(/does not belong to the payment method/);
+      ).rejects.toThrow(/not an active Bank transfer account/);
     });
 
-    it('refuses a deactivated account', async () => {
+    it('refuses a deactivated account, and refuses the method entirely once its last account is deactivated', async () => {
       const { actor, item, easypaisa } = await setupBase();
-      const account = await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Old wallet' }, actor);
+      const account = await addAccount(easypaisa.id, 'Old wallet', actor);
       await updatePaymentAccount(ctx.db, account.id, { active: false }, actor);
       const billed = await billedOrder(item, actor);
 
@@ -491,20 +592,75 @@ describe('billing/service', () => {
           { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor, paymentAccountId: account.id },
           actor,
         ),
-      ).rejects.toThrow(/not found or inactive/);
+      ).rejects.toThrow(/not an active Easypaisa account/);
+
+      // And with no active account left, the method cannot be used at all.
+      await expect(
+        recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor }, actor),
+      ).rejects.toThrow(/No Easypaisa account is configured/);
     });
 
-    it('takes a payment with no account selected at all', async () => {
+    it('keeps a historical payment intact after its account is deactivated', async () => {
       const { actor, item, easypaisa } = await setupBase();
+      const account = await addAccount(easypaisa.id, 'Counter wallet', actor);
       const billed = await billedOrder(item, actor);
-      const result = await recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor }, actor);
+      const paid = await recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: billed.totalMinor }, actor);
+
+      await updatePaymentAccount(ctx.db, account.id, { active: false }, actor);
+
+      const row = await ctx.db.selectFrom('payment').selectAll().where('id', '=', paid.payment.id).executeTakeFirstOrThrow();
+      expect(row.payment_account_id).toBe(account.id);
+      // The account row itself survives too — deactivating is not
+      // deleting, precisely so this reference still resolves.
+      expect(await ctx.db.selectFrom('payment_account').selectAll().where('id', '=', account.id).executeTakeFirst()).toBeDefined();
+    });
+
+    // ---- cash needs no account ----
+
+    it('takes a cash payment with no account, and refuses to attach one', async () => {
+      const { actor, item, cash, easypaisa } = await setupBase();
+      const wallet = await addAccount(easypaisa.id, 'Counter wallet', actor);
+
+      const billed = await billedOrder(item, actor);
+      const result = await recordPayment(ctx.db, billed.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
       expect(result.payment.paymentAccountId).toBeNull();
+
+      const second = await billedOrder(item, actor);
+      await expect(
+        recordPayment(ctx.db, second.id, { paymentMethodId: cash.id, amountMinor: second.totalMinor, paymentAccountId: wallet.id }, actor),
+      ).rejects.toThrow(/does not land in an account/);
+    });
+
+    it('refuses to create an account against cash at all', async () => {
+      const { actor, cash } = await setupBase();
+      await expect(addAccount(cash.id, 'Drawer', actor)).rejects.toThrow(/no account to land in/);
+    });
+
+    // ---- account administration ----
+
+    it('derives the account type from the method it belongs to', async () => {
+      const { actor, easypaisa, bank } = await setupBase();
+      const wallet = await addAccount(easypaisa.id, 'Counter wallet', actor);
+      const current = await addAccount(bank.id, 'HBL current', actor);
+
+      expect(wallet.accountType).toBe('easypaisa');
+      expect(current.accountType).toBe('bank');
+    });
+
+    it('stamps updated_at when an account is edited, leaving created_at alone', async () => {
+      const { actor, easypaisa } = await setupBase();
+      const account = await addAccount(easypaisa.id, 'Counter wallet', actor);
+
+      const edited = await updatePaymentAccount(ctx.db, account.id, { label: 'Main wallet' }, actor);
+      expect(edited.label).toBe('Main wallet');
+      expect(edited.createdAt).toBe(account.createdAt);
+      expect(Date.parse(edited.updatedAt as string)).toBeGreaterThanOrEqual(Date.parse(account.updatedAt as string));
     });
 
     it('lists only the active accounts for a method, and every account when asked', async () => {
       const { actor, easypaisa } = await setupBase();
-      const live = await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Counter wallet' }, actor);
-      const retired = await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Old wallet' }, actor);
+      const live = await addAccount(easypaisa.id, 'Counter wallet', actor);
+      const retired = await addAccount(easypaisa.id, 'Old wallet', actor);
       await updatePaymentAccount(ctx.db, retired.id, { active: false }, actor);
 
       const active = await listPaymentAccounts(ctx.db, { paymentMethodId: easypaisa.id });
@@ -512,6 +668,41 @@ describe('billing/service', () => {
 
       const all = await listPaymentAccounts(ctx.db, { paymentMethodId: easypaisa.id, includeInactive: true });
       expect(all).toHaveLength(2);
+    });
+
+    it('offers only active accounts to a payment', async () => {
+      const { actor, easypaisa } = await setupBase();
+      const live = await addAccount(easypaisa.id, 'Counter wallet', actor);
+      const retired = await addAccount(easypaisa.id, 'Old wallet', actor);
+      await updatePaymentAccount(ctx.db, retired.id, { active: false }, actor);
+
+      expect((await activeAccountsForMethod(ctx.db, easypaisa.id)).map((a) => a.id)).toEqual([live.id]);
+    });
+  });
+
+  describe('settleConsumption — a staff meal charged to a wallet', () => {
+    it('requires an active account for the method collecting the charge', async () => {
+      const { actor, item, easypaisa } = await setupBase();
+      const person = await createPerson(ctx.db, { name: 'Tariq', kind: 'staff', mealPolicy: 'full_price' }, actor);
+      const order = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: person.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      await billOrder(ctx.db, order.id, {}, actor);
+
+      await expect(settleConsumption(ctx.db, order.id, { paymentMethodId: easypaisa.id }, actor)).rejects.toThrow(
+        /No Easypaisa account is configured/,
+      );
+    });
+
+    it('auto-selects the single account when settling a charged meal', async () => {
+      const { actor, item, easypaisa } = await setupBase();
+      const account = await addAccount(easypaisa.id, 'Counter wallet', actor);
+      const person = await createPerson(ctx.db, { name: 'Tariq', kind: 'staff', mealPolicy: 'full_price' }, actor);
+      const order = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: person.id }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      await billOrder(ctx.db, order.id, {}, actor);
+
+      const settled = await settleConsumption(ctx.db, order.id, { paymentMethodId: easypaisa.id }, actor);
+      expect(settled.payment?.paymentAccountId).toBe(account.id);
     });
   });
 });

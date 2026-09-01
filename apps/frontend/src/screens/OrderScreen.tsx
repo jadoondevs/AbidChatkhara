@@ -10,7 +10,9 @@ import {
   useOrder,
   usePeople,
   useRemoveLine,
+  useSetLineNote,
   useSetLineQty,
+  useSetOrderCustomer,
   useVoidLine,
 } from '../api/hooks.js';
 import type { MenuItem, Modifier, ModifierGroup, OrderDetail, OrderLine } from '../api/types.js';
@@ -56,6 +58,7 @@ export function OrderScreen(): JSX.Element {
     <div className="split order-screen">
       <div className="col" style={{ minWidth: 0 }}>
         {staffMeal && <BeneficiaryBanner order={detail} />}
+        {!staffMeal && detail.orderType !== 'dine_in' && <CustomerBar order={detail} />}
 
         <div className="row">
           <h1 style={{ margin: 0, flex: 1 }}>
@@ -149,6 +152,44 @@ function ItemButton({ item, busy, onPick }: { item: MenuItem; busy: boolean; onP
 export function orderTitle(order: { tableLabel: string | null; orderType: string }): string {
   if (order.tableLabel) return `Table ${order.tableLabel}`;
   return order.orderType === 'dine_in' ? 'Dine in' : order.orderType === 'takeaway' ? 'Takeaway' : 'Delivery';
+}
+
+/**
+ * Who a takeaway or delivery order is for.
+ *
+ * Shown only where it is actually used: a dine-in customer at a table
+ * has no name to give and asking for one would be a field every order
+ * has to tab past. Saved explicitly rather than on every keystroke —
+ * a phone number typed digit by digit is not eight separate edits to
+ * the order.
+ */
+function CustomerBar({ order }: { order: OrderDetail }): JSX.Element {
+  const save = useSetOrderCustomer();
+  const [name, setName] = useState(order.customerName ?? '');
+  const [phone, setPhone] = useState(order.customerPhone ?? '');
+
+  const dirty = name !== (order.customerName ?? '') || phone !== (order.customerPhone ?? '');
+
+  return (
+    <div className="card row customer-bar">
+      <div style={{ flex: 2 }}>
+        <label htmlFor="customer-name">Customer</label>
+        <input id="customer-name" value={name} maxLength={120} onChange={(event) => setName(event.target.value)} />
+      </div>
+      <div style={{ flex: 1 }}>
+        <label htmlFor="customer-phone">Phone</label>
+        <input id="customer-phone" value={phone} maxLength={40} inputMode="tel" onChange={(event) => setPhone(event.target.value)} />
+      </div>
+      <button
+        className={dirty ? 'primary' : 'ghost'}
+        disabled={!dirty || save.isPending}
+        onClick={() => save.mutate({ orderId: order.id, customerName: name, customerPhone: phone })}
+      >
+        {save.isPending ? 'Saving…' : dirty ? 'Save' : 'Saved'}
+      </button>
+      <ErrorBanner error={save.error} />
+    </div>
+  );
 }
 
 function BeneficiaryBanner({ order }: { order: OrderDetail }): JSX.Element {
@@ -294,11 +335,11 @@ function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void
   const setLineQty = useSetLineQty();
   const removeLine = useRemoveLine();
   const voidLine = useVoidLine();
-  const menu = useMenu();
-  const modifiers = useModifiers();
+  const setLineNote = useSetLineNote();
 
   const [voiding, setVoiding] = useState<{ line: OrderLine; reason: string } | null>(null);
   const [needsApproval, setNeedsApproval] = useState<{ line: OrderLine; reason: string } | null>(null);
+  const [noting, setNoting] = useState<{ line: OrderLine; note: string } | null>(null);
 
   const live = order.lines.filter((line) => !line.voided);
   // Once a bill has been printed, taking a line off it is a void, with a
@@ -306,8 +347,9 @@ function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void
   // ordering's lineRemovalRequiresApproval).
   const printed = order.firstBilledAt !== null;
 
-  const itemName = (itemId: number) => menu.data?.find((item) => item.id === itemId)?.name ?? `item ${itemId}`;
-  const modifierName = (modifierId: number) => modifiers.data?.find((m) => m.id === modifierId)?.name ?? `modifier ${modifierId}`;
+  // The line carries the name it was sold under; there is no reason to
+  // ask the live menu what that item is called today.
+  const itemName = (line: OrderLine) => line.itemName;
 
   const submitVoid = (line: OrderLine, reason: string, token?: string) => {
     voidLine.mutate(
@@ -334,7 +376,7 @@ function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void
   return (
     <div className="card col running-bill">
       <h2 style={{ margin: 0 }}>Running bill</h2>
-      <ErrorBanner error={forbidden(voidLine.error) ? null : (setLineQty.error ?? removeLine.error ?? voidLine.error)} />
+      <ErrorBanner error={forbidden(voidLine.error) ? null : (setLineQty.error ?? removeLine.error ?? voidLine.error ?? setLineNote.error)} />
 
       {live.length === 0 && <p className="muted">No items yet. Click an item to add it.</p>}
 
@@ -342,24 +384,35 @@ function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void
         {live.map((line) => (
           <div key={line.id} className="bill-line">
             <div className="bill-line-name">
-              <div>{itemName(line.itemId)}</div>
+              <div>{itemName(line)}</div>
               {line.modifiers.length > 0 && (
-                <div className="muted bill-line-modifiers">
-                  {line.modifiers.map((modifier) => modifierName(modifier.modifierId)).join(', ')}
-                </div>
+                <div className="muted bill-line-modifiers">{line.modifiers.map((modifier) => modifier.modifierName).join(', ')}</div>
               )}
+              {line.note && <div className="muted bill-line-note">“{line.note}”</div>}
             </div>
 
             <QtyInput
               value={line.qty}
               disabled={setLineQty.isPending}
-              label={`Quantity of ${itemName(line.itemId)}`}
+              label={`Quantity of ${itemName(line)}`}
               onCommit={(qty) => setLineQty.mutate({ orderId: order.id, lineId: line.id, qty })}
             />
 
             <span className="bill-line-money">
               <Money minor={line.grossMinor} />
             </span>
+
+            {/* A kitchen instruction belongs to the line, so it is
+                edited where the line is — not in a dialog attached to
+                the order as a whole. */}
+            <button
+              className="ghost bill-line-note-button"
+              title={line.note ? 'Change this line’s note' : 'Add a note for the kitchen'}
+              disabled={printed || setLineNote.isPending}
+              onClick={() => setNoting({ line, note: line.note ?? '' })}
+            >
+              {line.note ? 'Note ✎' : 'Note'}
+            </button>
 
             <button
               className="ghost bill-line-remove"
@@ -403,7 +456,7 @@ function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void
         <Modal title="Void line" onClose={() => setVoiding(null)}>
           <div className="col">
             <p className="muted">
-              This bill has already been printed, so removing {itemName(voiding.line.itemId)} is a void — it needs a manager and a reason,
+              This bill has already been printed, so removing {itemName(voiding.line)} is a void — it needs a manager and a reason,
               and stays on the record.
             </p>
             <div>
@@ -420,6 +473,35 @@ function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void
             </div>
             <button className="danger big" disabled={!voiding.reason.trim()} onClick={() => submitVoid(voiding.line, voiding.reason.trim())}>
               Void line
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {noting && (
+        <Modal title={`Note for ${itemName(noting.line)}`} onClose={() => setNoting(null)}>
+          <div className="col">
+            <p className="muted" style={{ margin: 0 }}>
+              Goes to the kitchen and onto the printed bill. Clear it to remove it.
+            </p>
+            <input
+              autoFocus
+              maxLength={200}
+              placeholder="no onions, well done…"
+              value={noting.note}
+              onChange={(event) => setNoting({ ...noting, note: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  setLineNote.mutate({ orderId: order.id, lineId: noting.line.id, note: noting.note }, { onSuccess: () => setNoting(null) });
+                }
+              }}
+            />
+            <button
+              className="primary big"
+              disabled={setLineNote.isPending}
+              onClick={() => setLineNote.mutate({ orderId: order.id, lineId: noting.line.id, note: noting.note }, { onSuccess: () => setNoting(null) })}
+            >
+              Save note
             </button>
           </div>
         </Modal>

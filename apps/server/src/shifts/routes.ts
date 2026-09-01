@@ -29,6 +29,7 @@ const blockingOrderSchema = z.object({
 
 const zReportSchema = z.object({
   shift: shiftSchema,
+  grossSalesMinor: z.number().int(),
   customerSalesMinor: z.number().int(),
   consumptionMinor: z.number().int(),
   combinedSalesMinor: z.number().int(),

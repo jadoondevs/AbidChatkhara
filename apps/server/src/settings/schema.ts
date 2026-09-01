@@ -40,6 +40,32 @@ export const receiptSettingsSchema = z.object({
   feedLines: z.number().int().min(0).max(10).default(3),
 });
 
+/**
+ * How this restaurant charges for service.
+ *
+ * A rate in basis points rather than a percentage float, for the same
+ * reason money is in paisa: 5% is 500, exactly, and there is no
+ * rounding to argue about. `proportionalAmount` in the money module
+ * turns it into an amount.
+ *
+ * Disabled is the shipped default. A restaurant that does not levy a
+ * service charge should not have to turn one off, and an installation
+ * that has configured nothing must never quietly add 10% to a bill.
+ */
+export const serviceChargeSettingsSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Basis points of net sales — 500 is 5%. Capped well below 100% as a
+   * typo guard: a service charge larger than the food is a keying
+   * error, not a business model. */
+  rateBp: z.number().int().min(0).max(5_000).default(0),
+  /** What it is called on the bill, the receipt and the screen. */
+  displayName: z.string().min(1).max(40).default('Service charge'),
+  /** Most restaurants levy it on table service only — a takeaway
+   * customer carried their own food. Off by default so enabling the
+   * charge does not silently apply it to counter sales too. */
+  dineInOnly: z.boolean().default(true),
+});
+
 export const printerSettingsSchema = z.object({
   /** Empty means "not configured here" — the POS_PRINTER_HOST
    * environment variable is then used instead (see settings/service.ts's
@@ -52,6 +78,7 @@ export const printerSettingsSchema = z.object({
 export const SETTING_SCHEMAS = {
   restaurant: restaurantSettingsSchema,
   receipt: receiptSettingsSchema,
+  serviceCharge: serviceChargeSettingsSchema,
   printer: printerSettingsSchema,
 } as const;
 
@@ -61,11 +88,13 @@ export const SETTING_KEYS = Object.keys(SETTING_SCHEMAS) as SettingKey[];
 
 export type RestaurantSettings = z.infer<typeof restaurantSettingsSchema>;
 export type ReceiptSettings = z.infer<typeof receiptSettingsSchema>;
+export type ServiceChargeSettings = z.infer<typeof serviceChargeSettingsSchema>;
 export type PrinterSettings = z.infer<typeof printerSettingsSchema>;
 
 export interface AllSettings {
   readonly restaurant: RestaurantSettings;
   readonly receipt: ReceiptSettings;
+  readonly serviceCharge: ServiceChargeSettings;
   readonly printer: PrinterSettings;
 }
 

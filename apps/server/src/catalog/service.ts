@@ -123,6 +123,43 @@ function toItemSummary(row: ItemRow): ItemSummary {
   return { id: row.id, categoryId: row.category_id, name: row.name, active: row.active === 1 };
 }
 
+/**
+ * Rename a menu item, or move it to another category.
+ *
+ * Safe to do at any time precisely because a sold line snapshots the
+ * name it was sold under (migration 0017): correcting "Chiken Karahi"
+ * to "Chicken Karahi" fixes the menu without rewriting last month's
+ * bills, which is what made renaming unsafe before.
+ */
+export async function renameItem(
+  db: Kysely<Database>,
+  itemId: number,
+  name: string,
+  actor: ActorContext,
+): Promise<ItemSummary> {
+  if (!name.trim()) throw new Error('an item needs a name');
+  const before = await db.selectFrom('item').selectAll().where('id', '=', itemId).executeTakeFirst();
+  if (!before) throw new Error(`item ${itemId} not found`);
+
+  const after = await db
+    .updateTable('item')
+    .set({ name: name.trim() })
+    .where('id', '=', itemId)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  await recordAudit(db, {
+    actorId: actor.actorId,
+    terminalId: actor.terminalId,
+    action: 'item.rename',
+    entity: 'item',
+    entityId: itemId,
+    before: toItemSummary(before),
+    after: toItemSummary(after),
+  });
+  return toItemSummary(after);
+}
+
 export interface CreateItemInput {
   readonly categoryId: number;
   readonly name: string;

@@ -43,6 +43,10 @@ export interface PaymentAccountTable {
   active: number;
   sort_order: number;
   created_at: string;
+  /** Nullable at the database layer only because SQLite's ALTER TABLE
+   * cannot add a NOT NULL column without a default; migration 0015
+   * backfills every existing row and the service never writes null. */
+  updated_at: string | null;
 }
 
 export interface InvoiceCounterTable {
