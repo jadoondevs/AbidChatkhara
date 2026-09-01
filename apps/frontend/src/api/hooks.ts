@@ -26,6 +26,7 @@ import type {
   ModifierGroup,
   OrderDetail,
   OrderStatus,
+  OrderSearchResult,
   OrderSummary,
   OrderType,
   OwnershipShare,
@@ -143,6 +144,18 @@ export function useOrders(statuses: OrderStatus[]): UseQueryResult<OrderSummary[
 /** The floor board's three lists, split by the server — see the note on
  * getFloorBoard. One request, one consistent snapshot, so the lists can
  * never disagree with each other about where an order is. */
+/**
+ * Historical order lookup — a date window and an optional search term,
+ * never the whole database. Defaults to today on the server when no
+ * range is given.
+ */
+export function useOrderSearch(params: { date?: string; from?: string; to?: string; q?: string }): UseQueryResult<OrderSearchResult[]> {
+  return useQuery({
+    queryKey: ['orders', params],
+    queryFn: () => api.get<OrderSearchResult[]>(`/api/orders/search${query(params)}`),
+  });
+}
+
 export function useFloorBoard(): UseQueryResult<FloorBoard> {
   return useQuery({
     queryKey: ['orders', 'board'],

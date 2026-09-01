@@ -617,6 +617,10 @@ function UsersPanel(): JSX.Element {
 
   return (
     <div className="card col settings-panel">
+      <p className="muted" style={{ margin: 0 }}>
+        Accounts that sign in to this till. Not the same as <Link to="/config/people">People</Link> (whose meals are tracked) or{' '}
+        <Link to="/config/partners">Partners</Link> (who own menu items) — a cook can be a person without ever having a login.
+      </p>
       <ErrorBanner error={update.error} />
 
       <div className="row">

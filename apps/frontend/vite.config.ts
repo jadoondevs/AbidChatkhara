@@ -7,6 +7,10 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      // Registered by hand in main.tsx so a new deployment can RELOAD
+      // the till rather than just installing quietly behind it — see
+      // the note there.
+      injectRegister: false,
       // App-shell caching only (spec): the built HTML/JS/CSS are
       // precached so a reload still works if the server blips, but API
       // responses are deliberately NOT cached — a cashier must never be

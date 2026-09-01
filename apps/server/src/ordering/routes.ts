@@ -4,6 +4,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { Kysely } from 'kysely';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../identity/require-auth.js';
+import { dateFilterSchema, resolveDateRange } from '../platform/date-range.js';
 import type { Database } from '../platform/db/types.js';
 import { getOrderHistory } from './history.js';
 import {
@@ -19,6 +20,7 @@ import {
   previewBillTotals,
   removeLine,
   reopenOrder,
+  searchOrders,
   setDiscount,
   setLineNote,
   setLineQty,
@@ -100,6 +102,14 @@ const floorOrderSchema = orderSummarySchema.extend({
   lineCount: z.number().int(),
   paidMinor: z.number().int(),
   balanceMinor: z.number().int(),
+});
+
+const orderSearchResultSchema = orderSummarySchema.extend({
+  paidMinor: z.number().int(),
+  balanceMinor: z.number().int(),
+  lineCount: z.number().int(),
+  waiterName: z.string().nullable(),
+  settledByName: z.string().nullable(),
 });
 
 const floorBoardSchema = z.object({
@@ -342,6 +352,31 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
 
   // The floor board's three lists in one call — see getFloorBoard for
   // why the split is computed here rather than by each screen.
+  /**
+   * Looking up what happened, as opposed to what is happening — see
+   * `searchOrders`. Registered BEFORE `/api/orders/:id` would be
+   * reachable for the same shape; Fastify matches static segments
+   * first, but keeping them adjacent makes that visible.
+   */
+  app.get(
+    '/api/orders/search',
+    {
+      schema: {
+        querystring: dateFilterSchema.extend({
+          q: z.string().max(120).optional(),
+          limit: z.coerce.number().int().positive().max(500).optional(),
+        }),
+        response: { 200: z.array(orderSearchResultSchema) },
+      },
+    },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      const { q, limit, ...filter } = request.query;
+      const range = resolveDateRange(filter);
+      return searchOrders(db, { ...range, ...(q === undefined ? {} : { q }), ...(limit === undefined ? {} : { limit }) });
+    },
+  );
+
   app.get(
     '/api/orders/board',
     {

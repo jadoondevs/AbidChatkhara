@@ -4,12 +4,16 @@ import { z } from 'zod';
  * Turning what a user typed into a date filter into the half-open
  * instant range every report query actually uses.
  *
- * The reports have always taken `fromInclusive`/`toExclusive` as exact
- * instants, which is the right shape for a query and the wrong shape
- * for a person: asked for "31 August", an operator types 31 August into
- * both boxes and gets nothing back, because the range is empty. So the
+ * Queries want `fromInclusive`/`toExclusive` as exact instants, which
+ * is the right shape for a query and the wrong shape for a person:
+ * asked for "31 August", an operator types 31 August into both boxes
+ * and gets nothing back, because the range is empty. So the
  * day-granular forms below are translated here, once, instead of every
  * caller being expected to remember to add a day.
+ *
+ * It lives in platform/ because it is pure date arithmetic that both
+ * the reports and the orders lookup need, and neither of those should
+ * have to import the other to ask what "today" means.
  *
  * Three accepted forms, in order of precedence:
  *

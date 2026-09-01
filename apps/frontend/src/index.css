@@ -1023,3 +1023,18 @@ button.link-button:hover {
   color: var(--danger);
   border-color: var(--danger);
 }
+
+/* Orders: a lookup, so the rows are a table rather than the floor's
+   big touch targets — a manager scanning a day wants density. */
+.orders-row {
+  cursor: pointer;
+}
+
+.orders-row:hover td {
+  background: var(--surface-2);
+}
+
+.orders-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

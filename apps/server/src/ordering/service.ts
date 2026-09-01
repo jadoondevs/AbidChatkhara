@@ -1,5 +1,5 @@
 import { add, paisa, proportionalAmount, roundToRupee, sub, type Paisa } from '@pos/shared';
-import type { Kysely, Transaction } from 'kysely';
+import { sql, type Kysely, type Transaction } from 'kysely';
 import { getItem, getModifier, getCurrentPrice, listModifierGroupsForItem } from '../catalog/service.js';
 import { recordAudit } from '../identity/audit.js';
 import type { Database } from '../platform/db/types.js';
@@ -288,6 +288,108 @@ export async function listOrders(db: Kysely<Database>, opts: ListOrdersOptions =
   if (opts.status && opts.status.length > 0) query = query.where('status', 'in', opts.status);
   const rows = await query.orderBy('opened_at', 'asc').execute();
   return rows.map(toOrderSummary);
+}
+
+/**
+ * Looking an order up afterwards: by day, by range, or by something the
+ * cashier remembers about it.
+ *
+ * Separate from the floor board on purpose. The board answers "what is
+ * happening now" and is a live thing a cashier watches; this answers
+ * "what happened", is scoped to a date range, and never loads the whole
+ * database — a restaurant six months in has tens of thousands of
+ * orders, and a screen that fetches all of them to show twenty is a
+ * screen that stops working exactly when the business succeeds.
+ *
+ * The default is today, resolved in the restaurant's own local day (see
+ * platform/date-range.ts), because that is what a cashier means when
+ * they open the screen mid-service.
+ *
+ * `q` searches the things someone actually remembers: the order number,
+ * the invoice number, the customer, the table, the cashier who settled
+ * it, or a payment reference. Numbers match the id and invoice
+ * exactly rather than by substring — "12" should find order 12, not
+ * every order from 120 to 129.
+ */
+export interface OrderSearchOptions {
+  readonly fromInclusive?: string | undefined;
+  readonly toExclusive?: string | undefined;
+  readonly q?: string | undefined;
+  readonly limit?: number | undefined;
+}
+
+export interface OrderSearchResult extends OrderSummary {
+  readonly paidMinor: Paisa;
+  readonly balanceMinor: Paisa;
+  readonly lineCount: number;
+  readonly waiterName: string | null;
+  readonly settledByName: string | null;
+}
+
+export async function searchOrders(db: Kysely<Database>, opts: OrderSearchOptions = {}): Promise<OrderSearchResult[]> {
+  const limit = Math.min(opts.limit ?? 200, 500);
+  const term = opts.q?.trim() ?? '';
+  const asNumber = /^\d+$/.test(term) ? Number(term) : null;
+
+  let query = db
+    .selectFrom('order')
+    .leftJoin('user as waiter', 'waiter.id', 'order.waiter_id')
+    .leftJoin('user as settled_by', 'settled_by.id', 'order.closed_by')
+    .selectAll('order')
+    .select(['waiter.name as waiterName', 'settled_by.name as settledByName']);
+
+  // An order is dated by when it FINISHED where it has finished, and by
+  // when it started where it has not: an order opened at 11pm and paid
+  // at 12:10am belongs to the night it was paid for, and one still open
+  // belongs to the day it was started on.
+  const dateColumn = sql<string>`COALESCE("order".closed_at, "order".opened_at)`;
+  if (opts.fromInclusive) query = query.where(dateColumn, '>=', opts.fromInclusive);
+  if (opts.toExclusive) query = query.where(dateColumn, '<', opts.toExclusive);
+
+  if (term !== '') {
+    const like = `%${term.toLowerCase()}%`;
+    query = query.where((eb) =>
+      eb.or([
+        ...(asNumber === null ? [] : [eb('order.id', '=', asNumber), eb('order.invoice_no', '=', asNumber)]),
+        eb(sql<string>`lower(coalesce("order".customer_name, ''))`, 'like', like),
+        eb(sql<string>`lower(coalesce("order".customer_phone, ''))`, 'like', like),
+        eb(sql<string>`lower(coalesce("order".table_label, ''))`, 'like', like),
+        eb(sql<string>`lower(coalesce(waiter.name, ''))`, 'like', like),
+        eb(sql<string>`lower(coalesce(settled_by.name, ''))`, 'like', like),
+        eb(
+          'order.id',
+          'in',
+          db.selectFrom('payment').select('order_id').where(sql<string>`lower(coalesce(payment.reference_no, ''))`, 'like', like),
+        ),
+      ]),
+    );
+  }
+
+  const rows = await query.orderBy(dateColumn, 'desc').orderBy('order.id', 'desc').limit(limit).execute();
+  if (rows.length === 0) return [];
+
+  const orderIds = rows.map((row) => row.id);
+  const paidByOrder = await paidTotals(db, orderIds);
+  const lineCounts = new Map<number, number>();
+  const counted = await db
+    .selectFrom('order_line')
+    .select(({ fn }) => ['order_id as orderId', fn.count<number>('id').as('lines')])
+    .where('order_id', 'in', orderIds)
+    .groupBy('order_id')
+    .execute();
+  for (const row of counted) lineCounts.set(row.orderId, Number(row.lines));
+
+  return rows.map((row) => {
+    const paidMinor = paidByOrder.get(row.id) ?? paisa(0);
+    return {
+      ...toOrderSummary(row),
+      paidMinor,
+      balanceMinor: sub(row.total_minor, paidMinor),
+      lineCount: lineCounts.get(row.id) ?? 0,
+      waiterName: row.waiterName,
+      settledByName: row.settledByName,
+    };
+  });
 }
 
 /**

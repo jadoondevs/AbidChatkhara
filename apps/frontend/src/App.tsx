@@ -9,6 +9,7 @@ import { LoginScreen } from './screens/LoginScreen.tsx';
 import { MenuConfigScreen } from './screens/MenuConfigScreen.tsx';
 import { OrderDetailScreen } from './screens/OrderDetailScreen.tsx';
 import { OrderScreen } from './screens/OrderScreen.tsx';
+import { OrdersScreen } from './screens/OrdersScreen.tsx';
 import { PartnerConfigScreen } from './screens/PartnerConfigScreen.tsx';
 import { PaymentScreen } from './screens/PaymentScreen.tsx';
 import { PeopleConfigScreen } from './screens/PeopleConfigScreen.tsx';
@@ -31,8 +32,14 @@ function RoleGate({ minimum, children }: { minimum: 'manager' | 'admin'; childre
  * behind a role. Grouped so the nav reads as "run the restaurant" and
  * "set the restaurant up" rather than one undifferentiated row. */
 const OPERATIONS = [
+  // Floor is the live board; Orders is the history. Two screens because
+  // they answer different questions — see OrdersScreen.
   { to: '/', label: 'Floor', end: true },
-  { to: '/staff-meal', label: 'Staff', end: false },
+  { to: '/orders', label: 'Orders', end: false },
+  // "Staff meal" rather than "Staff": this is where a meal is rung up
+  // for a member of staff, not where staff records are kept. Those are
+  // People (below) and Users (in Settings).
+  { to: '/staff-meal', label: 'Staff meal', end: false },
   { to: '/shift', label: 'Shift', end: false },
 ] as const;
 
@@ -98,6 +105,7 @@ export function App(): JSX.Element {
       <main className="screen">
         <Routes>
           <Route path="/" element={<FloorScreen />} />
+          <Route path="/orders" element={<OrdersScreen />} />
           <Route path="/orders/:orderId" element={<OrderScreen />} />
           <Route path="/orders/:orderId/bill" element={<BillScreen />} />
           <Route path="/orders/:orderId/detail" element={<OrderDetailScreen />} />

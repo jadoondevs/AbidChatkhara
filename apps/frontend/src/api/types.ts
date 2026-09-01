@@ -154,6 +154,16 @@ export interface FloorOrder extends OrderSummary {
   balanceMinor: Paisa;
 }
 
+/** A row on the Orders screen: enough to recognise an order without a
+ * second request per row. */
+export interface OrderSearchResult extends OrderSummary {
+  paidMinor: Paisa;
+  balanceMinor: Paisa;
+  lineCount: number;
+  waiterName: string | null;
+  settledByName: string | null;
+}
+
 export interface FloorBoard {
   open: FloorOrder[];
   awaitingPayment: FloorOrder[];
