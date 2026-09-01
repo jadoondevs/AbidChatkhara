@@ -201,6 +201,8 @@ export interface CreateOrderVars {
   orderType: OrderType;
   channel?: 'staff_meal' | 'owner_meal';
   tableLabel?: string;
+  customerName?: string;
+  customerPhone?: string;
   waiterId?: number;
   beneficiaryPersonId?: number;
 }
@@ -209,8 +211,23 @@ export function useCreateOrder(): UseMutationResult<OrderSummary, Error, CreateO
   return useOrderMutation((vars: CreateOrderVars) => api.post<OrderSummary>('/api/orders', vars));
 }
 
-export function useAddLine(): UseMutationResult<OrderDetail, Error, { orderId: number; itemId: number; qty: number; modifierIds?: number[] }> {
+export function useAddLine(): UseMutationResult<
+  OrderDetail,
+  Error,
+  { orderId: number; itemId: number; qty: number; modifierIds?: number[]; note?: string }
+> {
   return useOrderMutation(({ orderId, ...body }) => api.post<OrderDetail>(`/api/orders/${orderId}/lines`, body));
+}
+
+/** Who the order is for. Both fields optional: saving a phone number
+ * must not require re-sending the name. */
+export function useSetOrderCustomer(): UseMutationResult<OrderDetail, Error, { orderId: number; customerName?: string; customerPhone?: string }> {
+  return useOrderMutation(({ orderId, ...body }) => api.patch<OrderDetail>(`/api/orders/${orderId}/customer`, body));
+}
+
+/** What the kitchen is told about one line. An empty string clears it. */
+export function useSetLineNote(): UseMutationResult<OrderDetail, Error, { orderId: number; lineId: number; note: string }> {
+  return useOrderMutation(({ orderId, lineId, note }) => api.patch<OrderDetail>(`/api/orders/${orderId}/lines/${lineId}/note`, { note }));
 }
 
 export function useSetLineQty(): UseMutationResult<OrderDetail, Error, { orderId: number; lineId: number; qty: number }> {

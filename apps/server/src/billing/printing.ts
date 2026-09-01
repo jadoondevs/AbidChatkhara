@@ -13,6 +13,9 @@ export interface TicketLine {
   readonly itemName: string;
   readonly qty: number;
   readonly modifierNames: readonly string[];
+  /** The kitchen instruction, printed under the line so the customer's
+   * copy says what was actually asked for. */
+  readonly note: string | null;
   readonly lineTotalMinor: Paisa;
 }
 
@@ -126,6 +129,7 @@ export function renderBillTicket(data: BillTicketData): Buffer {
   for (const line of data.lines) {
     b.line(twoColumn(`${line.qty} x ${line.itemName}`, format(line.lineTotalMinor)));
     for (const modifierName of line.modifierNames) b.line(`   + ${modifierName}`);
+    if (line.note) b.line(`   * ${line.note}`);
   }
   b.rule();
 
@@ -208,6 +212,7 @@ export function renderReceiptTicket(data: ReceiptTicketData): Buffer {
   for (const line of data.lines) {
     b.line(twoColumn(`${line.qty} x ${line.itemName}`, format(line.lineTotalMinor)));
     for (const modifierName of line.modifierNames) b.line(`   + ${modifierName}`);
+    if (line.note) b.line(`   * ${line.note}`);
   }
   b.rule();
 
@@ -241,11 +246,26 @@ export function renderReceiptTicket(data: ReceiptTicketData): Buffer {
 // Assembling ticket data from the database
 // ---------------------------------------------------------------------
 
+/**
+ * The lines as they were sold.
+ *
+ * Names come from the order line's own snapshot, never from a join to
+ * `item` — a receipt reprinted after the menu was renamed must still
+ * say what the customer bought (migration 0017). The fallbacks only
+ * fire for rows written before that migration, which the migration
+ * itself backfilled.
+ */
 async function loadTicketLines(db: Kysely<Database>, orderId: number): Promise<TicketLine[]> {
   const lines = await db
     .selectFrom('order_line')
-    .innerJoin('item', 'item.id', 'order_line.item_id')
-    .select(['order_line.id as id', 'order_line.qty as qty', 'order_line.net_sales_minor as lineTotalMinor', 'item.name as itemName'])
+    .select([
+      'order_line.id as id',
+      'order_line.item_id as itemId',
+      'order_line.qty as qty',
+      'order_line.net_sales_minor as lineTotalMinor',
+      'order_line.item_name_snapshot as itemName',
+      'order_line.note as note',
+    ])
     .where('order_line.order_id', '=', orderId)
     .where('order_line.voided', '=', 0)
     .orderBy('order_line.id', 'asc')
@@ -253,8 +273,11 @@ async function loadTicketLines(db: Kysely<Database>, orderId: number): Promise<T
 
   const modifierRows = await db
     .selectFrom('order_line_modifier')
-    .innerJoin('modifier', 'modifier.id', 'order_line_modifier.modifier_id')
-    .select(['order_line_modifier.order_line_id as orderLineId', 'modifier.name as name'])
+    .select([
+      'order_line_modifier.order_line_id as orderLineId',
+      'order_line_modifier.modifier_id as modifierId',
+      'order_line_modifier.modifier_name_snapshot as name',
+    ])
     .where(
       'order_line_modifier.order_line_id',
       'in',
@@ -263,10 +286,13 @@ async function loadTicketLines(db: Kysely<Database>, orderId: number): Promise<T
     .execute();
 
   return lines.map((line) => ({
-    itemName: line.itemName,
+    itemName: line.itemName ?? `item ${line.itemId}`,
     qty: line.qty,
+    note: line.note,
     lineTotalMinor: line.lineTotalMinor,
-    modifierNames: modifierRows.filter((m) => m.orderLineId === line.id).map((m) => m.name),
+    modifierNames: modifierRows
+      .filter((m) => m.orderLineId === line.id)
+      .map((m) => m.name ?? `modifier ${m.modifierId}`),
   }));
 }
 

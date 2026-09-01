@@ -13,6 +13,10 @@ export interface OrderTable {
   order_type: OrderType;
   channel: OrderChannel;
   table_label: string | null;
+  /** Who the order is for — a delivery or a takeaway that has to be
+   * called for. Free text, and null on most dine-in orders (0018). */
+  customer_name: string | null;
+  customer_phone: string | null;
   waiter_id: number | null;
   beneficiary_person_id: number | null;
   shift_id: number | null;
@@ -57,6 +61,9 @@ export interface OrderLineTable {
   void_reason: string | null;
   void_approved_by: number | null;
   void_kind: VoidKind | null;
+  /** What the kitchen was told about this line — "no onions", "well
+   * done". Part of the record of the sale (0018). */
+  note: string | null;
 }
 
 export interface OrderLineModifierTable {

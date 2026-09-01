@@ -19,7 +19,9 @@ import {
   removeLine,
   reopenOrder,
   setDiscount,
+  setLineNote,
   setLineQty,
+  setOrderCustomer,
   voidLine,
   voidOrder,
 } from './service.js';
@@ -53,6 +55,7 @@ const orderLineSchema = z.object({
   voidReason: z.string().nullable(),
   voidApprovedBy: z.number().int().nullable(),
   voidKind: z.enum(['correction', 'void']).nullable(),
+  note: z.string().nullable(),
   modifiers: z.array(orderLineModifierSchema),
 });
 
@@ -62,6 +65,8 @@ const orderSummarySchema = z.object({
   orderType: orderTypeSchema,
   channel: orderChannelSchema,
   tableLabel: z.string().nullable(),
+  customerName: z.string().nullable(),
+  customerPhone: z.string().nullable(),
   waiterId: z.number().int().nullable(),
   beneficiaryPersonId: z.number().int().nullable(),
   shiftId: z.number().int().nullable(),
@@ -220,6 +225,8 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
           orderType: orderTypeSchema,
           channel: orderChannelSchema.optional(),
           tableLabel: z.string().min(1).optional(),
+          customerName: z.string().min(1).max(120).optional(),
+          customerPhone: z.string().min(1).max(40).optional(),
           waiterId: z.number().int().optional(),
           beneficiaryPersonId: z.number().int().optional(),
         }),
@@ -238,7 +245,12 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
     {
       schema: {
         params: z.object({ id: z.coerce.number().int() }),
-        body: z.object({ itemId: z.number().int(), qty: z.number().int().positive(), modifierIds: z.array(z.number().int()).optional() }),
+        body: z.object({
+          itemId: z.number().int(),
+          qty: z.number().int().positive(),
+          modifierIds: z.array(z.number().int()).optional(),
+          note: z.string().max(200).optional(),
+        }),
         response: { 200: orderDetailSchema },
       },
     },
@@ -410,6 +422,38 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
    * figures on it are the ones already printed on the customer's own
    * receipt.
    */
+  app.patch(
+    '/api/orders/:id/customer',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        // Both optional and both nullable-by-empty-string: the delivery
+        // screen saves a phone number without re-sending the name.
+        body: z.object({ customerName: z.string().max(120).optional(), customerPhone: z.string().max(40).optional() }),
+        response: { 200: orderDetailSchema },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireAuth(request, reply);
+      return setOrderCustomer(db, request.params.id, request.body, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  app.patch(
+    '/api/orders/:id/lines/:lineId/note',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int(), lineId: z.coerce.number().int() }),
+        body: z.object({ note: z.string().max(200) }),
+        response: { 200: orderDetailSchema },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireAuth(request, reply);
+      return setLineNote(db, request.params.id, request.params.lineId, request.body, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
   app.get(
     '/api/orders/:id/history',
     {

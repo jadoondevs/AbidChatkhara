@@ -680,6 +680,8 @@ export async function recordPayment(
       orderType: order.order_type,
       channel: order.channel,
       tableLabel: order.table_label,
+      customerName: order.customer_name,
+      customerPhone: order.customer_phone,
       waiterId: order.waiter_id,
       beneficiaryPersonId: order.beneficiary_person_id,
       shiftId: order.shift_id,

@@ -1,16 +1,16 @@
 import { createServer, type Server } from 'node:net';
 import { paisa } from '@pos/shared';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createCategory, createItem, setItemPrice } from '../catalog/service.js';
+import { createCategory, createItem, renameItem, setItemPrice } from '../catalog/service.js';
 import { createUser } from '../identity/service.js';
-import { addLine, billOrder, createOrder } from '../ordering/service.js';
+import { addLine, billOrder, createOrder, setOrderCustomer } from '../ordering/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createTestDb } from '../platform/db/test-helpers.js';
 import type { PrinterTarget } from '../platform/printing/client.js';
 import { saveSetting } from '../settings/service.js';
 import { defaultsFor } from '../settings/schema.js';
 import { createPaymentMethod, recordPayment } from './service.js';
-import { buildReceiptTicketData, printBill, printReceipt } from './printing.js';
+import { buildBillTicketData, buildReceiptTicketData, printBill, printReceipt } from './printing.js';
 import { renderReceiptHtml } from './receipt-html.js';
 
 /** A loopback socket standing in for a network thermal printer: it
@@ -244,5 +244,44 @@ describe('printing — direct printer, and the Windows fallback', () => {
     expect(renderReceiptHtml(data)).toBe(renderReceiptHtml(data));
     expect(renderReceiptHtml(data)).toContain('Rs 1,850.00');
     expect(data.totalMinor).toBe(1_850_00);
+  });
+
+  /**
+   * A ticket is a record of a sale, so what it says must not move when
+   * the menu does. The line names used to be read live through a join
+   * to `item`, which meant renaming a dish rewrote every receipt ever
+   * printed for it.
+   */
+  describe('a reprint says what was actually sold', () => {
+    it('keeps the name the item was sold under after it is renamed', async () => {
+      const { actor, order, item } = await setupClosedOrder();
+      await renameItem(ctx.db, item.id, 'Chicken Karahi (full)', actor);
+
+      const ticket = await buildReceiptTicketData(ctx.db, order.id);
+      expect(ticket.lines[0]?.itemName).toBe('Karahi');
+    });
+
+    it('prints the kitchen note under its line', async () => {
+      const { actor, item } = await setupClosedOrder();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1, note: 'no onions' }, actor);
+      await billOrder(ctx.db, order.id, {}, actor);
+
+      const ticket = await buildBillTicketData(ctx.db, order.id);
+      expect(ticket.lines[0]?.note).toBe('no onions');
+
+      // And it survives into both print paths, not just the data.
+      const outcome = await printBill(ctx.db, order.id, null);
+      expect(outcome.method).toBe('fallback');
+      if (outcome.method === 'fallback') expect(outcome.html).toContain('no onions');
+    });
+
+    it('carries the customer through to the order record', async () => {
+      const { actor } = await setupClosedOrder();
+      const order = await createOrder(ctx.db, { orderType: 'delivery', customerName: 'A. Customer' }, actor);
+      const updated = await setOrderCustomer(ctx.db, order.id, { customerPhone: '0300-0000000' }, actor);
+      expect(updated.customerName).toBe('A. Customer');
+      expect(updated.customerPhone).toBe('0300-0000000');
+    });
   });
 });

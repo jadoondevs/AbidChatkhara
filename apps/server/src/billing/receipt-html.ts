@@ -62,7 +62,11 @@ function itemRows(lines: readonly TicketLine[]): string {
       const modifiers = line.modifierNames.length
         ? `<div class="modifiers">${escapeHtml(line.modifierNames.join(', '))}</div>`
         : '';
-      return `<div class="item">${row(`${line.qty} × ${line.itemName}`, format(line.lineTotalMinor))}${modifiers}</div>`;
+      // The kitchen instruction prints on the customer's copy too: it
+      // is what they asked for, and the thing they will point at if
+      // what arrived was not it.
+      const note = line.note ? `<div class="modifiers">${escapeHtml(line.note)}</div>` : '';
+      return `<div class="item">${row(`${line.qty} × ${line.itemName}`, format(line.lineTotalMinor))}${modifiers}${note}</div>`;
     })
     .join('');
 }

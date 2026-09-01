@@ -76,6 +76,10 @@ export interface OrderSummary {
   readonly orderType: OrderType;
   readonly channel: OrderChannel;
   readonly tableLabel: string | null;
+  /** Who the order is for. Optional everywhere — a dine-in customer
+   * rarely gives a name, a delivery always does (migration 0018). */
+  readonly customerName: string | null;
+  readonly customerPhone: string | null;
   readonly waiterId: number | null;
   readonly beneficiaryPersonId: number | null;
   readonly shiftId: number | null;
@@ -107,6 +111,8 @@ interface OrderRow {
   order_type: OrderType;
   channel: OrderChannel;
   table_label: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
   waiter_id: number | null;
   beneficiary_person_id: number | null;
   shift_id: number | null;
@@ -136,6 +142,8 @@ function toOrderSummary(row: OrderRow): OrderSummary {
     orderType: row.order_type,
     channel: row.channel,
     tableLabel: row.table_label,
+    customerName: row.customer_name,
+    customerPhone: row.customer_phone,
     waiterId: row.waiter_id,
     beneficiaryPersonId: row.beneficiary_person_id,
     shiftId: row.shift_id,
@@ -186,6 +194,8 @@ export interface OrderLineDetail {
   readonly voidReason: string | null;
   readonly voidApprovedBy: number | null;
   readonly voidKind: VoidKind | null;
+  /** What the kitchen was told — "no onions", "well done". */
+  readonly note: string | null;
   // Not `readonly` (unlike the fields above): this is serialized
   // straight through a Zod response schema at the HTTP layer, and Zod's
   // inferred array type there is mutable — a readonly array isn't
@@ -233,6 +243,7 @@ async function loadLines(
     voidReason: line.void_reason,
     voidApprovedBy: line.void_approved_by,
     voidKind: line.void_kind,
+    note: line.note,
     modifiers: modifierRows
       .filter((m) => m.order_line_id === line.id)
       .map((m) => ({
@@ -392,6 +403,11 @@ export interface CreateOrderInput {
    * a dine_in order. */
   readonly channel?: OrderChannel | undefined;
   readonly tableLabel?: string | undefined;
+  /** Optional on every order type. A delivery that has neither cannot
+   * be delivered, but that is the driver's problem to raise, not a
+   * reason for the till to refuse the sale. */
+  readonly customerName?: string | undefined;
+  readonly customerPhone?: string | undefined;
   readonly waiterId?: number | undefined;
   readonly beneficiaryPersonId?: number | undefined;
 }
@@ -458,6 +474,8 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
       order_type: input.orderType,
       channel,
       table_label: input.tableLabel?.trim() ? input.tableLabel.trim() : null,
+      customer_name: input.customerName?.trim() ? input.customerName.trim() : null,
+      customer_phone: input.customerPhone?.trim() ? input.customerPhone.trim() : null,
       waiter_id: input.waiterId ?? null,
       beneficiary_person_id: input.beneficiaryPersonId ?? null,
       shift_id: openShift?.id ?? null,
@@ -638,6 +656,9 @@ export interface AddLineInput {
   readonly itemId: number;
   readonly qty: number;
   readonly modifierIds?: readonly number[] | undefined;
+  /** A kitchen instruction for this line. Two otherwise identical lines
+   * with different notes are different things and never merge. */
+  readonly note?: string | undefined;
 }
 
 /**
@@ -652,13 +673,18 @@ async function findMergeableLine(
   orderId: number,
   itemId: number,
   modifierKey: string,
+  note: string | null,
 ): Promise<{ id: number; qty: number } | null> {
   const candidates = await trx
     .selectFrom('order_line')
-    .select(['id', 'qty'])
+    .select(['id', 'qty', 'note'])
     .where('order_id', '=', orderId)
     .where('item_id', '=', itemId)
     .where('voided', '=', 0)
+    // A Karahi "no onions" is not the same thing as a Karahi, so it
+    // gets its own line — merging them would send one of the two
+    // instructions to the kitchen and drop the other.
+    .where('note', note === null ? 'is' : '=', note)
     .orderBy('id', 'asc')
     .execute();
   if (candidates.length === 0) return null;
@@ -711,11 +737,12 @@ export async function addLine(db: Kysely<Database>, orderId: number, input: AddL
   const modifiers = await Promise.all(modifierIds.map((id) => getModifier(db, id)));
 
   const modifierKey = [...modifierIds].sort((a, b) => a - b).join(',');
+  const note = input.note?.trim() ? input.note.trim() : null;
 
   return db.transaction().execute(async (trx) => {
     const order = await requireOpenOrder(trx, orderId);
 
-    const mergeTarget = order.first_billed_at === null ? await findMergeableLine(trx, orderId, input.itemId, modifierKey) : null;
+    const mergeTarget = order.first_billed_at === null ? await findMergeableLine(trx, orderId, input.itemId, modifierKey, note) : null;
     if (mergeTarget) {
       const mergedQty = mergeTarget.qty + input.qty;
       if (mergedQty > MAX_LINE_QTY) {
@@ -756,6 +783,7 @@ export async function addLine(db: Kysely<Database>, orderId: number, input: AddL
         void_reason: null,
         void_approved_by: null,
         void_kind: null,
+        note,
       })
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -953,6 +981,109 @@ export async function setLineQty(
     const finalOrder = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirstOrThrow();
     const lines = await loadLines(trx, orderId);
     return toOrderDetail(trx, finalOrder, lines);
+  });
+}
+
+// ---------------------------------------------------------------------
+// Who the order is for, and what the kitchen was told
+// ---------------------------------------------------------------------
+
+export interface SetOrderCustomerInput {
+  readonly customerName?: string | undefined;
+  readonly customerPhone?: string | undefined;
+}
+
+/**
+ * Record (or correct) the customer on an order.
+ *
+ * Separate from order creation because that is how it actually happens:
+ * the phone rings, the order goes in, and the name and number are read
+ * back while the kitchen is already cooking. Editable until the order
+ * closes and not after — a settled order is a record of what happened,
+ * and this is part of that record.
+ *
+ * Passing an empty string clears the field; omitting it leaves it
+ * alone, so the delivery screen can save a phone number without having
+ * to re-send the name.
+ */
+export async function setOrderCustomer(
+  db: Kysely<Database>,
+  orderId: number,
+  input: SetOrderCustomerInput,
+  actor: OrderActor,
+): Promise<OrderDetail> {
+  return db.transaction().execute(async (trx) => {
+    const order = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirst();
+    if (!order) throw new Error(`order ${orderId} not found`);
+    if (order.status === 'closed' || order.status === 'voided') {
+      throw new OrderStateError(`order ${orderId} is ${order.status} — its customer details can no longer be changed`);
+    }
+
+    const patch: { customer_name?: string | null; customer_phone?: string | null } = {};
+    if (input.customerName !== undefined) patch.customer_name = input.customerName.trim() || null;
+    if (input.customerPhone !== undefined) patch.customer_phone = input.customerPhone.trim() || null;
+
+    if (Object.keys(patch).length > 0) {
+      await versionedUpdate(trx, orderId, order.version, patch);
+      await recordAudit(trx, {
+        actorId: actor.actorId,
+        terminalId: actor.terminalId,
+        action: 'order.set_customer',
+        entity: 'order',
+        entityId: orderId,
+        before: { customerName: order.customer_name, customerPhone: order.customer_phone },
+        after: {
+          customerName: patch.customer_name ?? order.customer_name,
+          customerPhone: patch.customer_phone ?? order.customer_phone,
+        },
+      });
+    }
+
+    const updated = await trx.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirstOrThrow();
+    return toOrderDetail(trx, updated, await loadLines(trx, orderId));
+  });
+}
+
+export interface SetLineNoteInput {
+  readonly note: string;
+}
+
+/**
+ * Change what the kitchen is told about one line.
+ *
+ * Only while the order is still open: once a bill is printed the note
+ * has already been acted on, and rewriting it would change a record of
+ * what was actually cooked. It does not touch a single money field, so
+ * nothing is recomputed — but it is audited, because "who told the
+ * kitchen to leave the onions out" is a real question.
+ */
+export async function setLineNote(
+  db: Kysely<Database>,
+  orderId: number,
+  lineId: number,
+  input: SetLineNoteInput,
+  actor: OrderActor,
+): Promise<OrderDetail> {
+  return db.transaction().execute(async (trx) => {
+    const order = await requireOpenOrder(trx, orderId);
+    const line = await trx.selectFrom('order_line').selectAll().where('id', '=', lineId).where('order_id', '=', orderId).executeTakeFirst();
+    if (!line) throw new Error(`line ${lineId} not found on order ${orderId}`);
+    if (line.voided === 1) throw new OrderStateError(`line ${lineId} is off this order — its note cannot be changed`);
+
+    const note = input.note.trim() || null;
+    await trx.updateTable('order_line').set({ note }).where('id', '=', lineId).execute();
+
+    await recordAudit(trx, {
+      actorId: actor.actorId,
+      terminalId: actor.terminalId,
+      action: 'order.set_line_note',
+      entity: 'order_line',
+      entityId: lineId,
+      before: { note: line.note },
+      after: { note },
+    });
+
+    return toOrderDetail(trx, order, await loadLines(trx, orderId));
   });
 }
 

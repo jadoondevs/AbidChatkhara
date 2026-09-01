@@ -110,6 +110,8 @@ export interface OrderLine {
   voidReason: string | null;
   voidApprovedBy: number | null;
   voidKind: VoidKind | null;
+  /** What the kitchen was told about this line. */
+  note: string | null;
   modifiers: OrderLineModifier[];
 }
 
@@ -119,6 +121,8 @@ export interface OrderSummary {
   orderType: OrderType;
   channel: OrderChannel;
   tableLabel: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
   waiterId: number | null;
   beneficiaryPersonId: number | null;
   shiftId: number | null;

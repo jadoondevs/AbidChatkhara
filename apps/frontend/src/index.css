@@ -954,3 +954,21 @@ button.link-button {
 button.link-button:hover {
   text-decoration-color: var(--accent);
 }
+
+/* Who a takeaway or delivery is for, above the item grid. */
+.customer-bar {
+  align-items: flex-end;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+/* A kitchen instruction, under the line it belongs to. */
+.bill-line-note {
+  font-size: 12px;
+  font-style: italic;
+}
+
+.bill-line-note-button {
+  font-size: 12px;
+  padding: 2px 6px;
+}

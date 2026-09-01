@@ -52,6 +52,8 @@ export function OrderDetailScreen(): JSX.Element {
           {order.invoiceNo !== null && <Field label="Invoice number" value={`#${order.invoiceNo}`} />}
           <Field label="Type" value={order.orderType.replace(/_/g, ' ')} />
           <Field label="Table" value={order.tableLabel ?? '—'} />
+          {order.customerName && <Field label="Customer" value={order.customerName} />}
+          {order.customerPhone && <Field label="Phone" value={order.customerPhone} />}
           {record.beneficiaryName && <Field label="Meal for" value={record.beneficiaryName} />}
           <Field label="Waiter" value={record.waiterName ?? '—'} />
           <Field label="Opened by" value={record.openedByName ?? '—'} />
@@ -143,6 +145,7 @@ export function OrderDetailScreen(): JSX.Element {
                           .join(', ')}
                       </div>
                     )}
+                    {line.note && <div className="muted line-modifiers">“{line.note}”</div>}
                     {line.voided && (
                       <div className="muted line-modifiers">
                         {line.voidKind === 'correction' ? 'Removed before billing' : `Voided${line.voidReason ? ` — ${line.voidReason}` : ''}`}
