@@ -83,7 +83,6 @@ export async function getOrderHistory(db: Kysely<Database>, orderId: number): Pr
   const paymentRows = await db
     .selectFrom('payment')
     .innerJoin('payment_method', 'payment_method.id', 'payment.payment_method_id')
-    .leftJoin('payment_account', 'payment_account.id', 'payment.payment_account_id')
     .leftJoin('user', 'user.id', 'payment.received_by')
     .select([
       'payment.id as id',
@@ -93,12 +92,16 @@ export async function getOrderHistory(db: Kysely<Database>, orderId: number): Pr
       'payment.change_minor as changeMinor',
       'payment.received_at as receivedAt',
       'payment.reversed_by_payment_id as reversedByPaymentId',
-      'payment_method.display_name as methodName',
+      // Snapshots, not a live join: this page is a record of what
+      // happened, and editing an account today must not rewrite where
+      // last month's money went (migration 0019).
+      'payment.method_name_snapshot as methodNameSnapshot',
+      'payment_method.display_name as methodNameLive',
       'payment_method.kind as methodKind',
-      'payment_account.id as accountId',
-      'payment_account.label as accountLabel',
-      'payment_account.account_number as accountNumber',
-      'payment_account.bank_name as accountBankName',
+      'payment.payment_account_id as accountId',
+      'payment.account_label_snapshot as accountLabel',
+      'payment.account_number_snapshot as accountNumber',
+      'payment.account_bank_snapshot as accountBankName',
       'user.name as receivedByName',
     ])
     .where('payment.order_id', '=', orderId)
@@ -108,7 +111,7 @@ export async function getOrderHistory(db: Kysely<Database>, orderId: number): Pr
 
   const payments: HistoricalPayment[] = paymentRows.map((row) => ({
     id: row.id,
-    methodName: row.methodName,
+    methodName: row.methodNameSnapshot ?? row.methodNameLive,
     methodKind: row.methodKind,
     amountMinor: row.amountMinor,
     referenceNo: row.referenceNo,

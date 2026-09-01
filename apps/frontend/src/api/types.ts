@@ -244,6 +244,7 @@ export interface PartnerRecord {
 
 export type PaymentAccountType = 'easypaisa' | 'bank' | 'other';
 
+/** Where money actually goes. One method can have several. */
 export interface PaymentAccount {
   id: number;
   paymentMethodId: number;
@@ -253,6 +254,9 @@ export interface PaymentAccount {
   accountNumber: string | null;
   bankName: string | null;
   active: boolean;
+  /** Whether these details print for a customer to pay into.
+   * Independent of `active`. */
+  printOnReceipt: boolean;
   sortOrder: number;
   createdAt: string;
   updatedAt: string | null;
@@ -337,6 +341,8 @@ export interface OrderDetail extends OrderSummary {
   balanceMinor: Paisa;
 }
 
+/** What the customer paid WITH — a type of payment, nothing more.
+ * Where the money went is a PaymentAccount. */
 export interface PaymentMethod {
   id: number;
   code: string;
@@ -344,11 +350,6 @@ export interface PaymentMethod {
   kind: PaymentMethodKind;
   active: boolean;
   sortOrder: number;
-  printOnBill: boolean;
-  accountTitle: string | null;
-  accountNumber: string | null;
-  bankName: string | null;
-  instructionsLine: string | null;
 }
 
 export interface Payment {

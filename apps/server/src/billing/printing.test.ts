@@ -66,19 +66,15 @@ describe('renderBillTicket', () => {
       paymentOptions: [
         {
           displayName: 'Easypaisa',
-          accountTitle: 'Restaurant Pvt Ltd',
-          accountNumber: '0300-1234567',
-          bankName: null,
-          instructionsLine: 'Send screenshot to till',
-          accounts: [],
+          accounts: [{ label: 'Counter wallet', accountTitle: 'Restaurant Pvt Ltd', accountNumber: '0300-1234567', bankName: null }],
         },
       ],
     };
     const text = decode(renderBillTicket(withPayments));
     expect(text).toContain('Easypaisa');
+    expect(text).toContain('Counter wallet');
     expect(text).toContain('Restaurant Pvt Ltd');
     expect(text).toContain('0300-1234567');
-    expect(text).toContain('Send screenshot to till');
   });
 
   it('ends with a cut command', () => {
@@ -246,13 +242,9 @@ describe('configurable branding', () => {
       paymentOptions: [
         {
           displayName: 'Easypaisa',
-          accountTitle: null,
-          accountNumber: null,
-          bankName: null,
-          instructionsLine: null,
           accounts: [
-            { label: 'Counter wallet', accountNumber: '0000-0000000' },
-            { label: 'Delivery wallet', accountNumber: '0000-1111111' },
+            { label: 'Counter wallet', accountTitle: null, accountNumber: '0000-0000000', bankName: null },
+            { label: 'Delivery wallet', accountTitle: null, accountNumber: '0000-1111111', bankName: null },
           ],
         },
       ],
@@ -266,7 +258,7 @@ describe('configurable branding', () => {
     const text = bill({
       branding: { restaurant, receipt },
       paymentOptions: [
-        { displayName: 'Easypaisa', accountTitle: null, accountNumber: null, bankName: null, instructionsLine: null, accounts: [] },
+        { displayName: 'Easypaisa', accounts: [{ label: 'Counter wallet', accountTitle: null, accountNumber: '0000-0000000', bankName: null }] },
       ],
     });
     expect(text).not.toContain('Payment options');

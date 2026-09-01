@@ -5,6 +5,7 @@ import { completePrint } from './printing.js';
 import type {
   AppSettings,
   BillTotals,
+  BlockingOrder,
   Category,
   FloorBoard,
   PaymentAccount,
@@ -327,7 +328,7 @@ export function usePaymentAccounts(paymentMethodId?: number, includeInactive = f
 export function useCreatePaymentAccount(): UseMutationResult<
   PaymentAccount,
   Error,
-  { paymentMethodId: number; label: string; accountTitle?: string; accountNumber?: string; bankName?: string }
+  { paymentMethodId: number; label: string; accountTitle?: string; accountNumber?: string; bankName?: string; printOnReceipt?: boolean }
 > {
   const invalidate = useInvalidateOnSuccess(['payment-accounts']);
   return useMutation({ mutationFn: (body) => api.post<PaymentAccount>('/api/payment-accounts', body), onSuccess: invalidate });
@@ -336,7 +337,7 @@ export function useCreatePaymentAccount(): UseMutationResult<
 export function useUpdatePaymentAccount(): UseMutationResult<
   PaymentAccount,
   Error,
-  { id: number; label?: string; accountTitle?: string; accountNumber?: string; bankName?: string; active?: boolean }
+  { id: number; label?: string; accountTitle?: string; accountNumber?: string; bankName?: string; active?: boolean; printOnReceipt?: boolean }
 > {
   const invalidate = useInvalidateOnSuccess(['payment-accounts']);
   return useMutation({
@@ -447,6 +448,20 @@ export function useTaxRules(includeInactive = false): UseQueryResult<TaxRule[]> 
 
 export function useOpenShift(): UseQueryResult<Shift | null> {
   return useQuery({ queryKey: ['shift', 'open'], queryFn: () => api.get<Shift | null>('/api/shifts/open') });
+}
+
+/**
+ * What is stopping this shift closing, as live server state rather than
+ * a copy of a failed close attempt. Deleting an empty order invalidates
+ * it, so the list — and the shift's closability — correct themselves
+ * without the cashier reloading anything.
+ */
+export function useBlockingOrders(shiftId: number | null): UseQueryResult<BlockingOrder[]> {
+  return useQuery({
+    queryKey: ['shift', 'blocking', shiftId],
+    queryFn: () => api.get<BlockingOrder[]>(`/api/shifts/${shiftId}/blocking-orders`),
+    enabled: shiftId !== null,
+  });
 }
 
 export function useZReport(shiftId: number | null): UseQueryResult<ZReport> {
@@ -565,21 +580,17 @@ export function useSetItemAvailability(): UseMutationResult<unknown, Error, { it
 export function useCreatePaymentMethod(): UseMutationResult<
   PaymentMethod,
   Error,
-  {
-    code: string;
-    displayName: string;
-    kind: PaymentMethodKind;
-    printOnBill?: boolean;
-    accountTitle?: string;
-    accountNumber?: string;
-    bankName?: string;
-  }
+  { code: string; displayName: string; kind: PaymentMethodKind }
 > {
   const invalidate = useInvalidateOnSuccess(['payment-methods']);
   return useMutation({ mutationFn: (body) => api.post<PaymentMethod>('/api/payment-methods', body), onSuccess: invalidate });
 }
 
-export function useUpdatePaymentMethod(): UseMutationResult<PaymentMethod, Error, { id: number; active?: boolean; displayName?: string; printOnBill?: boolean }> {
+export function useUpdatePaymentMethod(): UseMutationResult<
+  PaymentMethod,
+  Error,
+  { id: number; active?: boolean; displayName?: string; kind?: PaymentMethodKind }
+> {
   const invalidate = useInvalidateOnSuccess(['payment-methods']);
   return useMutation({ mutationFn: ({ id, ...body }) => api.patch<PaymentMethod>(`/api/payment-methods/${id}`, body), onSuccess: invalidate });
 }

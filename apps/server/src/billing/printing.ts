@@ -21,18 +21,22 @@ export interface TicketLine {
 
 export interface PaymentOptionAccount {
   readonly label: string;
-  readonly accountNumber: string | null;
-}
-
-export interface PaymentOption {
-  readonly displayName: string;
   readonly accountTitle: string | null;
   readonly accountNumber: string | null;
   readonly bankName: string | null;
-  readonly instructionsLine: string | null;
-  /** Every configured account a customer could actually send money to
-   * for this method — a restaurant with three Easypaisa wallets prints
-   * all three. */
+}
+
+/**
+ * One way to pay, as printed on a bill for the customer to act on.
+ *
+ * The account details come from the ACCOUNTS, never from the method:
+ * a restaurant with two Easypaisa wallets has one method and two
+ * accounts, and each account decides for itself whether it appears here
+ * (`print_on_receipt`, migration 0019). An account that is active but
+ * unadvertised takes payments without being on the ticket.
+ */
+export interface PaymentOption {
+  readonly displayName: string;
   readonly accounts: readonly PaymentOptionAccount[];
 }
 
@@ -148,12 +152,10 @@ export function renderBillTicket(data: BillTicketData): Buffer {
     b.line('Payment options:');
     for (const option of data.paymentOptions) {
       b.line(`  ${option.displayName}`);
-      if (option.accountTitle) b.line(`    ${option.accountTitle}`);
-      if (option.accountNumber) b.line(`    ${option.accountNumber}`);
-      if (option.bankName) b.line(`    ${option.bankName}`);
-      if (option.instructionsLine) b.line(`    ${option.instructionsLine}`);
       for (const account of option.accounts) {
         b.line(`    ${account.label}${account.accountNumber ? `: ${account.accountNumber}` : ''}`);
+        if (account.accountTitle) b.line(`      ${account.accountTitle}`);
+        if (account.bankName) b.line(`      ${account.bankName}`);
       }
     }
   }
@@ -324,11 +326,15 @@ export async function buildBillTicketData(db: Kysely<Database>, orderId: number)
   const order = await db.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirstOrThrow();
   const waiter = order.waiter_id ? await db.selectFrom('user').select('name').where('id', '=', order.waiter_id).executeTakeFirst() : undefined;
   const lines = await loadTicketLines(db, orderId);
-  const methods = await db.selectFrom('payment_method').selectAll().where('active', '=', 1).where('print_on_bill', '=', 1).orderBy('sort_order', 'asc').execute();
+  // What a customer can pay into: active accounts that are marked to
+  // print, under their method's name. Nothing here comes from the
+  // method's own superseded account columns (migration 0019).
+  const methods = await db.selectFrom('payment_method').selectAll().where('active', '=', 1).orderBy('sort_order', 'asc').execute();
   const accounts = await db
     .selectFrom('payment_account')
     .selectAll()
     .where('active', '=', 1)
+    .where('print_on_receipt', '=', 1)
     .orderBy('sort_order', 'asc')
     .orderBy('label', 'asc')
     .execute();
@@ -351,16 +357,16 @@ export async function buildBillTicketData(db: Kysely<Database>, orderId: number)
     roundingAdjustmentMinor: order.rounding_adjustment_minor,
     totalMinor: order.total_minor,
     printedAt: order.billed_at ?? new Date().toISOString(),
-    paymentOptions: methods.map((m) => ({
-      displayName: m.display_name,
-      accountTitle: m.account_title,
-      accountNumber: m.account_number,
-      bankName: m.bank_name,
-      instructionsLine: m.instructions_line,
-      accounts: accounts
-        .filter((a) => a.payment_method_id === m.id)
-        .map((a) => ({ label: a.label, accountNumber: a.account_number })),
-    })),
+    paymentOptions: methods
+      .map((m) => ({
+        displayName: m.display_name,
+        accounts: accounts
+          .filter((a) => a.payment_method_id === m.id)
+          .map((a) => ({ label: a.label, accountTitle: a.account_title, accountNumber: a.account_number, bankName: a.bank_name })),
+      }))
+      // A method with nothing to send money to is not a payment option
+      // — printing its name alone tells the customer nothing.
+      .filter((option) => option.accounts.length > 0),
   };
 }
 
@@ -372,18 +378,25 @@ export async function buildReceiptTicketData(db: Kysely<Database>, orderId: numb
   const waiter = order.waiter_id ? await db.selectFrom('user').select('name').where('id', '=', order.waiter_id).executeTakeFirst() : undefined;
   const lines = await loadTicketLines(db, orderId);
 
+  // The method and account NAMES come from the payment's own snapshot,
+  // not from a join: a receipt reprinted after someone corrected an
+  // account holder's name must still name the account this money went
+  // to (migration 0019). The join to payment_method survives only for
+  // `kind`, which decides whether the drawer is kicked, and which is a
+  // fact about the payment type rather than a label.
   const paymentRows = await db
     .selectFrom('payment')
     .innerJoin('payment_method', 'payment_method.id', 'payment.payment_method_id')
-    .leftJoin('payment_account', 'payment_account.id', 'payment.payment_account_id')
     .select([
-      'payment_method.display_name as methodName',
+      'payment.method_name_snapshot as methodNameSnapshot',
+      'payment_method.display_name as methodNameLive',
       'payment_method.kind as kind',
       'payment.amount_minor as amountMinor',
       'payment.reference_no as referenceNo',
       'payment.tendered_minor as tenderedMinor',
       'payment.change_minor as changeMinor',
-      'payment_account.label as accountLabel',
+      'payment.account_label_snapshot as accountLabel',
+      'payment.account_print_on_receipt_snapshot as accountPrints',
     ])
     .where('payment.order_id', '=', orderId)
     .where('payment.reversed_by_payment_id', 'is', null)
@@ -411,10 +424,13 @@ export async function buildReceiptTicketData(db: Kysely<Database>, orderId: numb
     roundingAdjustmentMinor: order.rounding_adjustment_minor,
     totalMinor: order.total_minor,
     payments: paymentRows.map((p) => ({
-      methodName: p.methodName,
+      methodName: p.methodNameSnapshot ?? p.methodNameLive,
       amountMinor: p.amountMinor,
       referenceNo: p.referenceNo,
-      accountLabel: p.accountLabel ?? null,
+      // An account the restaurant chose not to print stays off the
+      // ticket — and a reprint honours the choice that was in force
+      // when the money arrived, not today's.
+      accountLabel: p.accountPrints === 1 ? p.accountLabel : null,
     })),
     cashTenderedMinor: cashRows.length > 0 ? sum(cashRows.map((p) => p.tenderedMinor as Paisa)) : null,
     changeGivenMinor: cashRows.length > 0 ? sum(cashRows.map((p) => p.changeMinor ?? paisa(0))) : null,

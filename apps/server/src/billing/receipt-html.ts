@@ -164,13 +164,11 @@ export function renderBillHtml(data: BillTicketData): string {
   if (receipt.showPaymentAccounts && data.paymentOptions.length > 0) {
     const blocks = data.paymentOptions.map((option) => {
       const details: string[] = [];
-      if (option.accountTitle) details.push(escapeHtml(option.accountTitle));
-      if (option.accountNumber) details.push(escapeHtml(maskAccountNumber(option.accountNumber) ?? ''));
-      if (option.bankName) details.push(escapeHtml(option.bankName));
-      if (option.instructionsLine) details.push(escapeHtml(option.instructionsLine));
       for (const account of option.accounts) {
         const masked = maskAccountNumber(account.accountNumber);
         details.push(escapeHtml(`${account.label}${masked ? `: ${masked}` : ''}`));
+        if (account.accountTitle) details.push(escapeHtml(account.accountTitle));
+        if (account.bankName) details.push(escapeHtml(account.bankName));
       }
       return `<div><strong>${escapeHtml(option.displayName)}</strong>${details.map((d) => `<div class="note">${d}</div>`).join('')}</div>`;
     });

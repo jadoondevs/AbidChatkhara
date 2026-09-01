@@ -428,8 +428,8 @@ function AccountsPanel(): JSX.Element {
     <div className="card col settings-panel accounts-panel">
       <ErrorBanner error={update.error} />
       <p className="muted" style={{ marginTop: 0 }}>
-        Easypaisa and bank payments must say which account received the money, so each of these needs at least one active account before
-        a cashier can accept it.
+        Where the money actually goes. Easypaisa and bank payments must say which account received them, so each method below needs at
+        least one active account before a cashier can accept it.
       </p>
 
       {eligible.map((method) => {
@@ -458,6 +458,7 @@ function AccountsPanel(): JSX.Element {
                     <th>Name</th>
                     <th>Account</th>
                     <th>Status</th>
+                    <th>Prints on receipt</th>
                     <th />
                   </tr>
                 </thead>
@@ -470,6 +471,19 @@ function AccountsPanel(): JSX.Element {
                         {account.bankName && <span className="muted"> · {account.bankName}</span>}
                       </td>
                       <td>{account.active ? 'Active' : 'Inactive'}</td>
+                      <td>
+                        {/* Independent of Active: an account can take
+                            money without being advertised on a ticket,
+                            and hiding it must not stop the till using
+                            it. */}
+                        <button
+                          className="ghost"
+                          disabled={update.isPending}
+                          onClick={() => update.mutate({ id: account.id, printOnReceipt: !account.printOnReceipt })}
+                        >
+                          {account.printOnReceipt ? 'Yes' : 'No'}
+                        </button>
+                      </td>
                       <td className="num">
                         <button className="ghost" onClick={() => setEditing(account)}>
                           Edit
@@ -536,6 +550,7 @@ function AccountDialog({
   const [accountTitle, setAccountTitle] = useState(account?.accountTitle ?? '');
   const [accountNumber, setAccountNumber] = useState(account?.accountNumber ?? '');
   const [bankName, setBankName] = useState(account?.bankName ?? '');
+  const [printOnReceipt, setPrintOnReceipt] = useState(account?.printOnReceipt ?? true);
 
   const pending = create.isPending || update.isPending;
   const valid = label.trim() !== '';
@@ -548,6 +563,7 @@ function AccountDialog({
       accountTitle: accountTitle.trim(),
       accountNumber: accountNumber.trim(),
       ...(isBank ? { bankName: bankName.trim() } : {}),
+      printOnReceipt,
     };
     if (account) update.mutate({ id: account.id, ...fields }, { onSuccess: onClose });
     else create.mutate({ paymentMethodId: methodId, ...fields }, { onSuccess: onClose });
@@ -584,6 +600,15 @@ function AccountDialog({
               <input id="account-bank" value={bankName} onChange={(event) => setBankName(event.target.value)} />
             </div>
           )}
+
+          {/* Separate from whether the account is active: a live
+              account the restaurant would rather not advertise is a
+              real case, and it had no way to be expressed before. */}
+          <label className="checkbox-row">
+            <input type="checkbox" checked={printOnReceipt} onChange={(event) => setPrintOnReceipt(event.target.checked)} />
+            Print these details on bills, so customers can pay into it
+          </label>
+
           <button className="primary big" type="submit" disabled={!valid || pending}>
             {pending ? 'Saving…' : account ? 'Save' : 'Add account'}
           </button>

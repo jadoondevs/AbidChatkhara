@@ -4,7 +4,7 @@ import { createPaymentAccount, createPaymentMethod, recordPayment, refundOrder, 
 import { createCategory, createItem, setItemPrice } from '../catalog/service.js';
 import { createUser } from '../identity/service.js';
 import { createPerson } from '../consumption/service.js';
-import { addLine, billOrder, createOrder, removeLine, setDiscount, voidLine, voidOrder } from '../ordering/service.js';
+import { addLine, billOrder, createOrder, deleteEmptyOrder, removeLine, setDiscount, voidLine, voidOrder } from '../ordering/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createTestDb, enableServiceCharge } from '../platform/db/test-helpers.js';
 import { eventBus } from '../platform/events/bus.js';
@@ -311,6 +311,80 @@ describe('shifts/service', () => {
       expect(report.consumptionUnchargedMinor).toBe(1000_00);
       // A free meal takes no money, so the drawer is unaffected.
       expect(report.expectedCashMinor).toBe(0);
+    });
+  });
+
+  /**
+   * The close blocker and the empty-order delete have to agree. A
+   * manager standing at a till at 1am is told they cannot close because
+   * of table 19; deleting table 19 has to actually end that, without a
+   * reload and without the two answers coming from different places.
+   */
+  describe('blockers clear when an empty order is deleted', () => {
+    it('lists an empty open order as a blocker, and says it has no lines', async () => {
+      const { actor } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(1_000_00) }, actor);
+      const empty = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+
+      const blockers = await getBlockingOrders(ctx.db, shift.id);
+      expect(blockers.map((b) => b.id)).toEqual([empty.id]);
+      expect(blockers[0]?.lineCount).toBe(0);
+    });
+
+    it('stops listing it once it is deleted, and the shift then closes', async () => {
+      const { actor } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(1_000_00) }, actor);
+      const empty = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+
+      await expect(closeShift(ctx.db, shift.id, { countedCashMinor: paisa(1_000_00) }, actor)).rejects.toThrow(ShiftCloseBlockedError);
+
+      await deleteEmptyOrder(ctx.db, empty.id, actor);
+
+      expect(await getBlockingOrders(ctx.db, shift.id)).toEqual([]);
+      const closed = await closeShift(ctx.db, shift.id, { countedCashMinor: paisa(1_000_00) }, actor);
+      expect(closed.closedAt).not.toBeNull();
+    });
+
+    it('keeps blocking while an order with items is still open', async () => {
+      const { actor, item } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(1_000_00) }, actor);
+      const empty = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      const real = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, real.id, { itemId: item.id, qty: 1 }, actor);
+
+      await deleteEmptyOrder(ctx.db, empty.id, actor);
+
+      const blockers = await getBlockingOrders(ctx.db, shift.id);
+      expect(blockers.map((b) => b.id)).toEqual([real.id]);
+      expect(blockers[0]?.lineCount).toBe(1);
+      // And the one that is a real order cannot be deleted away.
+      await expect(deleteEmptyOrder(ctx.db, real.id, actor)).rejects.toThrow();
+      await expect(closeShift(ctx.db, shift.id, { countedCashMinor: paisa(1_000_00) }, actor)).rejects.toThrow(ShiftCloseBlockedError);
+    });
+
+    it('lists an awaiting-payment order as a blocker that cannot be deleted', async () => {
+      const { actor, item } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(1_000_00) }, actor);
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      await billOrder(ctx.db, order.id, {}, actor);
+
+      const blockers = await getBlockingOrders(ctx.db, shift.id);
+      expect(blockers[0]).toMatchObject({ id: order.id, status: 'billed' });
+      await expect(deleteEmptyOrder(ctx.db, order.id, actor)).rejects.toThrow(/never billed/);
+    });
+
+    it("does not count another shift's orders", async () => {
+      const { actor } = await setupBase();
+      const first = await openShift(ctx.db, { openingCashMinor: paisa(1_000_00) }, actor);
+      const stray = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await deleteEmptyOrder(ctx.db, stray.id, actor);
+      await closeShift(ctx.db, first.id, { countedCashMinor: paisa(1_000_00) }, actor);
+
+      const second = await openShift(ctx.db, { openingCashMinor: paisa(1_000_00) }, actor);
+      await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      expect(await getBlockingOrders(ctx.db, first.id)).toEqual([]);
+      expect(await getBlockingOrders(ctx.db, second.id)).toHaveLength(1);
     });
   });
 });

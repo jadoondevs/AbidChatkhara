@@ -160,31 +160,12 @@ export async function seed(db: Kysely<Database>): Promise<SeedResult> {
 
   // ---- payment methods ----
   const cash = await createPaymentMethod(db, { code: 'cash', displayName: 'Cash', kind: 'cash', sortOrder: 1 }, actor);
-  const easypaisa = await createPaymentMethod(
-    db,
-    {
-      code: 'easypaisa',
-      displayName: 'Easypaisa',
-      kind: 'wallet',
-      sortOrder: 2,
-      printOnBill: true,
-      accountTitle: 'DEMO ACCOUNT — replace before going live',
-      accountNumber: '0000-0000000',
-    },
-    actor,
-  );
+  // A method is a TYPE of payment and carries nothing about a receiving
+  // account — those are the accounts below.
+  const easypaisa = await createPaymentMethod(db, { code: 'easypaisa', displayName: 'Easypaisa', kind: 'wallet', sortOrder: 2 }, actor);
   const bankTransfer = await createPaymentMethod(
     db,
-    {
-      code: 'bank',
-      displayName: 'Bank transfer',
-      kind: 'bank_transfer',
-      sortOrder: 3,
-      printOnBill: true,
-      accountTitle: 'DEMO ACCOUNT — replace before going live',
-      accountNumber: '0000000000000000',
-      bankName: 'Demo Bank',
-    },
+    { code: 'bank', displayName: 'Bank transfer', kind: 'bank_transfer', sortOrder: 3 },
     actor,
   );
 
@@ -199,15 +180,17 @@ export async function seed(db: Kysely<Database>): Promise<SeedResult> {
     accountNumber: string,
     bankName?: string,
     sortOrder = 0,
+    printOnReceipt = true,
   ) => {
     const account = await createPaymentAccount(
       db,
       {
         paymentMethodId,
         label,
-        accountTitle: 'DEMO ACCOUNT — replace before going live',
+          accountTitle: 'DEMO ACCOUNT — replace before going live',
         accountNumber,
         ...(bankName === undefined ? {} : { bankName }),
+        printOnReceipt,
         sortOrder,
       },
       actor,
@@ -216,7 +199,9 @@ export async function seed(db: Kysely<Database>): Promise<SeedResult> {
   };
 
   await addAccount(easypaisa.id, 'Counter wallet', '0000-0000000', undefined, 1);
-  await addAccount(easypaisa.id, 'Delivery wallet', '0000-1111111', undefined, 2);
+  // Live, but deliberately not advertised on the ticket — the case that
+  // had no representation before migration 0019.
+  await addAccount(easypaisa.id, 'Delivery wallet', '0000-1111111', undefined, 2, false);
   await addAccount(bankTransfer.id, 'Main current account', '0000000000000000', 'Demo Bank', 1);
 
   // ---- people (staff and owner meals), one per policy ----

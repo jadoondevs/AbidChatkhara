@@ -9,7 +9,7 @@ import { createTestDb } from '../platform/db/test-helpers.js';
 import type { PrinterTarget } from '../platform/printing/client.js';
 import { saveSetting } from '../settings/service.js';
 import { defaultsFor } from '../settings/schema.js';
-import { createPaymentMethod, recordPayment } from './service.js';
+import { activeAccountsForMethod, createPaymentAccount, createPaymentMethod, recordPayment, updatePaymentAccount, updatePaymentMethod } from './service.js';
 import { buildBillTicketData, buildReceiptTicketData, printBill, printReceipt } from './printing.js';
 import { renderReceiptHtml } from './receipt-html.js';
 
@@ -282,6 +282,106 @@ describe('printing — direct printer, and the Windows fallback', () => {
       const updated = await setOrderCustomer(ctx.db, order.id, { customerPhone: '0300-0000000' }, actor);
       expect(updated.customerName).toBe('A. Customer');
       expect(updated.customerPhone).toBe('0300-0000000');
+    });
+  });
+
+  /**
+   * A ticket tells a customer where to send money, and a receipt says
+   * where money went. Both read accounts, and both have to be immune to
+   * an account being edited afterwards.
+   */
+  describe('accounts on a ticket', () => {
+    it('prints only the accounts marked to print', async () => {
+      const { actor, order } = await setupClosedOrder();
+      const wallet = await createPaymentMethod(ctx.db, { code: 'easypaisa', displayName: 'Easypaisa', kind: 'wallet' }, actor);
+      await createPaymentAccount(ctx.db, { paymentMethodId: wallet.id, label: 'Counter wallet', accountNumber: '0300-1111111' }, actor);
+      await createPaymentAccount(
+        ctx.db,
+        { paymentMethodId: wallet.id, label: 'Delivery wallet', accountNumber: '0300-2222222', printOnReceipt: false },
+        actor,
+      );
+
+      const ticket = await buildBillTicketData(ctx.db, order.id);
+      const labels = ticket.paymentOptions.flatMap((option) => option.accounts.map((account) => account.label));
+      expect(labels).toContain('Counter wallet');
+      expect(labels).not.toContain('Delivery wallet');
+    });
+
+    it('drops an account from the ticket without stopping it taking money', async () => {
+      const { actor, order } = await setupClosedOrder();
+      const wallet = await createPaymentMethod(ctx.db, { code: 'easypaisa', displayName: 'Easypaisa', kind: 'wallet' }, actor);
+      const account = await createPaymentAccount(ctx.db, { paymentMethodId: wallet.id, label: 'Counter wallet' }, actor);
+
+      await updatePaymentAccount(ctx.db, account.id, { printOnReceipt: false }, actor);
+
+      const ticket = await buildBillTicketData(ctx.db, order.id);
+      expect(ticket.paymentOptions).toHaveLength(0);
+      // Still live for the till: the 0/1/many rule sees it.
+      expect((await activeAccountsForMethod(ctx.db, wallet.id)).map((a) => a.label)).toEqual(['Counter wallet']);
+    });
+
+    it('reprints a receipt with the account as it was, not as it has been edited', async () => {
+      ctx = createTestDb();
+      const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+      const actor = { actorId: admin.id, terminalId: 'till-1' };
+      const category = await createCategory(ctx.db, { name: 'Mains' }, actor);
+      const item = await createItem(ctx.db, { categoryId: category.id, name: 'Karahi' }, actor);
+      await setItemPrice(ctx.db, item.id, paisa(1_000_00), actor);
+      const partner = await createPartner(ctx.db, 'Alice', actor);
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: partner.id, shareBp: 10_000 }], actor);
+      const wallet = await createPaymentMethod(ctx.db, { code: 'easypaisa', displayName: 'Easypaisa', kind: 'wallet' }, actor);
+      const account = await createPaymentAccount(ctx.db, { paymentMethodId: wallet.id, label: 'Saif', accountNumber: '1234567' }, actor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      const billed = await billOrder(ctx.db, order.id, {}, actor);
+      await recordPayment(
+        ctx.db,
+        order.id,
+        { paymentMethodId: wallet.id, amountMinor: billed.totalMinor, paymentAccountId: account.id },
+        actor,
+      );
+
+      await updatePaymentAccount(ctx.db, account.id, { label: 'Ali', accountNumber: '9999999' }, actor);
+      await updatePaymentMethod(ctx.db, wallet.id, { displayName: 'EP Wallet' }, actor);
+
+      const receipt = await buildReceiptTicketData(ctx.db, order.id);
+      expect(receipt.payments[0]?.accountLabel).toBe('Saif');
+      expect(receipt.payments[0]?.methodName).toBe('Easypaisa');
+    });
+
+    it('keeps an unprinted account off the receipt it was paid into', async () => {
+      ctx = createTestDb();
+      const admin = await createUser(ctx.db, { name: 'Admin', username: 'admin', password: '9999', role: 'admin' }, { actorId: null, terminalId: 'seed' });
+      const actor = { actorId: admin.id, terminalId: 'till-1' };
+      const category = await createCategory(ctx.db, { name: 'Mains' }, actor);
+      const item = await createItem(ctx.db, { categoryId: category.id, name: 'Karahi' }, actor);
+      await setItemPrice(ctx.db, item.id, paisa(1_000_00), actor);
+      const partner = await createPartner(ctx.db, 'Alice', actor);
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: partner.id, shareBp: 10_000 }], actor);
+      const wallet = await createPaymentMethod(ctx.db, { code: 'easypaisa', displayName: 'Easypaisa', kind: 'wallet' }, actor);
+      const account = await createPaymentAccount(
+        ctx.db,
+        { paymentMethodId: wallet.id, label: 'Delivery wallet', printOnReceipt: false },
+        actor,
+      );
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      const billed = await billOrder(ctx.db, order.id, {}, actor);
+      await recordPayment(
+        ctx.db,
+        order.id,
+        { paymentMethodId: wallet.id, amountMinor: billed.totalMinor, paymentAccountId: account.id },
+        actor,
+      );
+
+      const receipt = await buildReceiptTicketData(ctx.db, order.id);
+      expect(receipt.payments[0]?.accountLabel).toBeNull();
+      // The payment still knows which account it was — only the
+      // printing is suppressed.
+      const payment = await ctx.db.selectFrom('payment').selectAll().where('order_id', '=', order.id).executeTakeFirstOrThrow();
+      expect(payment.payment_account_id).toBe(account.id);
     });
   });
 });

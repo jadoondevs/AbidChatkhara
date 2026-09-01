@@ -62,18 +62,38 @@ describe('billing/service', () => {
   describe('payment methods', () => {
     it('creates, lists (active by default), and updates a payment method', async () => {
       const { actor } = await setupBase();
-      const card = await createPaymentMethod(
-        ctx.db,
-        { code: 'card', displayName: 'Card', kind: 'card', printOnBill: true, accountTitle: 'Restaurant Ltd', accountNumber: '123', bankName: 'HBL' },
-        actor,
-      );
-      expect(card).toMatchObject({ kind: 'card', printOnBill: true, accountTitle: 'Restaurant Ltd' });
+      const card = await createPaymentMethod(ctx.db, { code: 'card', displayName: 'Card', kind: 'card' }, actor);
+      // A method is a type of payment and nothing else: no account
+      // title, no account number, no bank (migration 0019).
+      expect(card).toEqual({ id: card.id, code: 'card', displayName: 'Card', kind: 'card', active: true, sortOrder: 0 });
 
       expect((await listPaymentMethods(ctx.db)).map((m) => m.code)).toEqual(expect.arrayContaining(['cash', 'easypaisa', 'bank', 'card']));
 
       const updated = await updatePaymentMethod(ctx.db, card.id, { active: false }, actor);
       expect(updated.active).toBe(false);
       expect((await listPaymentMethods(ctx.db)).map((m) => m.code)).not.toContain('card');
+    });
+
+    it('renames a method and changes its type without touching anything else', async () => {
+      const { actor } = await setupBase();
+      const method = await createPaymentMethod(ctx.db, { code: 'card', displayName: 'Card', kind: 'card' }, actor);
+
+      const renamed = await updatePaymentMethod(ctx.db, method.id, { displayName: '  Debit card  ', kind: 'bank_transfer' }, actor);
+      expect(renamed.displayName).toBe('Debit card');
+      expect(renamed.kind).toBe('bank_transfer');
+      // The code is the identifier historical payments refer to, so it
+      // is not something an edit can change.
+      expect(renamed.code).toBe('card');
+    });
+
+    it('brings a deactivated method back', async () => {
+      const { actor } = await setupBase();
+      const method = await createPaymentMethod(ctx.db, { code: 'card', displayName: 'Card', kind: 'card' }, actor);
+      await updatePaymentMethod(ctx.db, method.id, { active: false }, actor);
+
+      const back = await updatePaymentMethod(ctx.db, method.id, { active: true }, actor);
+      expect(back.active).toBe(true);
+      expect((await listPaymentMethods(ctx.db)).map((m) => m.code)).toContain('card');
     });
 
     it('card is supported by the schema but never seeded here', async () => {
@@ -741,6 +761,106 @@ describe('billing/service', () => {
       await expect(createPaymentMethod(ctx.db, { code: '   ', displayName: 'Nameless', kind: 'cash' }, actor)).rejects.toThrow(
         /needs a code/,
       );
+    });
+  });
+
+  /**
+   * "Which accounts can take money" and "which accounts are printed for
+   * a customer to pay into" are different questions. They used to share
+   * one flag on the wrong table (migration 0019).
+   */
+  describe('payment accounts — prints on receipt', () => {
+    it('defaults to printing, because an account you just configured is one you want used', async () => {
+      const { actor, easypaisa } = await setupBase();
+      const account = await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Counter wallet' }, actor);
+      expect(account.printOnReceipt).toBe(true);
+    });
+
+    it('can be created unprinted', async () => {
+      const { actor, easypaisa } = await setupBase();
+      const account = await createPaymentAccount(
+        ctx.db,
+        { paymentMethodId: easypaisa.id, label: 'Delivery wallet', printOnReceipt: false },
+        actor,
+      );
+      expect(account.printOnReceipt).toBe(false);
+      expect(account.active).toBe(true);
+    });
+
+    it('toggles without touching whether the account is active', async () => {
+      const { actor, easypaisa } = await setupBase();
+      const account = await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Counter wallet' }, actor);
+
+      const unprinted = await updatePaymentAccount(ctx.db, account.id, { printOnReceipt: false }, actor);
+      expect(unprinted.printOnReceipt).toBe(false);
+      expect(unprinted.active).toBe(true);
+
+      const printed = await updatePaymentAccount(ctx.db, account.id, { printOnReceipt: true }, actor);
+      expect(printed.printOnReceipt).toBe(true);
+      expect(printed.active).toBe(true);
+    });
+
+    it('and deactivating does not change whether it prints', async () => {
+      const { actor, easypaisa } = await setupBase();
+      const account = await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Counter wallet' }, actor);
+
+      const off = await updatePaymentAccount(ctx.db, account.id, { active: false }, actor);
+      expect(off.active).toBe(false);
+      expect(off.printOnReceipt).toBe(true);
+    });
+
+    it('an unprinted account still takes payments', async () => {
+      const { actor, item, easypaisa } = await setupBase();
+      const account = await createPaymentAccount(
+        ctx.db,
+        { paymentMethodId: easypaisa.id, label: 'Delivery wallet', printOnReceipt: false },
+        actor,
+      );
+      const order = await billedOrder(item, actor);
+
+      // Being off the ticket is a printing decision, not a till one.
+      const result = await recordPayment(
+        ctx.db,
+        order.id,
+        { paymentMethodId: easypaisa.id, amountMinor: order.totalMinor, paymentAccountId: account.id },
+        actor,
+      );
+      expect(result.orderClosed).toBe(true);
+    });
+
+    it('an account can be edited without disturbing what it already received', async () => {
+      const { actor, item, easypaisa } = await setupBase();
+      const account = await createPaymentAccount(
+        ctx.db,
+        { paymentMethodId: easypaisa.id, label: 'Saif', accountNumber: '1234567' },
+        actor,
+      );
+      const order = await billedOrder(item, actor);
+      await recordPayment(
+        ctx.db,
+        order.id,
+        { paymentMethodId: easypaisa.id, amountMinor: order.totalMinor, paymentAccountId: account.id },
+        actor,
+      );
+
+      await updatePaymentAccount(ctx.db, account.id, { label: 'Ali', accountNumber: '9999999' }, actor);
+
+      const payment = await ctx.db.selectFrom('payment').selectAll().where('order_id', '=', order.id).executeTakeFirstOrThrow();
+      expect(payment.account_label_snapshot).toBe('Saif');
+      expect(payment.account_number_snapshot).toBe('1234567');
+      // The link is intact too — reports that group by account still
+      // need to know which account this was.
+      expect(payment.payment_account_id).toBe(account.id);
+    });
+
+    it('records which method took the money, under the name it had then', async () => {
+      const { actor, item, cash } = await setupBase();
+      const order = await billedOrder(item, actor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: order.totalMinor }, actor);
+      await updatePaymentMethod(ctx.db, cash.id, { displayName: 'Cash / notes' }, actor);
+
+      const payment = await ctx.db.selectFrom('payment').selectAll().where('order_id', '=', order.id).executeTakeFirstOrThrow();
+      expect(payment.method_name_snapshot).toBe('Cash');
     });
   });
 });

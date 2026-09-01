@@ -257,7 +257,7 @@ describe('order history', () => {
     expect(history?.order.serviceChargeMinor).toBe(185_00);
   });
 
-  it('still identifies the account a payment landed in after it is renamed and deactivated', async () => {
+  it('shows the account as it WAS when the money arrived, after it is renamed and deactivated', async () => {
     const s = await setup();
     const order = await createOrder(ctx.db, { orderType: 'dine_in', tableLabel: 'T6', waiterId: s.waiter.id }, s.actor);
     await addLine(ctx.db, order.id, { itemId: s.item.id, qty: 1, modifierIds: [s.medium.id] }, s.actor);
@@ -270,13 +270,14 @@ describe('order history', () => {
       .where('id', '=', s.account.id)
       .execute();
 
-    // The payment still resolves to a real account. Its label follows
-    // the account — that is the account's own name, not a value the
-    // transaction froze — but the identity is intact, which is what
-    // "which account received this" has to survive.
+    // The identity is intact AND the label is the one that was on the
+    // account when this payment was taken. A customer disputing a
+    // transfer is asking about the account it went to that day, and an
+    // admin correcting a spelling must not rewrite the answer
+    // (migration 0019).
     const history = await getOrderHistory(ctx.db, order.id);
     expect(history?.payments[0]?.accountId).toBe(s.account.id);
-    expect(history?.payments[0]?.accountLabel).toBe('Old wallet (closed)');
+    expect(history?.payments[0]?.accountLabel).toBe('Main Easypaisa');
   });
 
   it('keeps a partner allocation after the ownership split is changed', async () => {

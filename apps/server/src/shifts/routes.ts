@@ -6,7 +6,17 @@ import { z } from 'zod';
 import { waiterPayoutTotals } from '../gratuity/service.js';
 import { requireAuth, requireRole } from '../identity/require-auth.js';
 import type { Database } from '../platform/db/types.js';
-import { closeShift, getOpenShift, getShift, getZReport, listShifts, openShift, ShiftCloseBlockedError, ShiftStateError } from './service.js';
+import {
+  closeShift,
+  getBlockingOrders,
+  getOpenShift,
+  getShift,
+  getZReport,
+  listShifts,
+  openShift,
+  ShiftCloseBlockedError,
+  ShiftStateError,
+} from './service.js';
 
 const shiftSchema = z.object({
   id: z.number().int(),
@@ -122,6 +132,29 @@ export const shiftsRoutes: FastifyPluginAsync<ShiftsPluginOptions> = async (fast
     async (request, reply) => {
       const actor = requireRole(request, reply, 'cashier');
       return closeShift(db, request.params.id, request.body, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  /**
+   * What is stopping this shift closing, right now.
+   *
+   * The same list `closeShift` refuses with — but available BEFORE the
+   * attempt, so the screen can show it live and re-read it after
+   * something changes. It used to exist only inside the 422, which
+   * meant the till was displaying a snapshot of a failed request and
+   * had no way to learn that a blocker had since been cleared.
+   */
+  app.get(
+    '/api/shifts/:id/blocking-orders',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        response: { 200: z.array(blockingOrderSchema) },
+      },
+    },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      return getBlockingOrders(db, request.params.id);
     },
   );
 
