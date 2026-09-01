@@ -294,9 +294,19 @@ docs/decisions/005-ordering-stops-at-billed.md.
   optional") gets its own `net_sales_minor`/`allocation_base_minor` for
   the allocation engine to use later. See
   docs/decisions/004-order-line-modifier-allocation-breakdown.md.
-- **Tax is hardcoded to zero** in `billOrder` — there is no `tax_rule`
-  table or engine yet (that's a later milestone, alongside shifts). One
-  line in the pipeline changes when it lands; nothing else does.
+- **Tax comes from the `tax_rule` engine** (see "Tax", below), which
+  ships with no rule configured and therefore charges zero until a
+  restaurant that must charge it says so.
+- **The order records who it is for, and each line what the kitchen was
+  told.** `order.customer_name` / `order.customer_phone` and
+  `order_line.note` (migration 0018) are free text and optional — a
+  delivery cannot be delivered without a name and a number, a dine-in
+  table normally has neither. The customer stays editable until the
+  order closes, a note only until the bill is printed: by then it has
+  been acted on, and rewriting it would change the record of what was
+  actually cooked. Two otherwise identical lines with different notes
+  never merge, because merging them would send one instruction to the
+  kitchen and drop the other.
 - **A modifier selection is validated against its group's min/max**, not
   just checked for existing ids — `addLine` rejects a selection that
   doesn't satisfy every linked modifier group's `min_select`/`max_select`
@@ -481,13 +491,29 @@ The module is small on purpose: one append-only table
   reuse the exact same query shape: shifts (8) scoping it to one shift's
   `opened_at`/`closed_at` window for the spec's payout sheet, and
   reporting (9) for a "service charge report, per date range."
-- **No `gratuity/routes.ts` yet, deliberately.** The spec's 12-screen list
-  has no dedicated service-charge screen — entry happens implicitly
-  through the bill screen ordering already built (entering a service
-  charge amount when billing an order), and the payout sheet is a
-  shift-close deliverable that belongs to the shifts milestone once
-  shifts exist to scope it to. There is nothing for an HTTP route to do
-  yet that isn't already reachable through billing's own routes.
+- **What the charge IS comes from one function.**
+  `ordering.computeServiceCharge` is the only place a service charge is
+  ever worked out: from the `serviceCharge` settings group (on/off,
+  rate in basis points, display name, dine-in only). `billOrder` and
+  `previewBillTotals` both run it through `computeBillTotals`, so the
+  amount the bill screen previews is the amount the bill charges, by
+  construction rather than by two implementations agreeing. Switched
+  off, it is zero everywhere at once — including a cashier's attempt to
+  enter one by hand, which is refused rather than silently kept.
+- **The rate that applied is stored on the order.**
+  `order.service_charge_rate_bp` (migration 0016) records the rate that
+  produced `service_charge_minor`, or NULL when no rate did — a cashier
+  waiving or overriding the amount claims no percentage, because no
+  percentage produced it. Every screen and both ticket renderers read
+  the rate from the order, so a bill taken while the rate was 5% still
+  reads 5% after an admin sets 10%, and a receipt reprinted a year
+  later still matches the paper the customer took home. See
+  docs/decisions/019.
+- **No `gratuity/routes.ts`, deliberately.** The charge is configured in
+  Settings (`PUT /api/settings/service-charge`), applied by ordering,
+  and paid out through the shift's payout sheet. There is nothing left
+  for a route of its own to do that isn't already reachable through
+  those.
 
 ## Consumption (staff and owner meals)
 
@@ -638,6 +664,16 @@ whose printer is away for repair actually wants — prints fail
 immediately with a clear message instead of every bill stalling on a
 connection that will never answer.
 
+### The service charge group
+
+`serviceCharge` is `{ enabled, rateBp, displayName, dineInOnly }` and
+ships disabled with a zero rate, so an upgraded till charges nothing
+until someone decides otherwise. It is readable by any signed-in user —
+the bill screen has to show the charge and its rate is on the
+customer's receipt — and writable only by an admin. `rateBp` is capped
+at 5,000 (50%) at the schema boundary: a typo that turns 5% into 500%
+should be refused where every other implausible number is.
+
 ## Payment accounts
 
 `payment_method` has always carried a single `account_title`/
@@ -770,6 +806,37 @@ exactly what happened during that one shift.
   same figure — one ledger, one query, two callers (this module's Z-report
   companion, and the reporting milestone's own per-date-range service
   charge report).
+
+## Historical orders: the record
+
+`apps/server/src/ordering/history.ts` answers one question —
+"what actually happened on this order?" — as one read-only query, and
+`GET /api/orders/:id/history` is the only route that serves it. The
+frontend's `/orders/:id/detail` is the whole of it on one page: the
+order's own header, its totals with the rate that produced them, its
+lines under the names they were sold as, every payment with account,
+reference, tender and change, and the partner split at the shares in
+force when it closed. Opening it cannot modify anything, because there
+is nothing there to modify with.
+
+- **Every figure is read back, never recomputed.** Prices come from the
+  order line (snapshotted since the order was taken), item and modifier
+  NAMES from the line's own `item_name_snapshot` /
+  `modifier_name_snapshot` (migration 0017), the service-charge rate
+  from the order, the payment account and reference from the payment
+  row, the ownership shares from `line_allocation.share_bp_snapshot`.
+  Renaming a dish, changing the rate, or deactivating an account
+  changes nothing on a past order. See docs/decisions/020.
+- **People are the deliberate exception.** Waiter, cashier and partner
+  NAMES are read live, because a person who marries and changes their
+  name is still the person who served that table — the identity is the
+  row, not the string. A renamed menu item, by contrast, is a different
+  thing being sold.
+- **The floor routes to it.** A completed order's row opens its record
+  rather than the payment screen's "Paid in full" card; an
+  awaiting-payment row still opens the till, because what that cashier
+  needs is to take the money, and the record is one click away from
+  there too.
 
 ## Reporting
 
