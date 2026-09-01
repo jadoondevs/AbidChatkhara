@@ -654,6 +654,23 @@ record of receipt. Accounts are deactivated, never deleted: a `payment`
 references the one it landed in, and deleting it would orphan that
 answer on every historical payment.
 
+**A non-cash payment must name its account.** `recordPayment` and
+`settleConsumption` resolve it through one rule before writing anything:
+no active account for the method refuses the payment, exactly one is
+used without asking, two or more with none chosen refuses rather than
+guessing, and a chosen account is validated as active and belonging to
+that method. Cash is exempt — it lands in the drawer. The rule is in the
+service rather than the payment screen, because a rule about money has
+to hold for any caller; `/api/payment-options` exists so the screen can
+show the server's own words instead of keeping a second copy that drifts
+(docs/decisions/017).
+
+An account's type (easypaisa / bank) is derived from its payment
+method's `kind` rather than stored, so the two can never disagree, and a
+restaurant that adds a second wallet provider gets its own method, its
+own accounts and its own block message with no code change
+(docs/decisions/016).
+
 **Cash change** is recorded here too, in `payment.tendered_minor` and
 `payment.change_minor`. `amount_minor` stays exactly what it has always
 been — the amount *applied to the bill* — so sales, partner allocations
@@ -670,6 +687,29 @@ Rs 2,000 note for an Rs 1,800 bill is the single most common transaction
 in the restaurant and used to be an outright error. A wallet or bank
 transfer of more than the bill cannot be handed back from the drawer, so
 it stays a rejection the cashier has to resolve deliberately.
+
+## Printing: two renderers, one calculation
+
+Receipts reach paper by one of two routes, and the choice is the
+server's:
+
+```
+buildReceiptTicketData  ──┬──►  renderReceiptTicket  ──►  ESC/POS over TCP
+   (the one calculation)  │
+                          └──►  renderReceiptHtml    ──►  browser print dialog
+```
+
+`printOrFallBack` tries the configured printer and, when there is none
+or it cannot be reached, returns the HTML instead. Both renderers are
+pure functions of the same ticket data and neither does arithmetic, so a
+total cannot differ between the paths — the frontend prints that HTML in
+an off-screen iframe, which is how a till with no POS printer reaches
+Microsoft Print to PDF and every other Windows printer.
+
+Printing never fails a sale. By the time either print route is called
+the bill is finalised or the payment recorded; a missing printer, an
+unreachable one and a cancelled print dialog are all outcomes, not
+errors (docs/decisions/018). Only a non-print fault still throws.
 
 ## Shifts
 
