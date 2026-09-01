@@ -1,13 +1,27 @@
 import { useEffect, useState } from 'react';
-import { useCreatePartner, useItemOwnership, useMenu, usePartners, useSetItemOwnership } from '../api/hooks.js';
-import { ErrorBanner, Loading } from '../components/ui.tsx';
+import {
+  useCreatePartner,
+  useItemOwnership,
+  useMenu,
+  usePartnerRecord,
+  usePartners,
+  useSetItemOwnership,
+  useUpdatePartner,
+} from '../api/hooks.js';
+import type { Partner, PartnerRecord } from '../api/types.js';
+import { ErrorBanner, Loading, Money } from '../components/ui.tsx';
 
 /**
- * Screen 8: partners, and per item the ownership split with a live check
- * that shares total 100%. Saving warns first that the change applies
- * from now forward only — past sales keep the shares they were
- * allocated under (docs/decisions/006), and a manager who doesn't know
- * that will assume otherwise.
+ * Screen 8: the partners themselves, and per item the ownership split
+ * with a live check that shares total 100%.
+ *
+ * A partner is a person the restaurant owes money to, so this screen
+ * has to answer more than "who exists": what do they own today, what
+ * have they actually been credited, and what happens when one of them
+ * leaves. Saving a split warns first that the change applies from now
+ * forward only — past sales keep the shares they were allocated under
+ * (docs/decisions/006), and a manager who doesn't know that will assume
+ * otherwise.
  */
 export function PartnerConfigScreen(): JSX.Element {
   const partners = usePartners(true);
@@ -15,9 +29,10 @@ export function PartnerConfigScreen(): JSX.Element {
   const menu = useMenu();
   const [partnerName, setPartnerName] = useState('');
   const [itemId, setItemId] = useState<number | ''>('');
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   return (
-    <div className="col" style={{ maxWidth: 1000 }}>
+    <div className="col" style={{ maxWidth: 1100 }}>
       <h1 style={{ margin: 0 }}>Partners</h1>
       <ErrorBanner error={createPartner.error} />
 
@@ -25,13 +40,19 @@ export function PartnerConfigScreen(): JSX.Element {
         <div className="card col">
           <h3 style={{ margin: 0 }}>Partners</h3>
           {partners.isLoading && <Loading />}
-          <ul style={{ margin: 0, paddingLeft: 18 }}>
+          {partners.data?.length === 0 && <p className="muted">No partners yet.</p>}
+
+          <div className="col partner-list">
             {partners.data?.map((partner) => (
-              <li key={partner.id}>
-                {partner.name} {!partner.active && <span className="muted">(inactive)</span>}
-              </li>
+              <PartnerRow
+                key={partner.id}
+                partner={partner}
+                selected={partner.id === selectedId}
+                onSelect={() => setSelectedId(partner.id === selectedId ? null : partner.id)}
+              />
             ))}
-          </ul>
+          </div>
+
           <input placeholder="New partner name" value={partnerName} onChange={(event) => setPartnerName(event.target.value)} />
           <button
             className="primary"
@@ -55,6 +76,216 @@ export function PartnerConfigScreen(): JSX.Element {
           {itemId !== '' && <OwnershipEditor itemId={itemId} />}
         </div>
       </div>
+
+      {selectedId !== null && <PartnerRecordPanel partnerId={selectedId} onClose={() => setSelectedId(null)} />}
+    </div>
+  );
+}
+
+/**
+ * One partner, with the two things a manager does to one: correct the
+ * spelling of their name, and record that they have left (or come
+ * back). Both are audited server-side as separate operations.
+ */
+function PartnerRow({ partner, selected, onSelect }: { partner: Partner; selected: boolean; onSelect: () => void }): JSX.Element {
+  const update = useUpdatePartner();
+  const record = usePartnerRecord(selected ? partner.id : null);
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState(partner.name);
+  const [confirmingLeave, setConfirmingLeave] = useState(false);
+
+  // How many items would keep crediting this partner after they go.
+  // Deactivating is a record that someone left, not a reassignment of
+  // what they own — saying so is the difference between a clean
+  // handover and a month of misallocated sales.
+  const stillOwns = record.data?.ownedItems.length ?? null;
+
+  return (
+    <div className={`partner-row${selected ? ' selected' : ''}`}>
+      <div className="row">
+        {renaming ? (
+          <input autoFocus value={draftName} onChange={(event) => setDraftName(event.target.value)} style={{ flex: 1 }} />
+        ) : (
+          <button className="link-button" style={{ flex: 1, textAlign: 'left' }} onClick={onSelect}>
+            {partner.name}
+          </button>
+        )}
+        {!partner.active && <span className="pill">Left</span>}
+      </div>
+
+      <ErrorBanner error={update.error} />
+
+      {renaming ? (
+        <div className="row">
+          <button
+            className="primary"
+            disabled={!draftName.trim() || update.isPending}
+            onClick={() =>
+              update.mutate({ id: partner.id, name: draftName.trim() }, { onSuccess: () => setRenaming(false) })
+            }
+          >
+            Save name
+          </button>
+          <button
+            className="ghost"
+            onClick={() => {
+              setDraftName(partner.name);
+              setRenaming(false);
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : confirmingLeave ? (
+        <div className="col" style={{ gap: 6 }}>
+          <p className="muted" style={{ margin: 0 }}>
+            {stillOwns === null
+              ? 'Checking what they own…'
+              : stillOwns === 0
+                ? 'They own no items — nothing will be credited to them from now on.'
+                : `They still own ${stillOwns} item${stillOwns === 1 ? '' : 's'}. Marking them as left does NOT reassign those — every future sale of them is still credited to this partner. Change the splits first if that isn't what you want.`}
+          </p>
+          <div className="row">
+            <button
+              className="danger"
+              disabled={update.isPending}
+              onClick={() => update.mutate({ id: partner.id, active: false }, { onSuccess: () => setConfirmingLeave(false) })}
+            >
+              Mark as left
+            </button>
+            <button className="ghost" onClick={() => setConfirmingLeave(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="row partner-row-actions">
+          <button className="ghost" onClick={onSelect}>
+            {selected ? 'Hide record' : 'View record'}
+          </button>
+          <button
+            className="ghost"
+            onClick={() => {
+              setDraftName(partner.name);
+              setRenaming(true);
+            }}
+          >
+            Rename
+          </button>
+          {partner.active ? (
+            <button
+              className="ghost"
+              onClick={() => {
+                // The record answers "what do they still own?", so open
+                // it before asking the question.
+                if (!selected) onSelect();
+                setConfirmingLeave(true);
+              }}
+            >
+              Mark as left
+            </button>
+          ) : (
+            <button className="ghost" disabled={update.isPending} onClick={() => update.mutate({ id: partner.id, active: true })}>
+              Bring back
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What a partner owns and what they have been credited.
+ *
+ * Every amount here is the one that was written at the time of the
+ * sale, at the share that was then in force — this panel reads the
+ * allocation rows, it does not re-split anything by today's
+ * configuration. Reversals are shown as reversals rather than quietly
+ * netted away: a partner asking why a figure moved is owed the entry
+ * that moved it.
+ */
+function PartnerRecordPanel({ partnerId, onClose }: { partnerId: number; onClose: () => void }): JSX.Element {
+  const record = usePartnerRecord(partnerId);
+
+  if (record.isLoading) return <Loading />;
+  if (record.error) return <ErrorBanner error={record.error} />;
+  if (!record.data) return <p className="muted">No record for this partner.</p>;
+
+  const { partner, ownedItems, recentAllocations, totalAllocatedMinor }: PartnerRecord = record.data;
+
+  return (
+    <div className="card col">
+      <div className="row">
+        <h3 style={{ margin: 0, flex: 1 }}>
+          {partner.name}
+          {!partner.active && <span className="muted"> · left the business</span>}
+        </h3>
+        <button className="ghost" onClick={onClose}>
+          Close
+        </button>
+      </div>
+
+      <div className="total-line grand">
+        <span>Credited to date</span>
+        <Money minor={totalAllocatedMinor} />
+      </div>
+
+      <h4 style={{ margin: '8px 0 0' }}>Owns today</h4>
+      {ownedItems.length === 0 ? (
+        <p className="muted">Nothing. No future sale will be credited to them.</p>
+      ) : (
+        <div className="table-scroll">
+          <table>
+            <tbody>
+              {ownedItems.map((owned) => (
+                <tr key={owned.itemId}>
+                  <td>{owned.itemName}</td>
+                  <td className="num muted">{owned.shareBp / 100}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h4 style={{ margin: '8px 0 0' }}>Recent allocations</h4>
+      {recentAllocations.length === 0 ? (
+        <p className="muted">Nothing has been credited to them yet.</p>
+      ) : (
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Order</th>
+                <th>Item</th>
+                <th className="num">Qty</th>
+                <th className="num">Share</th>
+                <th className="num">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentAllocations.map((allocation, index) => (
+                <tr key={`${allocation.orderId}-${index}`} className={allocation.isReversal ? 'muted' : ''}>
+                  <td>
+                    {allocation.invoiceNo === null ? `#${allocation.orderId}` : `Invoice #${allocation.invoiceNo}`}
+                    {allocation.isReversal && <span className="pill warn" style={{ marginLeft: 6 }}>Reversed</span>}
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {allocation.closedAt === null ? 'not closed' : new Date(allocation.closedAt).toLocaleString()}
+                    </div>
+                  </td>
+                  <td>{allocation.itemName}</td>
+                  <td className="num">{allocation.qty}</td>
+                  <td className="num muted">{allocation.shareBpSnapshot / 100}%</td>
+                  <td className="num">
+                    <Money minor={allocation.amountMinor} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

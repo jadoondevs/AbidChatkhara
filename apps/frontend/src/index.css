@@ -907,3 +907,50 @@ th.num {
   display: grid;
   gap: 2px;
 }
+
+/* ---------------------------------------------------------------
+   Partner management.
+   --------------------------------------------------------------- */
+.partner-list {
+  gap: 8px;
+}
+
+/* Each partner is a small block, not a bullet: a name, whether they
+   are still here, and the two or three things a manager does to
+   them. */
+.partner-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.partner-row.selected {
+  border-color: var(--accent);
+}
+
+.partner-row-actions button {
+  font-size: 13px;
+  padding: 4px 8px;
+}
+
+/* A name that opens a record reads as a name, not as a button — but it
+   is a button, so it keeps keyboard focus and Enter. */
+button.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 3px;
+}
+
+button.link-button:hover {
+  text-decoration-color: var(--accent);
+}
