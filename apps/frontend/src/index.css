@@ -1315,6 +1315,265 @@ tbody tr:hover {
 }
 
 /* ---------------------------------------------------------------------
+   Taking payment — the money being handed over on the left, what it is
+   for in the middle, and what is about to be recorded on an ink rail at
+   the edge. The rail is the design's one full-bleed surface: it reads
+   from across the counter, which is where the customer is standing.
+   --------------------------------------------------------------------- */
+
+.payment-screen {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  align-items: stretch;
+  /* Cancels the screen's padding so the rail runs to the edge — the
+     same trick the sign-in poster uses. */
+  margin: -20px -24px;
+  min-height: calc(100% + 40px);
+}
+
+.payment-main {
+  padding: 20px 24px;
+  min-width: 0;
+}
+
+.payment-back {
+  margin-bottom: 14px;
+}
+
+.payment-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 1400px) {
+  .payment-screen {
+    grid-template-columns: minmax(0, 1fr) 360px;
+  }
+
+  .payment-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1000px) {
+  .payment-screen {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* — the method cards — */
+
+/* A method is a card, not a chip: it carries a second line saying what
+   picking it will involve, which is the thing a cashier wants to know
+   BEFORE picking it. Still `.tabs` underneath — one is selected at a
+   time. */
+.method-cards {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.method-cards button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-width: 170px;
+  min-height: 62px;
+  margin-left: 0;
+  padding: 10px 15px;
+  border-width: 2px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.method-name {
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.method-hint {
+  font-size: 11.5px;
+  font-weight: 400;
+  opacity: 0.75;
+}
+
+/* — the money being taken — */
+
+.payment-entry {
+  background: var(--surface);
+}
+
+.payment-figures {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+@media (max-width: 700px) {
+  .payment-figures {
+    grid-template-columns: 1fr;
+  }
+}
+
+.figure-label {
+  margin: 0 0 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.figure {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 30px;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The tendered field is the one the cashier types into, so it is set at
+   the same weight and size as the two figures it sits between. */
+.payment-figures input {
+  min-height: 46px;
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quick-amounts {
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 2px solid var(--divider);
+}
+
+/* — the bill this is for — */
+
+.bill-preview {
+  background: var(--surface-2);
+  position: sticky;
+  top: 0;
+}
+
+.bill-preview-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 14px;
+  border-bottom: 1px solid var(--divider);
+  font-variant-numeric: tabular-nums;
+}
+
+.bill-preview-line + .total-line {
+  margin-top: 8px;
+}
+
+.bill-preview .total-line.grand .mono {
+  font-size: 24px;
+}
+
+/* — the ink rail — */
+
+.payment-rail {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 26px 24px;
+  background: var(--ink);
+  color: var(--ink-text);
+}
+
+.rail-kicker {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+.rail-amount {
+  margin: 6px 0 20px;
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 52px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-rule {
+  height: 2px;
+  border: 0;
+  margin: 0 0 18px;
+  background: var(--ink-line);
+}
+
+.rail-meta {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  font-size: 14.5px;
+}
+
+.rail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rail-row dt {
+  color: var(--ink-muted);
+}
+
+.rail-row dd {
+  margin: 0;
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-row dd.accent {
+  color: var(--gold);
+}
+
+.rail-actions {
+  gap: 9px;
+}
+
+.rail-actions .primary {
+  min-height: 62px;
+  font-size: 18px;
+}
+
+/* Secondary actions on ink: outlined, never a second filled button —
+   there is one action on this screen and it is taking the money. */
+.rail-secondary {
+  min-height: 44px;
+  background: transparent;
+  border-color: #4a4234;
+  color: var(--ink-text);
+}
+
+.rail-secondary:hover {
+  background: var(--ink-2);
+}
+
+/* ---------------------------------------------------------------------
    Settings, reports, shift
    --------------------------------------------------------------------- */
 

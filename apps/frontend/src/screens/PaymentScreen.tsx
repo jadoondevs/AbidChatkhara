@@ -2,9 +2,18 @@ import { paisa, roundUpTo, sub, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../api/client.js';
-import { useOrder, usePaymentOptions, usePeople, usePrintReceipt, useRecordPayment, useRefundOrder, useSettleConsumption } from '../api/hooks.js';
+import {
+  useOrder,
+  usePaymentOptions,
+  usePeople,
+  usePrintReceipt,
+  useRecordPayment,
+  useRefundOrder,
+  useRoster,
+  useSettleConsumption,
+} from '../api/hooks.js';
 import type { PrintResult } from '../api/printing.js';
-import type { SettlementType } from '../api/types.js';
+import type { OrderDetail, PaymentOption, SettlementType } from '../api/types.js';
 import { PrintDecision } from '../components/PrintDecision.tsx';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 import { orderTitle } from './OrderScreen.tsx';
@@ -54,6 +63,9 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
   const recordPayment = useRecordPayment();
   const printReceipt = usePrintReceipt();
   const refundOrder = useRefundOrder();
+  // Only to put a name against the order's waiter id. Cached across the
+  // app — the new-order dialog has already asked for it.
+  const roster = useRoster();
 
   const [methodId, setMethodId] = useState<number | ''>('');
   const [amountMinor, setAmountMinor] = useState<Paisa>(paisa(0));
@@ -231,134 +243,275 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
     );
   }
 
+  const waiterName = roster.data?.find((member) => member.id === detail.waiterId)?.name ?? null;
+  const chosenAccount = needsAccountChoice && accountId !== '' ? accounts.find((a) => a.id === accountId) : soleAccount;
+
   return (
-    <div className="col" style={{ maxWidth: 760 }}>
-      <h1 style={{ margin: 0 }}>
-        Payment — {orderTitle(detail)} <span className="muted">#{detail.id}</span>
-      </h1>
-      <ErrorBanner error={recordPayment.error} />
+    <div className="payment-screen">
+      <div className="payment-main">
+        {/* Back to the order, not to the floor: the cashier came from
+            the bill and the commonest reason to leave is to add the
+            drink somebody forgot. The floor is one more click from
+            there. */}
+        <button className="ghost payment-back" onClick={() => navigate(`/orders/${orderId}`)}>
+          ← Back to order
+        </button>
 
-      <div className="card">
-        <div className="total-line">
-          <span>Bill total</span>
-          <Money minor={detail.totalMinor} />
-        </div>
-        {detail.paidMinor > 0 && (
-          <div className="total-line">
-            <span>Already paid</span>
-            <Money minor={detail.paidMinor} />
-          </div>
-        )}
-        <div className="total-line grand">
-          <span>Still due</span>
-          <Money minor={balanceMinor} />
-        </div>
-        <p className="muted" style={{ fontSize: 13 }}>
-          Partial payments are fine — the order stays awaiting payment until they add up to the total.
-        </p>
-      </div>
-
-      <div className="card col">
-        <div>
-          <label>Method</label>
-          <div className="tabs">
-            {options.data?.map((candidate) => (
-              <button
-                key={candidate.paymentMethodId}
-                className={candidate.paymentMethodId === methodId ? 'active' : ''}
-                onClick={() => selectMethod(candidate.paymentMethodId)}
-              >
-                {candidate.displayName}
-                {/* Flagged on the button itself, so a cashier sees which
-                    methods are unusable before choosing one. */}
-                {candidate.blockedReason && <span className="method-blocked"> · not set up</span>}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {blocked && (
-          <div className="blocked-notice">
-            <strong>{blocked}</strong>
-            <p className="muted">
-              An admin can add one under Settings → Payment accounts. Take this payment another way in the meantime.
-            </p>
-          </div>
-        )}
-
-        {option && !blocked && (
-          <>
-            <div className="row">
-              <div style={{ flex: 1 }}>
-                <label htmlFor="amount">{isCash ? 'Cash tendered' : 'Amount'}</label>
-                <MoneyInput id="amount" valueMinor={amountMinor} onChange={setAmountMinor} />
-                {isCash && <p className="muted field-hint">Type what the customer handed over. Change is worked out below.</p>}
-              </div>
-
-              {takesReference && (
-                <div style={{ flex: 1 }}>
-                  <label htmlFor="reference">Reference number (optional)</label>
-                  <input id="reference" value={referenceNo} onChange={(event) => setReferenceNo(event.target.value)} />
-                </div>
-              )}
+        <div className="payment-columns">
+          <div className="col">
+            <div>
+              <p className="page-kicker">Step 2 of 2 — take payment</p>
+              <h1 style={{ margin: 0 }}>
+                Order #{detail.id} · {orderTitle(detail)}
+              </h1>
             </div>
 
-            {soleAccount && (
-              <p className="account-note">
-                Money goes to <strong>{soleAccount.label}</strong>
-                {soleAccount.accountNumber ? ` · ${soleAccount.accountNumber}` : ''}
-              </p>
-            )}
+            <ErrorBanner error={recordPayment.error} />
 
-            {needsAccountChoice && (
-              <div>
-                <label htmlFor="account">Which account received it?</label>
-                <select
-                  id="account"
-                  value={accountId}
-                  onChange={(event) => setAccountId(event.target.value === '' ? '' : Number(event.target.value))}
+            {/* Still `.tabs` underneath: one method is selected at a
+                time and the keyboard behaviour is a tab list's, however
+                the cards are drawn. */}
+            <div className="tabs method-cards">
+              {options.data?.map((candidate) => (
+                <button
+                  key={candidate.paymentMethodId}
+                  className={candidate.paymentMethodId === methodId ? 'active' : ''}
+                  onClick={() => selectMethod(candidate.paymentMethodId)}
                 >
-                  <option value="">Choose an account…</option>
-                  {accounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.label}
-                      {account.accountNumber ? ` · ${account.accountNumber}` : ''}
-                    </option>
-                  ))}
-                </select>
-                {accountId === '' && <p className="muted field-hint">Required — {accounts.length} accounts are configured.</p>}
-              </div>
-            )}
-
-            {isCash && amountMinor > 0 && (
-              <div className="cash-summary">
-                <div className="total-line">
-                  <span>Applied to bill</span>
-                  <Money minor={appliedMinor} />
-                </div>
-                <div className="total-line grand">
-                  <span>Change</span>
-                  <Money minor={changeIfCash} />
-                </div>
-              </div>
-            )}
-
-            <div className="row">
-              <button onClick={() => setAmountMinor(balanceMinor)}>Exact amount</button>
-              {isCash && <QuickCash total={balanceMinor} onPick={setAmountMinor} />}
-              <span style={{ flex: 1 }} />
-              <button className="primary big" disabled={!canRecord} onClick={submit}>
-                Record payment
-              </button>
+                  <span className="method-name">{candidate.displayName}</span>
+                  {/* What choosing it will involve, said before it is
+                      chosen — including the methods that cannot be
+                      used yet. */}
+                  <span className="method-hint">{methodHint(candidate)}</span>
+                </button>
+              ))}
             </div>
-          </>
-        )}
+
+            {blocked && (
+              <div className="blocked-notice">
+                <strong>{blocked}</strong>
+                <p className="muted">
+                  An admin can add one under Settings → Payment accounts. Take this payment another way in the meantime.
+                </p>
+              </div>
+            )}
+
+            {option && !blocked && (
+              <div className="card col payment-entry">
+                <div className="payment-figures">
+                  <div>
+                    <p className="figure-label">Amount due</p>
+                    <p className="figure">
+                      <Money minor={balanceMinor} />
+                    </p>
+                    {detail.paidMinor > 0 && (
+                      <p className="muted field-hint">
+                        <Money minor={detail.paidMinor} /> already paid
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label htmlFor="amount">{isCash ? 'Cash tendered' : 'Amount'}</label>
+                    <MoneyInput id="amount" valueMinor={amountMinor} onChange={setAmountMinor} />
+                  </div>
+
+                  {isCash ? (
+                    <div>
+                      <p className="figure-label">Change</p>
+                      <p className="figure">
+                        <Money minor={changeIfCash} />
+                      </p>
+                      {amountMinor > 0 && (
+                        <p className="muted field-hint">
+                          <Money minor={appliedMinor} /> applied to the bill
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    takesReference && (
+                      <div>
+                        <label htmlFor="reference">Reference number (optional)</label>
+                        <input id="reference" value={referenceNo} onChange={(event) => setReferenceNo(event.target.value)} />
+                      </div>
+                    )
+                  )}
+                </div>
+
+                {soleAccount && (
+                  <p className="account-note">
+                    Money goes to <strong>{soleAccount.label}</strong>
+                    {soleAccount.accountNumber ? ` · ${soleAccount.accountNumber}` : ''}
+                  </p>
+                )}
+
+                {needsAccountChoice && (
+                  <div>
+                    <label htmlFor="account">Which account received it?</label>
+                    <select
+                      id="account"
+                      value={accountId}
+                      onChange={(event) => setAccountId(event.target.value === '' ? '' : Number(event.target.value))}
+                    >
+                      <option value="">Choose an account…</option>
+                      {accounts.map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {account.label}
+                          {account.accountNumber ? ` · ${account.accountNumber}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {accountId === '' && <p className="muted field-hint">Required — {accounts.length} accounts are configured.</p>}
+                  </div>
+                )}
+
+                {/* Cash and card both get "Exact amount"; only cash gets
+                    the notes a customer actually hands over. */}
+                <div className="row quick-amounts">
+                  <button onClick={() => setAmountMinor(balanceMinor)}>Exact amount</button>
+                  {isCash && <QuickCash total={balanceMinor} onPick={setAmountMinor} />}
+                </div>
+
+                <p className="muted field-hint" style={{ marginTop: 0 }}>
+                  {isCash
+                    ? 'Overpaying is fine — the change due is shown above and printed on the receipt.'
+                    : 'Partial payments are fine — the order stays awaiting payment until they add up to the total.'}
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* What is being paid for. The same lines and totals the bill
+              printed, from the order this screen already loaded — never
+              a second calculation. */}
+          <BillPreview detail={detail} />
+        </div>
       </div>
 
-      <button className="ghost" onClick={() => navigate('/')}>
-        Back to floor
-      </button>
+      <aside className="payment-rail">
+        <div>
+          <p className="rail-kicker">Amount due</p>
+          <p className="rail-amount">
+            <Money minor={balanceMinor} />
+          </p>
+          <hr className="rail-rule" />
+          <dl className="rail-meta">
+            <RailRow label="Method" value={option?.displayName ?? '—'} />
+            <RailRow
+              label="Account"
+              value={option === undefined ? '—' : (chosenAccount?.label ?? (option.requiresAccount ? 'Not chosen' : 'Cash drawer'))}
+            />
+            <RailRow label="Order type" value={orderTypeLabel(detail.orderType)} />
+            <RailRow label="Waiter" value={waiterName ?? '—'} />
+            {isCash && <RailRow label="Change due" value={<Money minor={changeIfCash} />} accent />}
+          </dl>
+        </div>
+
+        <div className="col rail-actions">
+          <button className="primary big" disabled={!canRecord} onClick={submit}>
+            Record payment
+          </button>
+          <button className="rail-secondary" onClick={() => navigate('/')}>
+            Back to floor
+          </button>
+        </div>
+      </aside>
     </div>
+  );
+}
+
+/** What choosing a method will involve, in the words the cashier needs:
+ * cash needs nothing, everything else needs an account it may or may not
+ * have. */
+function methodHint(option: PaymentOption): string {
+  if (option.blockedReason) return 'No account configured';
+  if (!option.requiresAccount) return 'Drawer · always available';
+  return option.accounts.length === 1 ? '1 account' : `${option.accounts.length} accounts`;
+}
+
+function orderTypeLabel(orderType: string): string {
+  return orderType === 'dine_in' ? 'Dine-in' : orderType === 'takeaway' ? 'Takeaway' : 'Delivery';
+}
+
+function RailRow({ label, value, accent = false }: { label: string; value: React.ReactNode; accent?: boolean }): JSX.Element {
+  return (
+    <div className="rail-row">
+      <dt>{label}</dt>
+      <dd className={accent ? 'accent' : ''}>{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * The bill as it stands, beside the money being taken for it.
+ *
+ * Every figure comes from the order this screen already fetched — the
+ * same snapshot the bill printed from. Voided lines are left out
+ * because they are not being charged for; the totals below already
+ * exclude them.
+ */
+function BillPreview({ detail }: { detail: OrderDetail }): JSX.Element {
+  const lines = detail.lines.filter((line) => !line.voided);
+
+  return (
+    <aside className="card bill-preview">
+      <p className="figure-label">Bill preview</p>
+
+      {lines.map((line) => (
+        <div key={line.id} className="bill-preview-line">
+          <span>
+            {line.qty} × {line.itemName}
+            {line.modifiers.length > 0 && <span className="muted"> · {line.modifiers.map((m) => m.modifierName).join(', ')}</span>}
+          </span>
+          <Money minor={line.netSalesMinor} />
+        </div>
+      ))}
+
+      <div className="total-line">
+        <span>Subtotal</span>
+        <Money minor={detail.subtotalMinor} />
+      </div>
+      {detail.orderDiscountMinor > 0 && (
+        <div className="total-line muted">
+          <span>Discount</span>
+          <Money minor={detail.orderDiscountMinor} />
+        </div>
+      )}
+      {detail.taxMinor > 0 && (
+        <div className="total-line muted">
+          <span>Tax</span>
+          <Money minor={detail.taxMinor} />
+        </div>
+      )}
+      {detail.serviceChargeMinor > 0 && (
+        <div className="total-line muted">
+          <span>Service charge</span>
+          <Money minor={detail.serviceChargeMinor} />
+        </div>
+      )}
+      {/* Totals are worked out when the bill is finalised, so an order
+          that has not been billed has none — and the server refuses to
+          take money for it. Printing "Total Rs 0.00" under a real
+          subtotal would read as a bug rather than as the truth. */}
+      {detail.billedAt === null ? (
+        <p className="muted field-hint" style={{ marginTop: 4 }}>
+          Not billed yet — the total is worked out when the bill is printed.
+        </p>
+      ) : (
+        <>
+          <div className="total-line grand">
+            <span>Total</span>
+            <Money minor={detail.totalMinor} />
+          </div>
+          {detail.paidMinor > 0 && (
+            <div className="total-line muted">
+              <span>Already paid</span>
+              <Money minor={detail.paidMinor} />
+            </div>
+          )}
+        </>
+      )}
+    </aside>
   );
 }
 
