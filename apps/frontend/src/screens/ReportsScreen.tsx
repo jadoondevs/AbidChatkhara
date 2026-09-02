@@ -72,9 +72,12 @@ export function ReportsScreen(): JSX.Element {
 
   return (
     <div className="col">
-      <h1 style={{ margin: 0 }}>Reports</h1>
+      <div>
+        <p className="page-kicker">Reporting</p>
+        <h1 style={{ margin: 0 }}>Reports</h1>
+      </div>
 
-      <div className="tabs">
+      <div className="tabs tabs-underline">
         {REPORTS.map((candidate) => (
           <button key={candidate.key} className={candidate.key === active ? 'active' : ''} onClick={() => setActive(candidate.key)}>
             {candidate.label}

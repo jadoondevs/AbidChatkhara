@@ -6,27 +6,66 @@
  * least 48px tall — the smallest reliable touch target — and most order-
  * entry controls are considerably larger, since "speed of order entry
  * matters more than visual design".
+ *
+ * The look is the Modernist design system: flat and architectural, set
+ * in Archivo, near-mono red on a light ground, zero corner radius, and
+ * strong 2px rules doing the organising that shadows and rounded cards
+ * used to do. Nothing floats and nothing is decorated — alignment and
+ * the strength of the dividers carry the structure, and the accent is
+ * spent only on the primary action and small emphasis.
+ *
+ * Every token below comes from that system. Nothing here should hard-
+ * code a hex the variables already carry.
  */
 
 :root {
-  --bg: #0f172a;
-  --surface: #1e293b;
-  --surface-2: #334155;
-  --border: #475569;
-  --text: #f1f5f9;
-  --muted: #94a3b8;
-  --accent: #38bdf8;
-  --accent-strong: #0284c7;
-  --danger: #f87171;
-  --danger-strong: #b91c1c;
-  --success: #4ade80;
-  --warn: #fbbf24;
-  --staff-meal: #a78bfa;
+  /* — the system's own roles — */
+  --bg: #eae7e7; /* neutral-200: the page ground */
+  --surface: #f8f4f4; /* neutral-100: panels and cards */
+  --surface-2: #ffffff; /* the raised box inside a panel */
+  --border: #d7d3d3; /* neutral-300: a quiet edge */
+  --divider: rgba(32, 30, 29, 0.4); /* the system's structural rule */
+  --text: #201e1d;
+  --muted: #605d5d; /* neutral-700 — dark enough to read as body copy */
+  --accent: #ec3013;
+  --accent-strong: #dd2b0f; /* accent-600: hover */
+  --accent-press: #ae1800; /* accent-700: pressed, and accent text */
+  --accent-tint: #fff2ef; /* accent-100 */
+  --accent-tint-2: #ffe0d9; /* accent-200 */
+
+  /* — the POS's own voices, layered on the system —
+     ink is the chrome (header, payment aside), gold is "look at this,
+     nothing is wrong", green is settled and amber is pending. They are
+     roles, not decoration: each one answers a question a cashier asks
+     across the counter. */
+  --ink: #17150f;
+  --ink-2: #262219;
+  --ink-line: #3a3327;
+  --ink-text: #efece7;
+  --ink-muted: #a49c90;
+  --gold: #c9a227;
+  --gold-100: #f6edd0;
+  --gold-700: #7d6413;
+  --success: #1f7a3d;
+  --success-100: #dff0e4;
+  --warn: #a86a00;
+  --warn-100: #fbeed2;
+  --danger: #ae1800;
+  --danger-strong: #ec3013;
+  --staff-meal: #4d170e; /* accent-900 — a staff meal is still the house's */
+  --staff-meal-100: #ffe0d9;
 
   --tap: 48px;
-  --radius: 10px;
+  --radius: 0px; /* the system rounds nothing, on purpose */
 
-  color-scheme: dark;
+  --shadow-sm: 0 1px 2px rgba(45, 43, 43, 0.14);
+  --shadow-md: 0 3px 10px rgba(45, 43, 43, 0.16);
+  --shadow-lg: 0 12px 32px rgba(45, 43, 43, 0.22);
+
+  --font-heading: 'Archivo Variable', 'Archivo', system-ui, sans-serif;
+  --font-body: 'Archivo Variable', 'Archivo', system-ui, sans-serif;
+
+  color-scheme: light;
 }
 
 * {
@@ -43,26 +82,117 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  font-size: 16px;
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
   -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
 }
 
+/* Headings are the system's one display voice: Archivo 800, tight
+   tracking, flush left. Sizes are fixed by the scale — density moves
+   spacing, never type size. */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-heading);
+  font-weight: 800;
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+  margin: 0 0 8px;
+}
+
+h1 {
+  font-size: 34px;
+}
+
+h2 {
+  font-size: 25px;
+}
+
+h3 {
+  font-size: 19px;
+}
+
+h4 {
+  font-size: 16px;
+}
+
+/* The system's uppercase kicker: a small, letterspaced label that names
+   what a block is before the block says it. */
+h5,
+h6 {
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+p {
+  margin: 0 0 12px;
+}
+
+a {
+  color: var(--accent-press);
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  color: var(--accent);
+}
+
+:focus {
+  outline: none;
+}
+
+/* Keyboard focus is themed, never the browser's blue. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--accent-tint-2);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #bab6b6;
+}
+
+/* ---------------------------------------------------------------------
+   Controls
+   --------------------------------------------------------------------- */
+
 button {
-  font: inherit;
-  color: inherit;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
   min-height: var(--tap);
-  padding: 0 18px;
-  border: 1px solid var(--border);
+  padding: 0 16px;
+  border: 1px solid var(--divider);
   border-radius: var(--radius);
   background: var(--surface-2);
   cursor: pointer;
   touch-action: manipulation;
 }
 
+button:hover {
+  background: rgba(32, 30, 29, 0.06);
+}
+
 button:active {
-  filter: brightness(1.25);
+  background: rgba(32, 30, 29, 0.13);
 }
 
 button:disabled {
@@ -70,48 +200,112 @@ button:disabled {
   cursor: not-allowed;
 }
 
-button.primary {
-  background: var(--accent-strong);
-  border-color: var(--accent);
-  font-weight: 600;
+button:disabled:hover {
+  background: var(--surface-2);
 }
 
+/* The one solid accent on the screen. Everything else is ink on ground,
+   which is what lets a red button mean "this is the action". */
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+button.primary:hover {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+button.primary:active {
+  background: var(--accent-press);
+  border-color: var(--accent-press);
+}
+
+button.primary:disabled:hover {
+  background: var(--accent);
+}
+
+/* Destructive is outlined, not filled: a solid red would compete with
+   the primary action for the one accent the page is allowed to spend. */
 button.danger {
-  background: var(--danger-strong);
-  border-color: var(--danger);
+  background: var(--surface-2);
+  border-color: var(--accent);
+  color: var(--accent-press);
+}
+
+button.danger:hover {
+  background: var(--accent-tint);
 }
 
 button.ghost {
   background: transparent;
+  border-color: transparent;
+  color: var(--accent-press);
+}
+
+button.ghost:hover {
+  background: var(--accent-tint);
 }
 
 button.big {
-  min-height: 64px;
-  font-size: 18px;
-  font-weight: 600;
+  min-height: 56px;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
 }
 
 input,
 select,
 textarea {
-  font: inherit;
-  color: inherit;
+  font-family: var(--font-body);
+  font-size: 15px;
+  color: var(--text);
+  caret-color: var(--accent);
   min-height: var(--tap);
   padding: 0 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--divider);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: var(--surface-2);
   width: 100%;
 }
 
+textarea {
+  padding: 10px 12px;
+  line-height: 1.5;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: rgba(32, 30, 29, 0.6);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  border-color: var(--accent);
+  outline-offset: 0;
+}
+
+/* Sentence case, not shouted: the uppercase voice belongs to kickers and
+   column headings, and a form with twenty uppercase labels has no
+   hierarchy left to give the ones that matter. */
 label {
   display: block;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--muted);
-  margin-bottom: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  margin-bottom: 5px;
+  letter-spacing: 0;
+  text-transform: none;
 }
+
+/* ---------------------------------------------------------------------
+   Shell
+   --------------------------------------------------------------------- */
 
 .app {
   display: flex;
@@ -121,11 +315,13 @@ label {
 
 .topbar {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  align-items: stretch;
+  gap: 0;
+  height: 60px;
+  padding: 0;
+  background: var(--ink);
+  color: var(--ink-text);
+  border-bottom: 3px solid var(--accent);
   flex: 0 0 auto;
 }
 
@@ -133,54 +329,216 @@ label {
   flex: 1;
 }
 
-.topbar nav {
+/* The mark, the name and what this thing is — the one place the
+   restaurant is named, taken from its own settings. */
+.brand-block {
   display: flex;
-  gap: 4px;
   align-items: center;
+  gap: 11px;
+  padding: 0 20px 0 16px;
+  border-right: 1px solid var(--ink-2);
+  flex: 0 0 auto;
   min-width: 0;
 }
 
-/* Below about 1400px the brand, the new-order button, nine nav links and
-   the signed-in user do not fit on one line. Rather than let the nav
-   scroll — which silently hides Settings on a 1280px till, and an admin
-   cannot click what they cannot see — the nav drops to its own full
-   width row. Every destination stays reachable at every width. */
-@media (max-width: 1400px) {
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+  min-width: 0;
+}
+
+.topbar .brand {
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.brand-sub {
+  font-size: 9.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+.topbar nav {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.topbar a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 13px;
+  color: var(--ink-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  box-shadow: inset 0 -3px 0 transparent;
+}
+
+.topbar a:hover {
+  color: var(--ink-text);
+  background: var(--ink-2);
+}
+
+/* The active destination is lit from below by the same red as the rule
+   under the header — one accent, used twice, saying "you are here". */
+.topbar a.active {
+  color: #fff;
+  background: var(--ink-2);
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+
+.nav-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 12px 6px;
+  background: var(--ink-2);
+  flex: 0 0 auto;
+}
+
+/* New order is reachable from every screen, not just the floor: a
+   customer arriving while a manager is reading a report is the normal
+   case, not an exception. It sits at the head of the right-hand group,
+   in the same place on every screen. */
+.topbar .new-order-button {
+  flex: 0 0 auto;
+  align-self: center;
+  white-space: nowrap;
+  height: 40px;
+  min-height: 40px;
+  margin-right: 10px;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.topbar .who {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+  white-space: nowrap;
+  padding: 0 14px;
+  border-left: 1px solid var(--ink-2);
+  flex: 0 0 auto;
+  color: var(--ink-text);
+  font-size: 13px;
+  line-height: 1.15;
+}
+
+.who-name {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 13.5px;
+}
+
+.who-role {
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.topbar .sign-out {
+  flex: 0 0 auto;
+  align-self: center;
+  white-space: nowrap;
+  height: 40px;
+  min-height: 40px;
+  margin-right: 12px;
+  padding: 0 14px;
+  background: transparent;
+  border: 1px solid #4a4234;
+  color: var(--ink-text);
+  font-size: 13px;
+}
+
+.topbar .sign-out:hover {
+  background: var(--ink-2);
+}
+
+/* Below about 1700px the brand, nine nav links, the new-order button and
+   the signed-in user do not fit on one line — the design's nav is set
+   in uppercase Archivo, which is considerably wider than the sentence
+   case it replaced, and this app carries two more destinations than the
+   mock. Rather than let the nav scroll or slide under the buttons on
+   its right — which silently hides Settings on a 1500px till, and an
+   admin cannot click what they cannot see — the nav drops to its own
+   full width row. Every destination stays reachable at every width. */
+@media (max-width: 1700px) {
   .topbar {
     flex-wrap: wrap;
+    height: auto;
   }
 
   .topbar nav {
     order: 10;
     flex: 1 0 100%;
     flex-wrap: wrap;
+    border-top: 1px solid var(--ink-2);
   }
-}
 
-.topbar a {
-  white-space: nowrap;
-}
+  .topbar a {
+    min-height: var(--tap);
+  }
 
-.topbar a {
-  color: var(--muted);
-  text-decoration: none;
-  padding: 10px 12px;
-  border-radius: var(--radius);
-  min-height: var(--tap);
-  display: inline-flex;
-  align-items: center;
-}
-
-.topbar a.active {
-  color: var(--text);
-  background: var(--surface-2);
+  .brand-block {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
 }
 
 .screen {
   flex: 1 1 auto;
   overflow: auto;
-  padding: 16px;
+  padding: 20px 24px;
 }
+
+/* ---------------------------------------------------------------------
+   Page headers — a red kicker naming the context, then the title.
+   --------------------------------------------------------------------- */
+
+.page-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 2px;
+}
+
+/* ---------------------------------------------------------------------
+   Layout primitives
+   --------------------------------------------------------------------- */
 
 .row {
   display: flex;
@@ -199,11 +557,14 @@ label {
   gap: 12px;
 }
 
+/* A card is a surface with a strong edge, not a floating rounded box:
+   the system organises with rules, so the border does the work a shadow
+   used to. */
 .card {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 2px solid var(--divider);
   border-radius: var(--radius);
-  padding: 14px;
+  padding: 16px 18px;
 }
 
 .card h2,
@@ -220,22 +581,31 @@ label {
 }
 
 .error {
-  background: #7f1d1d;
-  border: 1px solid var(--danger);
+  background: var(--accent-tint);
+  border: 1px solid var(--accent);
+  border-left: 4px solid var(--accent);
   border-radius: var(--radius);
-  padding: 12px;
+  color: var(--accent-press);
+  font-weight: 600;
+  padding: 12px 14px;
   margin-bottom: 12px;
 }
 
+/* A staff meal is not a sale, and the banner saying so is the loudest
+   non-error thing on the screen — gold, because nothing is wrong. */
 .banner {
-  background: var(--staff-meal);
-  color: #1e1b4b;
+  background: var(--gold-100);
+  border-left: 4px solid var(--gold);
+  color: var(--gold-700);
   font-weight: 700;
   padding: 12px 16px;
   border-radius: var(--radius);
   margin-bottom: 12px;
 }
 
+/* ---------------------------------------------------------------------
+   Menu grid
+   --------------------------------------------------------------------- */
 
 .item-grid {
   display: grid;
@@ -251,38 +621,148 @@ label {
   justify-content: center;
   gap: 6px;
   text-align: left;
-  padding: 12px;
+  padding: 12px 14px;
 }
+
+.item-tile {
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 4px;
+  text-align: left;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--divider);
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.item-tile:hover {
+  background: var(--surface);
+  border-color: var(--text);
+}
+
+/* The price is the one red thing on a tile: it is what the cashier is
+   actually reading when they scan the grid. */
+.item-tile .mono {
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 17px;
+  color: var(--accent-press);
+}
+
+/* In the flow, not absolutely positioned: an "options" badge floating
+   over the corner sat on top of any item name long enough to reach it,
+   which is most of them. */
+.tile-hint {
+  margin-top: auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------
+   Tabs — a segmented control with a hard edge, active filled in ink.
+   --------------------------------------------------------------------- */
 
 .tabs {
   display: flex;
-  gap: 8px;
+  gap: 0;
   flex-wrap: wrap;
   margin-bottom: 12px;
 }
 
-.tabs button.active {
-  background: var(--accent-strong);
-  border-color: var(--accent);
+.tabs button {
+  min-height: 42px;
+  padding: 0 16px;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 700;
+  border-radius: var(--radius);
+  margin-left: -1px;
 }
+
+.tabs button:first-child {
+  margin-left: 0;
+}
+
+.tabs button.active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+  position: relative;
+  z-index: 1;
+}
+
+.tabs button.active:hover {
+  background: var(--ink-2);
+}
+
+/* Section switchers — Settings and Reports — are underline tabs rather
+   than a segmented block: they change the whole page beneath them, and
+   a filled pill would read as an action. */
+.tabs-underline {
+  gap: 0;
+  border-bottom: 2px solid var(--divider);
+  margin-bottom: 18px;
+}
+
+.tabs-underline button {
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  margin: 0 6px -2px 0;
+  padding: 0 10px 8px;
+  min-height: 38px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.tabs-underline button:hover {
+  background: transparent;
+  color: var(--text);
+}
+
+.tabs-underline button.active {
+  background: transparent;
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tabs-underline button.active:hover {
+  background: transparent;
+}
+
+/* ---------------------------------------------------------------------
+   Tables
+   --------------------------------------------------------------------- */
 
 table {
   width: 100%;
   border-collapse: collapse;
+  font-size: 14px;
 }
 
 th,
 td {
   text-align: left;
-  padding: 10px 8px;
-  border-bottom: 1px solid var(--border);
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--divider);
 }
 
 th {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
+  border-bottom: 2px solid var(--divider);
 }
 
 td.num,
@@ -291,10 +771,18 @@ th.num {
   font-variant-numeric: tabular-nums;
 }
 
+tbody tr:hover {
+  background: rgba(32, 30, 29, 0.04);
+}
+
+/* ---------------------------------------------------------------------
+   Dialogs
+   --------------------------------------------------------------------- */
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(2, 6, 23, 0.75);
+  background: rgba(45, 43, 43, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -304,13 +792,31 @@ th.num {
 
 .modal {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 2px solid var(--divider);
   border-radius: var(--radius);
-  padding: 20px;
+  box-shadow: var(--shadow-lg);
+  padding: 20px 22px;
   max-width: 560px;
   width: 100%;
   max-height: 100%;
   overflow: auto;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--divider);
+}
+
+/* A dialog that carries its own heading needs the close control, not a
+   band of empty space above the content. */
+.modal-header-bare {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .split {
@@ -326,11 +832,16 @@ th.num {
   }
 }
 
+/* ---------------------------------------------------------------------
+   Money
+   --------------------------------------------------------------------- */
+
 .total-line {
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  padding: 6px 0;
+  padding: 4px 0;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -339,61 +850,195 @@ th.num {
    that has to be. The label wraps instead. */
 .total-line .mono {
   white-space: nowrap;
+  font-weight: 600;
 }
 
 .total-line.grand {
-  font-size: 22px;
-  font-weight: 700;
-  border-top: 1px solid var(--border);
-  margin-top: 8px;
-  padding-top: 12px;
+  align-items: baseline;
+  font-family: var(--font-heading);
+  font-size: 16px;
+  font-weight: 800;
+  border-top: 2px solid var(--divider);
+  margin-top: 9px;
+  padding-top: 10px;
 }
 
-.pill {
-  display: inline-block;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+/* Only the LABEL is shouted. Uppercasing the whole line turns the
+   currency into "RS 880.00", and money must render exactly as it was
+   formatted — that is the one thing on this screen that cannot be
+   restyled into something the cashier has to decode. */
+.total-line.grand > :first-child {
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
-.pill.staff {
-  background: var(--staff-meal);
-  color: #1e1b4b;
-  border-color: transparent;
-  font-weight: 700;
+.total-line.grand .mono {
+  font-size: 28px;
+  letter-spacing: -0.02em;
+  line-height: 1;
 }
 
-.pill.warn {
-  background: var(--warn);
-  color: #451a03;
-  border-color: transparent;
-  font-weight: 700;
+.total-line.muted {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 2px 0;
 }
 
 /* ---------------------------------------------------------------------
-   Sign in
+   Pills — the system's tags: square, uppercase, tinted from a ramp.
+   --------------------------------------------------------------------- */
+
+.pill {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: var(--radius);
+  font-family: var(--font-heading);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: #eae7e7;
+  border: 0;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pill.staff {
+  background: var(--staff-meal-100);
+  color: var(--staff-meal);
+}
+
+.pill.warn {
+  background: var(--warn-100);
+  color: var(--warn);
+}
+
+/* A bill that has been presented but not settled is the one status on
+   these screens that needs somebody to do something, so it gets the
+   accent. Being open is merely in progress (amber), and being voided is
+   finished history (the neutral default) — neither is a call to act. */
+.pill.part-paid {
+  background: var(--accent-tint-2);
+  color: var(--accent-press);
+}
+
+.pill.ok {
+  background: var(--success-100);
+  color: var(--success);
+}
+
+/* ---------------------------------------------------------------------
+   Sign in — the system's poster split: an ink field carrying the name,
+   and the form on the light ground beside it.
    --------------------------------------------------------------------- */
 
 .login-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 520px;
+  align-items: stretch;
+  padding: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .login-main {
+    grid-template-columns: 1fr;
+  }
+
+  .login-poster {
+    display: none;
+  }
+}
+
+.login-poster {
+  background: var(--ink);
+  color: var(--ink-text);
+  padding: 56px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 32px;
+}
+
+.login-poster-brand {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 14px;
+}
+
+.login-poster-brand .brand-mark {
+  width: 52px;
+  height: 52px;
+  font-size: 22px;
+}
+
+.login-poster-name {
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+}
+
+.login-rule {
+  height: 3px;
+  width: 120px;
+  background: var(--accent);
+  margin-bottom: 28px;
+}
+
+.login-statement {
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 52px;
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.login-blurb {
+  font-size: 16px;
+  line-height: 1.6;
+  color: #b7b1a8;
+  margin: 20px 0 0;
+  max-width: 420px;
+}
+
+.login-meta {
+  display: flex;
+  gap: 32px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8d877f;
 }
 
 .login-card {
   width: 100%;
-  max-width: 380px;
+  max-width: none;
+  background: var(--surface);
+  border-left: 2px solid var(--divider);
+  padding: 56px 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  overflow: auto;
 }
 
 .login-title {
   margin: 0;
-  font-size: 26px;
+  font-size: 30px;
 }
 
 .login-subtitle {
-  margin: 4px 0 16px;
+  margin: 4px 0 8px;
+}
+
+.login-card input {
+  min-height: 52px;
+  font-size: 17px;
+  background: var(--surface-2);
 }
 
 .password-field {
@@ -410,51 +1055,7 @@ th.num {
 .password-toggle {
   flex: 0 0 auto;
   min-width: 64px;
-}
-
-/* ---------------------------------------------------------------------
-   Header
-   --------------------------------------------------------------------- */
-
-.topbar .brand {
-  font-size: 16px;
-  white-space: nowrap;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 0 0 auto;
-}
-
-/* New order sits beside the brand, before the nav, so it is in the same
-   place on every screen and never scrolls out of reach. */
-.new-order-button {
-  flex: 0 0 auto;
-  white-space: nowrap;
-  font-weight: 700;
-}
-
-.nav-divider {
-  width: 1px;
-  align-self: stretch;
-  margin: 4px 4px;
-  background: var(--border);
-}
-
-.topbar .who {
-  white-space: nowrap;
-  font-size: 12px;
-  flex: 0 0 auto;
-}
-
-.topbar .sign-out {
-  flex: 0 0 auto;
-  white-space: nowrap;
-  padding: 8px 12px;
-  min-height: 40px;
-}
-
-.topbar {
-  gap: 8px;
+  min-height: 52px;
 }
 
 /* ---------------------------------------------------------------------
@@ -483,28 +1084,32 @@ th.num {
 
 .floor-list-header h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: 17px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 .floor-list-header .count {
   margin-left: auto;
+  font-family: var(--font-heading);
   font-variant-numeric: tabular-nums;
-  font-weight: 700;
+  font-weight: 800;
+  font-size: 17px;
   color: var(--muted);
 }
 
 /* A colour per column, so "which list is this" is answerable at a
    glance from across the counter rather than by reading the heading. */
 .floor-list-open {
-  border-top: 3px solid var(--accent);
+  border-top: 4px solid var(--accent);
 }
 
 .floor-list-awaiting {
-  border-top: 3px solid var(--warn);
+  border-top: 4px solid var(--gold);
 }
 
 .floor-list-done {
-  border-top: 3px solid var(--success);
+  border-top: 4px solid var(--success);
 }
 
 .order-row {
@@ -514,7 +1119,10 @@ th.num {
   gap: 12px;
   width: 100%;
   min-height: 56px;
+  padding: 8px 14px;
   text-align: left;
+  font-weight: 400;
+  font-size: 14px;
 }
 
 .order-row-main,
@@ -527,51 +1135,52 @@ th.num {
 
 .order-row-main strong {
   white-space: nowrap;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.order-row-money .mono {
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
 }
 
 .order-row-id {
   font-size: 12px;
 }
 
-.pill.part-paid {
-  background: var(--warn);
-  color: #451a03;
-  border-color: transparent;
-  font-weight: 700;
+/* An empty order gets a way off the floor. The delete control is its
+   own button beside the row, never inside it: a row is one big click
+   target and a mis-tap must not remove anything. */
+.order-row-wrap {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
 }
 
-.pill.ok {
-  background: var(--success);
-  color: #052e16;
-  border-color: transparent;
-  font-weight: 700;
+.order-row-wrap .order-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.order-row-delete {
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.order-row-delete:hover {
+  color: var(--accent-press);
+  border-color: var(--accent);
+  background: var(--accent-tint);
 }
 
 /* ---------------------------------------------------------------------
    Order screen
    --------------------------------------------------------------------- */
-
-.item-tile {
-  min-height: 96px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-start;
-  gap: 4px;
-  text-align: left;
-  padding: 12px;
-}
-
-/* In the flow, not absolutely positioned: an "options" badge floating
-   over the corner sat on top of any item name long enough to reach it,
-   which is most of them. */
-.tile-hint {
-  margin-top: auto;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-}
 
 .running-bill {
   height: 100%;
@@ -595,13 +1204,15 @@ th.num {
   align-items: center;
   gap: 6px 10px;
   padding: 10px 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--divider);
 }
 
 .bill-line-name {
   grid-area: name;
   min-width: 0;
-  font-weight: 600;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 15px;
 }
 
 .bill-line .qty-input {
@@ -611,33 +1222,30 @@ th.num {
 .bill-line-money {
   grid-area: money;
   text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.bill-line-remove {
-  grid-area: remove;
-}
-
-.bill-line-modifiers,
-.line-modifiers {
-  font-size: 12px;
-}
-
-.bill-line-money {
+  font-family: var(--font-heading);
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .bill-line-remove {
+  grid-area: remove;
   padding: 6px 10px;
   min-height: 36px;
   font-size: 13px;
   white-space: nowrap;
 }
 
+.bill-line-modifiers,
+.line-modifiers {
+  font-size: 12px;
+  color: var(--gold-700);
+}
+
 .bill-totals {
   margin-top: auto;
   padding-top: 12px;
+  border-top: 2px solid var(--divider);
 }
 
 /* A quantity that can be typed, not only stepped. */
@@ -660,7 +1268,28 @@ th.num {
   min-height: 36px;
   padding: 4px 6px;
   text-align: center;
+  font-family: var(--font-heading);
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+
+/* Who a takeaway or delivery is for, above the item grid. */
+.customer-bar {
+  align-items: flex-end;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+/* A kitchen instruction, under the line it belongs to. */
+.bill-line-note {
+  font-size: 12px;
+  color: var(--gold-700);
+}
+
+.bill-line-note-button {
+  font-size: 12px;
+  padding: 2px 8px;
+  min-height: 28px;
 }
 
 /* ---------------------------------------------------------------------
@@ -669,13 +1298,20 @@ th.num {
 
 .cash-summary {
   background: var(--surface-2);
+  border: 2px solid var(--divider);
   border-radius: var(--radius);
-  padding: 10px 14px;
+  padding: 14px 16px;
 }
 
 .change-due {
-  font-size: 26px;
-  font-weight: 700;
+  font-family: var(--font-heading);
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.settled-card {
+  max-width: 560px;
 }
 
 /* ---------------------------------------------------------------------
@@ -683,18 +1319,19 @@ th.num {
    --------------------------------------------------------------------- */
 
 .settings-panel {
-  max-width: 720px;
+  max-width: 760px;
 }
 
 /* Wider than the other panels: an account row carries a name, a full
    account number, a state and two actions. */
 .accounts-panel {
-  max-width: 900px;
+  max-width: 940px;
 }
 
 .field-hint {
   font-size: 12px;
-  margin: 4px 0 0;
+  color: var(--muted);
+  margin: 5px 0 0;
 }
 
 .checkbox-grid {
@@ -706,10 +1343,11 @@ th.num {
 .checkbox-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   text-transform: none;
   letter-spacing: normal;
   font-size: 14px;
+  font-weight: 400;
   color: var(--text);
   margin: 0;
 }
@@ -717,6 +1355,7 @@ th.num {
 .checkbox-row input {
   width: auto;
   min-height: 0;
+  accent-color: var(--accent);
 }
 
 .report-filter .tabs {
@@ -741,29 +1380,24 @@ th.num {
 }
 
 .z-report .total-line.grand {
-  font-size: 19px;
+  font-size: 15px;
+}
+
+.z-report .total-line.grand .mono {
+  font-size: 22px;
 }
 
 .z-report section h4 {
   margin: 16px 0 4px;
-  font-size: 13px;
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.09em;
   color: var(--muted);
 }
 
 .z-report section:first-of-type h4 {
   margin-top: 0;
-}
-
-.total-line.muted {
-  font-size: 13px;
-  color: var(--muted);
-  padding: 2px 0;
-}
-
-.settled-card {
-  max-width: 560px;
 }
 
 /* ---------------------------------------------------------------------
@@ -772,20 +1406,31 @@ th.num {
 
 /* A payment that cannot be taken, and why. Deliberately not styled as
    an error: nothing has gone wrong — an account has not been set up
-   yet, and the notice says who fixes it and where. */
+   yet, and the notice says who fixes it and where. Gold is the system's
+   "read this" without the alarm. */
 .blocked-notice {
-  border-left: 3px solid var(--warn);
-  background: var(--surface-2);
+  border-left: 4px solid var(--gold);
+  background: var(--gold-100);
   border-radius: var(--radius);
-  padding: 10px 14px;
+  padding: 12px 16px;
+  color: var(--gold-700);
+}
+
+.blocked-notice strong {
+  font-family: var(--font-heading);
+  font-weight: 800;
 }
 
 .blocked-notice.info {
   border-left-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent-press);
 }
 
 .blocked-notice.ok {
   border-left-color: var(--success);
+  background: var(--success-100);
+  color: var(--success);
 }
 
 .blocked-notice p {
@@ -794,25 +1439,27 @@ th.num {
 }
 
 .method-blocked {
-  font-size: 11px;
+  font-size: 10.5px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  opacity: 0.75;
+  letter-spacing: 0.1em;
+  color: var(--muted);
 }
 
 /* Where the money is going, stated plainly when there is only one
    account and therefore nothing to choose. */
 .account-note {
   margin: 0;
-  padding: 8px 12px;
+  padding: 10px 14px;
   background: var(--surface-2);
+  border: 1px solid var(--divider);
   border-radius: var(--radius);
   font-size: 14px;
 }
 
 .account-group {
-  border-top: 1px solid var(--border);
-  padding-top: 14px;
+  border-top: 2px solid var(--divider);
+  padding-top: 16px;
 }
 
 /* An account row is a name, a number, a state and two actions. At the
@@ -829,6 +1476,7 @@ th.num {
 
 .account-group td:nth-child(2) {
   word-break: break-all;
+  font-variant-numeric: tabular-nums;
 }
 
 .account-group:first-of-type {
@@ -862,16 +1510,22 @@ th.num {
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--border);
+  padding: 5px 0;
+  font-size: 14px;
+  border-bottom: 1px solid var(--divider);
 }
 
 .detail-field:last-child {
   border-bottom: none;
 }
 
+.detail-field > span:first-child {
+  color: var(--muted);
+}
+
 .detail-field > span:last-child {
   text-align: right;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -888,21 +1542,22 @@ th.num {
    two separate events, and running them together loses which
    reference belonged to which. */
 .payment-card {
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
+  border: 1px solid var(--divider);
+  border-left: 4px solid var(--success);
   border-radius: var(--radius);
   background: var(--surface-2);
-  padding: 10px 12px;
+  padding: 12px 14px;
 }
 
 /* A refund is money going the other way and must not be mistaken for
    a payment at a glance. */
 .payment-card.refund {
-  border-left-color: var(--danger);
+  border-left-color: var(--accent);
 }
 
 .payment-card-details {
   font-size: 13px;
+  color: var(--muted);
   margin-top: 6px;
   display: grid;
   gap: 2px;
@@ -919,9 +1574,10 @@ th.num {
    are still here, and the two or three things a manager does to
    them. */
 .partner-row {
-  border: 1px solid var(--border);
+  border: 1px solid var(--divider);
   border-radius: var(--radius);
-  padding: 8px 10px;
+  background: var(--surface-2);
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -929,11 +1585,14 @@ th.num {
 
 .partner-row.selected {
   border-color: var(--accent);
+  border-left-width: 4px;
+  background: var(--accent-tint);
 }
 
 .partner-row-actions button {
   font-size: 13px;
-  padding: 4px 8px;
+  padding: 4px 10px;
+  min-height: 34px;
 }
 
 /* A name that opens a record reads as a name, not as a button — but it
@@ -942,9 +1601,11 @@ button.link-button {
   background: none;
   border: none;
   padding: 0;
+  min-height: 0;
   color: var(--text);
-  font: inherit;
-  font-weight: 600;
+  font-family: var(--font-heading);
+  font-size: inherit;
+  font-weight: 700;
   cursor: pointer;
   text-decoration: underline;
   text-decoration-color: var(--border);
@@ -952,35 +1613,20 @@ button.link-button {
 }
 
 button.link-button:hover {
+  background: none;
   text-decoration-color: var(--accent);
-}
-
-/* Who a takeaway or delivery is for, above the item grid. */
-.customer-bar {
-  align-items: flex-end;
-  gap: 10px;
-  padding: 10px 12px;
-}
-
-/* A kitchen instruction, under the line it belongs to. */
-.bill-line-note {
-  font-size: 12px;
-  font-style: italic;
-}
-
-.bill-line-note-button {
-  font-size: 12px;
-  padding: 2px 6px;
+  color: var(--accent-press);
 }
 
 /* A pointer to the configuration that lives on its own screens. */
 .elsewhere-note {
   margin: 0;
   font-size: 13px;
+  color: var(--muted);
 }
 
 .elsewhere-note a {
-  color: var(--accent);
+  color: var(--accent-press);
 }
 
 /* The bill, as a dialog over the order screen. Wider than a question
@@ -998,32 +1644,6 @@ button.link-button:hover {
   width: 100%;
 }
 
-/* An empty order gets a way off the floor. The delete control is its
-   own button beside the row, never inside it: a row is one big click
-   target and a mis-tap must not remove anything. */
-.order-row-wrap {
-  display: flex;
-  align-items: stretch;
-  gap: 6px;
-}
-
-.order-row-wrap .order-row {
-  flex: 1;
-  min-width: 0;
-}
-
-.order-row-delete {
-  padding: 0 10px;
-  color: var(--muted);
-  font-size: 15px;
-  line-height: 1;
-}
-
-.order-row-delete:hover {
-  color: var(--danger);
-  border-color: var(--danger);
-}
-
 /* Orders: a lookup, so the rows are a table rather than the floor's
    big touch targets — a manager scanning a day wants density. */
 .orders-row {
@@ -1031,20 +1651,10 @@ button.link-button:hover {
 }
 
 .orders-row:hover td {
-  background: var(--surface-2);
+  background: rgba(32, 30, 29, 0.04);
 }
 
 .orders-row:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-}
-
-.modal-header {
-  margin-bottom: 12px;
-}
-
-/* A dialog that carries its own heading needs the close control, not a
-   band of empty space above the content. */
-.modal-header-bare {
-  margin-bottom: 0;
 }

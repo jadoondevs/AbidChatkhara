@@ -43,8 +43,45 @@ export function LoginScreen(): JSX.Element {
   return (
     <div className="app login-page">
       <main className="screen login-main">
-        <form className="card login-card" onSubmit={(event) => void submit(event)}>
-          <h1 className="login-title">Sign in</h1>
+        {/* The design system's poster half. It deliberately carries no
+            restaurant name or mark: this screen has no session, so the
+            only way to print the name here would be to serve it to
+            anyone who can reach the till. The statement and the rule
+            carry the page instead. */}
+        <aside className="login-poster">
+          <div className="login-poster-brand">
+            <span className="brand-mark" aria-hidden="true">
+              PO
+            </span>
+            <span className="brand-text">
+              <span className="login-poster-name">Restaurant POS</span>
+              <span className="brand-sub">Point of sale</span>
+            </span>
+          </div>
+
+          <div>
+            <div className="login-rule" />
+            <h2 className="login-statement">
+              Sign in to
+              <br />
+              your counter
+            </h2>
+            <p className="login-blurb">
+              Everything runs on this counter&apos;s own machine — orders, bills and receipts keep working when the
+              internet does not. Tab moves between the fields, Enter signs in.
+            </p>
+          </div>
+
+          <div className="login-meta">
+            <span>Terminal {terminalId}</span>
+            <span>Local-first</span>
+            <span>Offline ready</span>
+          </div>
+        </aside>
+
+        <form className="login-card" onSubmit={(event) => void submit(event)}>
+          <p className="page-kicker">Staff sign in</p>
+          <h1 className="login-title">Welcome back</h1>
           <p className="muted login-subtitle">Terminal {terminalId}</p>
 
           <ErrorBanner error={error} />

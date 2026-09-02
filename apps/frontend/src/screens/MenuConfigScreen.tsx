@@ -24,7 +24,10 @@ export function MenuConfigScreen(): JSX.Element {
 
   return (
     <div className="col" style={{ maxWidth: 1100 }}>
-      <h1 style={{ margin: 0 }}>Menu</h1>
+      <div>
+        <p className="page-kicker">Catalog</p>
+        <h1 style={{ margin: 0 }}>Menu</h1>
+      </div>
       <ErrorBanner error={createCategory.error ?? createItem.error ?? setPrice.error ?? setAvailability.error} />
 
       <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>

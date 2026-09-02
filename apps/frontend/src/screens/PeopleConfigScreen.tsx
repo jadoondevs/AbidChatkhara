@@ -42,7 +42,10 @@ export function PeopleConfigScreen(): JSX.Element {
 
   return (
     <div className="col" style={{ maxWidth: 1000 }}>
-      <h1 style={{ margin: 0 }}>People</h1>
+      <div>
+        <p className="page-kicker">Meals and people</p>
+        <h1 style={{ margin: 0 }}>People</h1>
+      </div>
       <p className="muted" style={{ marginTop: 0 }}>
         Staff and partners whose <strong>meals</strong> the restaurant tracks — a cook who never touches the till, a partner who eats here.
         Separate from <Link to="/settings">Settings → Users</Link>, the accounts that sign in, and from{' '}

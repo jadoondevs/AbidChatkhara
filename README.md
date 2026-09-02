@@ -320,6 +320,20 @@ reload still works if the server blips. API responses are deliberately never cac
 cashier must never be shown a stale order list, or a bill another
 terminal has already settled.
 
+## How it looks
+
+The interface follows the Modernist design system: a light ground, one
+red accent used sparingly, Archivo throughout, no rounded corners, and
+2px rules doing the organising. The whole look lives in
+`apps/frontend/src/index.css` — a token sheet, then a component layer.
+Change a token there and every screen follows; no component carries its
+own colour.
+
+Archivo is bundled with the app rather than fetched from a font CDN, so
+a till with no route to the internet still renders in the right
+typeface. The header shows the restaurant's own name and initials, taken
+from Settings — nothing about the branding is compiled in.
+
 ## Testing, linting, type-checking
 
 ```bash

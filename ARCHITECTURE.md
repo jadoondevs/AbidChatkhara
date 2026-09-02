@@ -1022,6 +1022,38 @@ process as the API (`buildApp`'s `frontendDir`), so a tablet talks to
 exactly one origin and there is no CORS, no second server, and nothing
 to keep in sync between two deployments.
 
+### The look is one stylesheet, and it is a design system
+
+`apps/frontend/src/index.css` carries the whole visual language: a token
+sheet, then a component layer keyed to the same semantic class names the
+screens have always used (`.item-tile`, `.bill-line`, `.floor-list-open`,
+`.blocked-notice`, `.pill`). That indirection is the point — the design
+was re-cut from a dark slate theme to the Modernist system (light ground,
+a single red accent, Archivo, zero corner radius, 2px rules) by rewriting
+tokens and rules, not by touching a screen's logic. No component owns a
+colour.
+
+Three consequences worth stating, because each was a decision:
+
+- **Archivo is vendored, not fetched.** `@fontsource-variable/archivo` is
+  imported in `main.tsx` and its `.woff2` files are built into `dist` and
+  precached by the service worker. A till on a restaurant LAN may have no
+  route to the internet at all, and type that only arrives when Google is
+  reachable is not local-first.
+- **Darkness and emphasis are still separate ideas.** The screen shouts
+  with case and weight; the receipt does not inherit any of it. The HTML
+  receipt renderer and the ESC/POS builder are untouched by this
+  stylesheet — see "Thermal darkness is the printer's job".
+- **Only labels are uppercased, never amounts.** `text-transform` applies
+  to the label half of a total line and to status pills. Money renders
+  exactly as `format` produced it, because "RS 880.00" is a number a
+  cashier has to decode rather than read.
+
+The system's own rules are followed rather than approximated: nothing is
+rounded, dividers are 2px between sections and 1px between rows, the
+accent is spent on the primary action and small emphasis only, and
+keyboard focus is a 2px accent ring rather than the browser's blue.
+
 - **There is no "current order" in the frontend either.** Every order
   screen is addressed by its own id in the URL (`/orders/42/bill`), so
   two tills can work two orders at once and a reload lands back on the

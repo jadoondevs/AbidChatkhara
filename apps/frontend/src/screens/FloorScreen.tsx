@@ -42,7 +42,10 @@ export function FloorScreen(): JSX.Element {
   return (
     <div className="col floor">
       <div className="row">
-        <h1 style={{ margin: 0, flex: 1 }}>Floor</h1>
+        <div style={{ flex: 1 }}>
+          <p className="page-kicker">Live board · {new Date().toLocaleDateString()}</p>
+          <h1 style={{ margin: 0 }}>Floor</h1>
+        </div>
         {openShift.data === null && (
           <span className="pill warn">No shift open</span>
         )}

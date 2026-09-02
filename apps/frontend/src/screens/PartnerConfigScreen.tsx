@@ -34,7 +34,10 @@ export function PartnerConfigScreen(): JSX.Element {
 
   return (
     <div className="col" style={{ maxWidth: 1100 }}>
-      <h1 style={{ margin: 0 }}>Partners</h1>
+      <div>
+        <p className="page-kicker">Ownership</p>
+        <h1 style={{ margin: 0 }}>Partners</h1>
+      </div>
       {/* Three screens name people, and a manager should never have to
           work out which is which by trying them. */}
       <p className="muted" style={{ marginTop: 0 }}>

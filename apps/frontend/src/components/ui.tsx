@@ -42,7 +42,10 @@ export function Modal({
             still needs somewhere to live. */}
         <div className={`row modal-header${title ? '' : ' modal-header-bare'}`}>
           {title && <h2 style={{ margin: 0, flex: 1 }}>{title}</h2>}
-          <span style={{ flex: 1 }} />
+          {/* The spacer only exists to push Close to the right when
+              there is no title to do it. With one, a second flexible
+              child would halve the heading and wrap it. */}
+          {!title && <span style={{ flex: 1 }} />}
           <button className="ghost" onClick={onClose}>
             Close
           </button>
