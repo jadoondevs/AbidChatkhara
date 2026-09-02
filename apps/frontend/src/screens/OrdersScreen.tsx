@@ -55,7 +55,10 @@ export function OrdersScreen(): JSX.Element {
   return (
     <div className="col orders-screen">
       <div className="row">
-        <h1 style={{ margin: 0, flex: 1 }}>Orders</h1>
+        <div style={{ flex: 1 }}>
+          <p className="page-kicker">Order history</p>
+          <h1 style={{ margin: 0 }}>Orders</h1>
+        </div>
         <span className="muted">{orders.data ? `${orders.data.length} order${orders.data.length === 1 ? '' : 's'}` : ''}</span>
       </div>
 
@@ -185,9 +188,9 @@ function OrderRow({ order, onOpen }: { order: OrderSearchResult; onOpen: () => v
 
 function StatusPill({ order }: { order: OrderSearchResult }): JSX.Element {
   if (order.status === 'closed') return <span className="pill ok">Paid</span>;
-  if (order.status === 'voided') return <span className="pill warn">Voided</span>;
+  if (order.status === 'voided') return <span className="pill">Voided</span>;
   if (order.status === 'billed') {
     return <span className="pill part-paid">{order.paidMinor > 0 ? 'Part paid' : 'Awaiting payment'}</span>;
   }
-  return <span className="pill">Open</span>;
+  return <span className="pill warn">Open</span>;
 }

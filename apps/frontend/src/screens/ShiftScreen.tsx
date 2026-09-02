@@ -48,7 +48,10 @@ export function ShiftScreen(): JSX.Element {
   if (!shift && justClosed) {
     return (
       <div className="col" style={{ maxWidth: 520 }}>
-        <h1 style={{ margin: 0 }}>Shift #{justClosed.id} closed</h1>
+        <div>
+          <p className="page-kicker">Cash management</p>
+          <h1 style={{ margin: 0 }}>Shift #{justClosed.id} closed</h1>
+        </div>
         <div className="card col">
           <h3 style={{ margin: 0 }}>Cash reconciliation</h3>
           <div className="total-line">
@@ -74,7 +77,10 @@ export function ShiftScreen(): JSX.Element {
   if (!shift) {
     return (
       <div className="col" style={{ maxWidth: 520 }}>
-        <h1 style={{ margin: 0 }}>Shift</h1>
+        <div>
+          <p className="page-kicker">Cash management</p>
+          <h1 style={{ margin: 0 }}>Shift</h1>
+        </div>
         <ErrorBanner error={openShiftMutation.error} />
         <div className="card col">
           <h3 style={{ margin: 0 }}>No shift is open</h3>
@@ -95,7 +101,10 @@ export function ShiftScreen(): JSX.Element {
 
   return (
     <div className="col" style={{ maxWidth: 1100 }}>
-      <h1 style={{ margin: 0 }}>Shift #{shift.id}</h1>
+      <div>
+        <p className="page-kicker">Cash management</p>
+        <h1 style={{ margin: 0 }}>Shift #{shift.id}</h1>
+      </div>
       <p className="muted" style={{ marginTop: 0 }}>
         Opened {new Date(shift.openedAt).toLocaleString()} · float <Money minor={shift.openingCashMinor} />
       </p>

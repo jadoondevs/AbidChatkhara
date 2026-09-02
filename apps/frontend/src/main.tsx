@@ -4,6 +4,13 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { App } from './App.tsx';
 import { AuthProvider } from './auth/AuthContext.tsx';
+// Archivo is the design system's one typeface, vendored rather than
+// pulled from a font CDN: this till runs on a restaurant LAN that may
+// have no internet at all, and a PWA whose type only arrives when
+// Google is reachable is not a local-first POS. The .woff2 files ship
+// in the build and are precached by the service worker with everything
+// else.
+import '@fontsource-variable/archivo/wght.css';
 import './index.css';
 import { registerServiceWorker } from './pwa.ts';
 

@@ -220,7 +220,7 @@ export function OrderDetailScreen(): JSX.Element {
 function StatusPill({ history }: { history: OrderHistory }): JSX.Element {
   const { order, balanceMinor } = history;
   if (order.status === 'closed') return <span className="pill ok">Paid in full</span>;
-  if (order.status === 'voided') return <span className="pill warn">Voided</span>;
+  if (order.status === 'voided') return <span className="pill">Voided</span>;
   if (order.status === 'billed') {
     return <span className="pill part-paid">{balanceMinor < order.totalMinor ? 'Part paid' : 'Awaiting payment'}</span>;
   }

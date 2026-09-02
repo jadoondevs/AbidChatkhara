@@ -28,6 +28,19 @@ function RoleGate({ minimum, children }: { minimum: 'manager' | 'admin'; childre
   return hasAtLeastRole(minimum) ? children : <Navigate to="/" replace />;
 }
 
+/**
+ * Two letters for the header mark, taken from the restaurant's own
+ * name: "Demo Karahi House" becomes DK, a one-word name gives its first
+ * two letters. Derived rather than configured, because a mark nobody
+ * maintains is a mark that goes stale the first time the name changes.
+ */
+function initialsOf(name: string): string {
+  const words = name.split(/\s+/).filter((word) => /\p{L}|\p{N}/u.test(word));
+  if (words.length === 0) return 'PO';
+  if (words.length === 1) return words[0]!.slice(0, 2).toUpperCase();
+  return (words[0]![0]! + words[1]![0]!).toUpperCase();
+}
+
 /** Operational screens everyone signed in can reach, then configuration
  * behind a role. Grouped so the nav reads as "run the restaurant" and
  * "set the restaurant up" rather than one undifferentiated row. */
@@ -67,14 +80,18 @@ export function App(): JSX.Element {
   return (
     <div className="app">
       <header className="topbar">
-        <strong className="brand">{restaurantName}</strong>
-
-        {/* New order is reachable from every screen, not just the floor:
-            a customer arriving while a manager is reading a report is
-            the normal case, not an exception. */}
-        <button className="primary new-order-button" onClick={() => setNewOrderOpen(true)}>
-          + New order
-        </button>
+        {/* The mark is the restaurant's own initials, derived from the
+            name it configured — the header must never carry a brand
+            this software invented for it. */}
+        <div className="brand-block">
+          <span className="brand-mark" aria-hidden="true">
+            {initialsOf(restaurantName)}
+          </span>
+          <span className="brand-text">
+            <strong className="brand">{restaurantName}</strong>
+            <span className="brand-sub">Restaurant POS</span>
+          </span>
+        </div>
 
         <nav>
           {OPERATIONS.map((link) => (
@@ -91,11 +108,24 @@ export function App(): JSX.Element {
         </nav>
 
         <span className="spacer" />
+
+        {/* New order is reachable from every screen, not just the floor:
+            a customer arriving while a manager is reading a report is
+            the normal case, not an exception. It heads the right-hand
+            group, so it is in the same place on every screen and is the
+            only filled accent in the header. */}
+        <button className="primary new-order-button" onClick={() => setNewOrderOpen(true)}>
+          + New order
+        </button>
+
         {/* Name and role are what staff check; the terminal id matters
             only when reconciling an audit trail, so it lives in the
             tooltip rather than taking width from the nav. */}
-        <span className="muted who" title={`Terminal ${session.terminalId}`}>
-          {session.name} · {session.role}
+        <span className="who" title={`Terminal ${session.terminalId}`}>
+          <span className="who-name">{session.name}</span>
+          <span className="who-role">
+            {session.role} · Terminal {session.terminalId}
+          </span>
         </span>
         <button className="ghost sign-out" onClick={logout}>
           Sign out

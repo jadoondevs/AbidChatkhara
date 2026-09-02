@@ -49,12 +49,15 @@ export function SettingsScreen(): JSX.Element {
 
   return (
     <div className="col settings">
-      <h1 style={{ margin: 0 }}>Settings</h1>
+      <div>
+        <p className="page-kicker">Administration</p>
+        <h1 style={{ margin: 0 }}>Settings</h1>
+      </div>
       <p className="muted" style={{ marginTop: 0 }}>
         Everything here is specific to this restaurant. Nothing is built into the software.
       </p>
 
-      <div className="tabs">
+      <div className="tabs tabs-underline">
         {TABS.map((candidate) => (
           <button key={candidate.key} className={candidate.key === tab ? 'active' : ''} onClick={() => setTab(candidate.key)}>
             {candidate.label}
