@@ -86,6 +86,22 @@ export async function printHtmlViaBrowser(html: string): Promise<void> {
   });
 }
 
+/** What happened to a ticket, and the ticket itself where there is one. */
+export interface PrintResult {
+  readonly via: 'thermal' | 'fallback';
+  /**
+   * The ticket exactly as it was rendered for the print dialog, kept so
+   * a screen can SHOW the cashier what came out rather than describing
+   * it. Null on the thermal path: those bytes went to the device as
+   * ESC/POS, and there is no HTML of them to show.
+   *
+   * It is the server's own render, never a second one built for the
+   * screen — a preview that could disagree with the paper would be
+   * worse than no preview.
+   */
+  readonly html: string | null;
+}
+
 /**
  * Carry out whatever the server said happened to a print: nothing more
  * to do when the thermal printer took it, or open the system dialog
@@ -95,8 +111,8 @@ export async function printHtmlViaBrowser(html: string): Promise<void> {
  * cashier "printed" versus "sent to Windows printing" rather than
  * leaving them wondering where the receipt went.
  */
-export async function completePrint(outcome: PrintOutcome): Promise<'thermal' | 'fallback'> {
-  if (outcome.method === 'thermal') return 'thermal';
+export async function completePrint(outcome: PrintOutcome): Promise<PrintResult> {
+  if (outcome.method === 'thermal') return { via: 'thermal', html: null };
   await printHtmlViaBrowser(outcome.html);
-  return 'fallback';
+  return { via: 'fallback', html: outcome.html };
 }

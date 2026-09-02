@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   useCreatePaymentAccount,
@@ -7,6 +7,7 @@ import {
   usePaymentMethods,
   usePrinterSettings,
   usePrintTest,
+  useReceiptPreview,
   useSaveReceiptSettings,
   useSavePrinterSettings,
   useSaveRestaurantSettings,
@@ -19,6 +20,7 @@ import {
   useUsers,
 } from '../api/hooks.js';
 import type { PaymentAccount, PrinterSettings, ReceiptSettings, RestaurantSettings, Role, ServiceChargeSettings, User } from '../api/types.js';
+import { TicketPreview } from '../components/PrintDecision.tsx';
 import { ErrorBanner, Loading, Modal, PasswordInput } from '../components/ui.tsx';
 import { PaymentMethodsPanel } from './PaymentMethodConfigScreen.tsx';
 
@@ -118,21 +120,81 @@ function RestaurantPanel(): JSX.Element {
   );
 
   return (
-    <div className="card col settings-panel">
-      <ErrorBanner error={save.error} />
-      {field('name', 'Restaurant name', 'Shown at the top of every bill and receipt, and in this app’s header.')}
-      {field('addressLine1', 'Address line 1')}
-      {field('addressLine2', 'Address line 2')}
-      {field('phone', 'Phone number')}
-      {field('registrationLine', 'Registration line', 'An NTN, STRN or licence number, if your receipts must show one.')}
+    <div className="settings-with-preview">
+      <div className="card col settings-panel">
+        <ErrorBanner error={save.error} />
+        {field('name', 'Restaurant name', 'Shown at the top of every bill and receipt, and in this app’s header.')}
+        {field('addressLine1', 'Address line 1')}
+        {field('addressLine2', 'Address line 2')}
+        {field('phone', 'Phone number')}
+        {field('registrationLine', 'Registration line', 'An NTN, STRN or licence number, if your receipts must show one.')}
 
-      <div className="row">
-        <button className="primary" disabled={save.isPending} onClick={() => save.mutate(current, { onSuccess: () => setSaved(true) })}>
-          {save.isPending ? 'Saving…' : 'Save'}
-        </button>
-        <SavedNote saved={saved} />
+        <div className="row">
+          <button className="primary" disabled={save.isPending} onClick={() => save.mutate(current, { onSuccess: () => setSaved(true) })}>
+            {save.isPending ? 'Saving…' : 'Save'}
+          </button>
+          <SavedNote saved={saved} />
+        </div>
       </div>
+
+      {settings.data && (
+        <ReceiptPreviewPanel restaurant={current} receipt={settings.data.receipt} serviceCharge={settings.data.serviceCharge} />
+      )}
     </div>
+  );
+}
+
+/**
+ * An 80mm bill, rendered from the settings currently ON SCREEN — saved
+ * or not.
+ *
+ * The server renders it, through the same `renderBillHtml` the fallback
+ * print path uses, so an admin is looking at the real ticket rather than
+ * an artist's impression of one. Drawing it here in React would have
+ * been quicker and would have been a third renderer, free to disagree
+ * with the two that actually reach a customer.
+ *
+ * Debounced, because it is a round trip per change and nobody needs a
+ * re-render per keystroke.
+ */
+function ReceiptPreviewPanel({
+  restaurant,
+  receipt,
+  serviceCharge,
+}: {
+  restaurant: RestaurantSettings;
+  receipt: ReceiptSettings;
+  serviceCharge: ServiceChargeSettings;
+}): JSX.Element {
+  const preview = useReceiptPreview();
+  const { mutate } = preview;
+  const draft = JSON.stringify({ restaurant, receipt, serviceCharge });
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => mutate(JSON.parse(draft) as Parameters<typeof mutate>[0]), 300);
+    return () => window.clearTimeout(timer);
+  }, [draft, mutate]);
+
+  return (
+    <aside className="card col receipt-preview-panel">
+      <p className="page-kicker" style={{ margin: 0 }}>
+        Receipt preview · 80mm
+      </p>
+      {/* The last good render stays on screen while the next one is in
+          flight: blanking the paper on every keystroke would make the
+          preview flicker rather than inform. */}
+      {preview.data ? (
+        <TicketPreview html={preview.data.html} label="Sample bill" />
+      ) : (
+        <p className="muted" style={{ margin: 0 }}>
+          {preview.isError ? 'Preview unavailable.' : 'Rendering…'}
+        </p>
+      )}
+      <p className="muted field-hint" style={{ marginTop: 0 }}>
+        A worked example with invented items and figures, laid out by the printer&apos;s own renderer. It follows what you type here, before
+        you save.
+      </p>
+    </aside>
   );
 }
 
@@ -160,56 +222,62 @@ function ReceiptPanel(): JSX.Element {
   );
 
   return (
-    <div className="card col settings-panel">
-      <ErrorBanner error={save.error} />
+    <div className="settings-with-preview">
+      <div className="card col settings-panel">
+        <ErrorBanner error={save.error} />
 
-      <h3 style={{ margin: 0 }}>Header</h3>
-      <div>
-        <label htmlFor="receipt-headerName">Name on the receipt</label>
-        <input id="receipt-headerName" value={current.headerName} onChange={(event) => update({ headerName: event.target.value })} />
-        <p className="muted field-hint">Leave blank to use the restaurant name.</p>
-      </div>
-      <div>
-        <label htmlFor="receipt-headerNote">Extra header line</label>
-        <input id="receipt-headerNote" value={current.headerNote} onChange={(event) => update({ headerNote: event.target.value })} />
+        <h3 style={{ margin: 0 }}>Header</h3>
+        <div>
+          <label htmlFor="receipt-headerName">Name on the receipt</label>
+          <input id="receipt-headerName" value={current.headerName} onChange={(event) => update({ headerName: event.target.value })} />
+          <p className="muted field-hint">Leave blank to use the restaurant name.</p>
+        </div>
+        <div>
+          <label htmlFor="receipt-headerNote">Extra header line</label>
+          <input id="receipt-headerNote" value={current.headerNote} onChange={(event) => update({ headerNote: event.target.value })} />
+        </div>
+
+        <h3 style={{ margin: 0 }}>What to print</h3>
+        <div className="checkbox-grid">
+          {toggle('showAddress', 'Address')}
+          {toggle('showPhone', 'Phone number')}
+          {toggle('showOrderNumber', 'Order number')}
+          {toggle('showTable', 'Table')}
+          {toggle('showWaiter', 'Waiter')}
+          {toggle('showPaymentAccounts', 'Payment accounts on the bill')}
+        </div>
+
+        <h3 style={{ margin: 0 }}>Footer</h3>
+        <div>
+          <label htmlFor="receipt-footerMessage">Footer message</label>
+          <input id="receipt-footerMessage" value={current.footerMessage} onChange={(event) => update({ footerMessage: event.target.value })} />
+        </div>
+        <div>
+          <label htmlFor="receipt-footerNote">Extra footer line</label>
+          <input id="receipt-footerNote" value={current.footerNote} onChange={(event) => update({ footerNote: event.target.value })} />
+        </div>
+        <div style={{ maxWidth: 200 }}>
+          <label htmlFor="receipt-feedLines">Blank lines before the cut</label>
+          <input
+            id="receipt-feedLines"
+            inputMode="numeric"
+            value={String(current.feedLines)}
+            onChange={(event) => update({ feedLines: Math.min(10, Math.max(0, Number(event.target.value.replace(/[^0-9]/g, '') || 0))) })}
+          />
+          <p className="muted field-hint">Raise this if the tear bar cuts through the last line.</p>
+        </div>
+
+        <div className="row">
+          <button className="primary" disabled={save.isPending} onClick={() => save.mutate(current, { onSuccess: () => setSaved(true) })}>
+            {save.isPending ? 'Saving…' : 'Save'}
+          </button>
+          <SavedNote saved={saved} />
+        </div>
       </div>
 
-      <h3 style={{ margin: 0 }}>What to print</h3>
-      <div className="checkbox-grid">
-        {toggle('showAddress', 'Address')}
-        {toggle('showPhone', 'Phone number')}
-        {toggle('showOrderNumber', 'Order number')}
-        {toggle('showTable', 'Table')}
-        {toggle('showWaiter', 'Waiter')}
-        {toggle('showPaymentAccounts', 'Payment accounts on the bill')}
-      </div>
-
-      <h3 style={{ margin: 0 }}>Footer</h3>
-      <div>
-        <label htmlFor="receipt-footerMessage">Footer message</label>
-        <input id="receipt-footerMessage" value={current.footerMessage} onChange={(event) => update({ footerMessage: event.target.value })} />
-      </div>
-      <div>
-        <label htmlFor="receipt-footerNote">Extra footer line</label>
-        <input id="receipt-footerNote" value={current.footerNote} onChange={(event) => update({ footerNote: event.target.value })} />
-      </div>
-      <div style={{ maxWidth: 200 }}>
-        <label htmlFor="receipt-feedLines">Blank lines before the cut</label>
-        <input
-          id="receipt-feedLines"
-          inputMode="numeric"
-          value={String(current.feedLines)}
-          onChange={(event) => update({ feedLines: Math.min(10, Math.max(0, Number(event.target.value.replace(/[^0-9]/g, '') || 0))) })}
-        />
-        <p className="muted field-hint">Raise this if the tear bar cuts through the last line.</p>
-      </div>
-
-      <div className="row">
-        <button className="primary" disabled={save.isPending} onClick={() => save.mutate(current, { onSuccess: () => setSaved(true) })}>
-          {save.isPending ? 'Saving…' : 'Save'}
-        </button>
-        <SavedNote saved={saved} />
-      </div>
+      {settings.data && (
+        <ReceiptPreviewPanel restaurant={settings.data.restaurant} receipt={current} serviceCharge={settings.data.serviceCharge} />
+      )}
     </div>
   );
 }
@@ -408,8 +476,8 @@ function PrinterPanel(): JSX.Element {
         <button disabled={testPrint.isPending} onClick={() => testPrint.mutate()}>
           {testPrint.isPending ? 'Printing…' : 'Print test strip'}
         </button>
-        {testPrint.data === 'thermal' && <span className="pill ok">Sent to the printer</span>}
-        {testPrint.data === 'fallback' && <span className="muted">No POS printer — sent to Windows printing</span>}
+        {testPrint.data?.via === 'thermal' && <span className="pill ok">Sent to the printer</span>}
+        {testPrint.data?.via === 'fallback' && <span className="muted">No POS printer — sent to Windows printing</span>}
       </div>
       <ErrorBanner error={testPrint.error} />
       <p className="muted field-hint" style={{ marginTop: 0 }}>

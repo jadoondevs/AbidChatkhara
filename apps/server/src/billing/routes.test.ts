@@ -6,6 +6,8 @@ import { createCategory, createItem, setItemPrice } from '../catalog/service.js'
 import { createUser } from '../identity/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createTestDb } from '../platform/db/test-helpers.js';
+import { defaultsFor } from '../settings/schema.js';
+import { getSetting } from '../settings/service.js';
 
 async function setup() {
   const ctx = createTestDb();
@@ -136,5 +138,88 @@ describe('billing routes', () => {
     expect(outcome.method).toBe('fallback');
     expect(outcome.reason).toBe('not_configured');
     expect(outcome.html).toContain('BILL');
+  });
+
+  describe('the receipt preview', () => {
+    /** The draft an admin might have typed but not yet saved. */
+    const draft = (name: string) => ({
+      restaurant: { ...defaultsFor('restaurant'), name, addressLine1: '00 Example Road', phone: '000-0000000' },
+      receipt: { ...defaultsFor('receipt'), footerMessage: 'Shukriya' },
+      serviceCharge: defaultsFor('serviceCharge'),
+    });
+
+    it('renders a sample bill from settings that have NOT been saved', async () => {
+      const started = await setup();
+      ({ app, ctx } = started);
+      const auth = { authorization: `Bearer ${await loginAs(app, started.admin.username, '9999')}` };
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/printer/receipt-preview',
+        headers: auth,
+        payload: draft('Preview Kitchen'),
+      });
+
+      expect(res.statusCode).toBe(200);
+      const { html } = res.json() as { html: string };
+      // The name and footer came from the body, not from the database.
+      expect(html).toContain('Preview Kitchen');
+      expect(html).toContain('Shukriya');
+      // And it is a real bill, laid out by the real renderer.
+      expect(html).toContain('BILL');
+      expect(html).toContain('Sample curry');
+      expect(html).toContain('TOTAL');
+    });
+
+    it('saves nothing — previewing is not a write', async () => {
+      const started = await setup();
+      ({ app, ctx } = started);
+      const auth = { authorization: `Bearer ${await loginAs(app, started.admin.username, '9999')}` };
+      const before = await getSetting(started.ctx.db, 'restaurant');
+
+      await app.inject({ method: 'POST', url: '/api/printer/receipt-preview', headers: auth, payload: draft('Never Saved') });
+
+      expect(await getSetting(started.ctx.db, 'restaurant')).toEqual(before);
+      expect((await getSetting(started.ctx.db, 'restaurant')).name).not.toBe('Never Saved');
+    });
+
+    it('shows the service charge line only when the charge is switched on', async () => {
+      const started = await setup();
+      ({ app, ctx } = started);
+      const auth = { authorization: `Bearer ${await loginAs(app, started.admin.username, '9999')}` };
+
+      const off = draft('Off');
+      const on = { ...draft('On'), serviceCharge: { ...defaultsFor('serviceCharge'), enabled: true, rateBp: 500 } };
+
+      const offHtml = (
+        (await app.inject({ method: 'POST', url: '/api/printer/receipt-preview', headers: auth, payload: off })).json() as { html: string }
+      ).html;
+      const onHtml = (
+        (await app.inject({ method: 'POST', url: '/api/printer/receipt-preview', headers: auth, payload: on })).json() as { html: string }
+      ).html;
+
+      // renderBillHtml prints the charge only when it is non-zero, so
+      // the preview shows the ticket THIS restaurant actually prints.
+      expect(offHtml).not.toContain('Rs 147.00');
+      expect(onHtml).toContain('Rs 147.00');
+    });
+
+    it('refuses a caller with no session', async () => {
+      const started = await setup();
+      ({ app, ctx } = started);
+
+      const res = await app.inject({ method: 'POST', url: '/api/printer/receipt-preview', payload: draft('Nobody') });
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('lets any signed-in user preview — it carries no printer configuration', async () => {
+      const started = await setup();
+      ({ app, ctx } = started);
+      const auth = { authorization: `Bearer ${await loginAs(app, started.server.username, '1234')}` };
+
+      const res = await app.inject({ method: 'POST', url: '/api/printer/receipt-preview', headers: auth, payload: draft('Anyone') });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { html: string }).html).not.toContain('printer');
+    });
   });
 });

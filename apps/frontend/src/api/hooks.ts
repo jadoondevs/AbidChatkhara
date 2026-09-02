@@ -2,6 +2,7 @@ import type { Paisa } from '@pos/shared';
 import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 import { api, query, type RequestOptions } from './client.js';
 import { completePrint } from './printing.js';
+import type { PrintResult } from './printing.js';
 import type {
   AppSettings,
   BillTotals,
@@ -385,19 +386,36 @@ export function usePaymentOptions(): UseQueryResult<PaymentOption[]> {
  * Print the darkness test strip. Same fallback path as any other print,
  * so a till with no thermal printer still gets something to look at.
  */
-export function usePrintTest(): UseMutationResult<'thermal' | 'fallback', Error, void> {
+export function usePrintTest(): UseMutationResult<PrintResult, Error, void> {
   return useMutation({
     mutationFn: async () => completePrint(await api.post<PrintOutcome>('/api/printer/test-print')),
   });
 }
 
-export function usePrintBill(): UseMutationResult<'thermal' | 'fallback', Error, number> {
+/**
+ * What a bill prints like with the settings currently on screen.
+ *
+ * A mutation rather than a query because the draft settings go in the
+ * body: this is "render THESE", not "read what is stored". Nothing is
+ * saved by asking.
+ */
+export function useReceiptPreview(): UseMutationResult<
+  { html: string },
+  Error,
+  { restaurant: RestaurantSettings; receipt: ReceiptSettings; serviceCharge: ServiceChargeSettings }
+> {
+  return useMutation({
+    mutationFn: (draft) => api.post<{ html: string }>('/api/printer/receipt-preview', draft),
+  });
+}
+
+export function usePrintBill(): UseMutationResult<PrintResult, Error, number> {
   return useMutation({
     mutationFn: async (orderId: number) => completePrint(await api.post<PrintOutcome>(`/api/orders/${orderId}/print-bill`)),
   });
 }
 
-export function usePrintReceipt(): UseMutationResult<'thermal' | 'fallback', Error, number> {
+export function usePrintReceipt(): UseMutationResult<PrintResult, Error, number> {
   return useMutation({
     mutationFn: async (orderId: number) => completePrint(await api.post<PrintOutcome>(`/api/orders/${orderId}/print-receipt`)),
   });

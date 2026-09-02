@@ -8,7 +8,9 @@ import { ConcurrentModificationError, OrderStateError } from '../ordering/servic
 import type { Database } from '../platform/db/types.js';
 import { PrintError, type PrinterTarget } from '../platform/printing/client.js';
 import { getSetting, resolvePrinterTarget } from '../settings/service.js';
-import { printBill, printReceipt, printTestTicket } from './printing.js';
+import { printBill, printReceipt, printTestTicket, sampleBillTicketData } from './printing.js';
+import { renderBillHtml } from './receipt-html.js';
+import { receiptSettingsSchema, restaurantSettingsSchema, serviceChargeSettingsSchema } from '../settings/schema.js';
 import {
   activeAccountsForMethod,
   createPaymentAccount,
@@ -443,6 +445,39 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
     async (request, reply) => {
       requireRole(request, reply, 'admin');
       return printTestTicket(db, await currentPrinter());
+    },
+  );
+
+  /**
+   * What a bill would look like with the settings an admin is currently
+   * typing, before they save them.
+   *
+   * The draft settings come in the body rather than being read from the
+   * database, because the question is "what will this wording print?"
+   * and the answer must not wait for a save. Nothing is written: this
+   * route reads no order and touches no row.
+   *
+   * It renders through `renderBillHtml`, the same function the fallback
+   * print path calls, so the preview cannot drift from the paper. Any
+   * signed-in user may ask for it — it contains only settings they can
+   * already read, and none of the printer's own configuration.
+   */
+  app.post(
+    '/api/printer/receipt-preview',
+    {
+      schema: {
+        body: z.object({
+          restaurant: restaurantSettingsSchema,
+          receipt: receiptSettingsSchema,
+          serviceCharge: serviceChargeSettingsSchema,
+        }),
+        response: { 200: z.object({ html: z.string() }) },
+      },
+    },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      const { restaurant, receipt, serviceCharge } = request.body;
+      return { html: renderBillHtml(sampleBillTicketData({ restaurant, receipt }, serviceCharge)) };
     },
   );
 
