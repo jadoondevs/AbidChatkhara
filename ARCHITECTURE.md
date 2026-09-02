@@ -1048,6 +1048,14 @@ Three consequences worth stating, because each was a decision:
   to the label half of a total line and to status pills. Money renders
   exactly as `format` produced it, because "RS 880.00" is a number a
   cashier has to decode rather than read.
+- **A preview is the real renderer or it is a lie.** Settings shows an
+  80mm sample bill, and the print dialog shows the ticket that was just
+  sent. Both are `renderBillHtml` output in a sandboxed iframe — the
+  same function the fallback print path calls. Re-marking a receipt up
+  in React would have been a third renderer, free to disagree with the
+  two that reach a customer. `POST /api/printer/receipt-preview` takes
+  the DRAFT settings in its body and writes nothing, so the paper
+  follows what an admin is typing rather than what they last saved.
 
 The system's own rules are followed rather than approximated: nothing is
 rounded, dividers are 2px between sections and 1px between rows, the

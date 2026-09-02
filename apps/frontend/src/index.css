@@ -1322,6 +1322,34 @@ tbody tr:hover {
   max-width: 760px;
 }
 
+/* A settings form beside the paper it produces. The form keeps its own
+   readable measure; the preview takes a roll's width and no more. */
+.settings-with-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 760px) 340px;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 1200px) {
+  .settings-with-preview {
+    grid-template-columns: 1fr;
+  }
+
+  .receipt-preview-panel {
+    max-width: 380px;
+  }
+}
+
+.receipt-preview-panel {
+  background: var(--surface-2);
+  gap: 10px;
+}
+
+.receipt-preview-panel .ticket-preview iframe {
+  height: 420px;
+}
+
 /* Wider than the other panels: an account row carries a name, a full
    account number, a state and two actions. */
 .accounts-panel {
@@ -1642,6 +1670,50 @@ button.link-button:hover {
 
 .print-decision button {
   width: 100%;
+}
+
+/* The ticket beside the choices, as the design lays it out: paper on
+   the left, what to do about it on the right. */
+.print-decision-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 700px) {
+  .print-decision-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* An 80mm roll, shown at roll width. The iframe carries the server's
+   own receipt document — page styling and all — so what is on screen
+   is the render that went to the printer, not an impression of it. */
+.ticket-preview {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ticket-preview figcaption {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0;
+}
+
+.ticket-preview iframe {
+  width: 100%;
+  height: 340px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  background: #fff;
+  display: block;
 }
 
 /* Orders: a lookup, so the rows are a table rather than the floor's

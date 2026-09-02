@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../api/client.js';
 import { useOrder, usePaymentOptions, usePeople, usePrintReceipt, useRecordPayment, useRefundOrder, useSettleConsumption } from '../api/hooks.js';
+import type { PrintResult } from '../api/printing.js';
 import type { SettlementType } from '../api/types.js';
 import { PrintDecision } from '../components/PrintDecision.tsx';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
@@ -64,7 +65,7 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
   // Shown when the receipt did NOT go straight to a thermal printer:
   // only the cashier knows whether anything came out of the Windows
   // dialog, so the till asks rather than assuming.
-  const [receiptDecision, setReceiptDecision] = useState<{ failed: boolean } | null>(null);
+  const [receiptDecision, setReceiptDecision] = useState<{ failed: boolean; html: string | null } | null>(null);
 
   const option = options.data?.find((candidate) => candidate.paymentMethodId === methodId);
   const detail = order.data;
@@ -105,12 +106,14 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
   // automatic print on settlement and the Reprint button behave
   // identically.
   const printHandlers = {
-    onSuccess: (via: 'thermal' | 'fallback') => {
-      setPrintedVia(via);
-      if (via === 'fallback') setReceiptDecision({ failed: false });
+    onSuccess: (result: PrintResult) => {
+      setPrintedVia(result.via);
+      if (result.via === 'fallback') setReceiptDecision({ failed: false, html: result.html });
       else setReceiptDecision(null);
     },
-    onError: () => setReceiptDecision({ failed: true }),
+    // Nothing was rendered, so there is nothing to show — the dialog
+    // falls back to words.
+    onError: () => setReceiptDecision({ failed: true, html: null }),
   };
 
   const submit = () => {
@@ -211,6 +214,7 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
             // refund — a manager's decision, and the server enforces
             // that whatever this screen offers.
             cancelLabel="Cancel sale (refund)"
+            preview={receiptDecision.html}
             busy={printReceipt.isPending || refundOrder.isPending}
             onContinue={() => setReceiptDecision(null)}
             onRetry={() => printReceipt.mutate(orderId, printHandlers)}

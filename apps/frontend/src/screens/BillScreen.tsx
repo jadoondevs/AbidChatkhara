@@ -62,7 +62,7 @@ export function BillPanel({
   // Set once the bill is finalised and the ticket has gone somewhere
   // other than a thermal printer — the point at which only the cashier
   // knows whether anything came out.
-  const [decision, setDecision] = useState<{ orderId: number; failed: boolean } | null>(null);
+  const [decision, setDecision] = useState<{ orderId: number; failed: boolean; html: string | null } | null>(null);
 
   if (order.isLoading) return <Loading />;
   if (order.error) return <ErrorBanner error={order.error} />;
@@ -84,21 +84,23 @@ export function BillPanel({
   const print = (id: number) => {
     setPrintError(null);
     printBill.mutate(id, {
-      onSuccess: (via) => {
+      onSuccess: (result) => {
         // A thermal printer either took the ticket or threw. Nothing to
         // ask, so the cashier goes straight on to taking the money.
-        if (via === 'thermal') {
+        if (result.via === 'thermal') {
           onPrinted(id);
           return;
         }
-        setDecision({ orderId: id, failed: false });
+        setDecision({ orderId: id, failed: false, html: result.html });
       },
       // A dead printer must never block the flow: the bill is already
       // finalised server-side (see docs/decisions/018), so the cashier
       // is asked what they want to do, not told the sale failed.
       onError: (error) => {
         setPrintError(error);
-        setDecision({ orderId: id, failed: true });
+        // Nothing was rendered, so there is nothing to show — the
+        // dialog falls back to words.
+        setDecision({ orderId: id, failed: true, html: null });
       },
     });
   };
@@ -191,6 +193,7 @@ export function BillPanel({
           }
           continueLabel="Continue without printing"
           cancelLabel="Cancel sale"
+          preview={decision.html}
           busy={printBill.isPending || voidOrder.isPending}
           onContinue={() => {
             setDecision(null);

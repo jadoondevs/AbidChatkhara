@@ -530,6 +530,50 @@ export function renderPrintTestTicket(
 }
 
 /**
+ * A worked example of a bill, for the settings screen to render.
+ *
+ * The figures and item names are obviously invented and no order, line
+ * or payment is read or written — this exists so an admin can see what
+ * their own header, footer and wording look like on 80mm paper before
+ * committing them, not to preview a real sale.
+ *
+ * Crucially it produces a `BillTicketData`, which means the preview goes
+ * through `renderBillHtml` — the same renderer the fallback print path
+ * uses. A preview drawn by a second renderer would be free to disagree
+ * with the paper, which is the one thing a preview must never do.
+ */
+export function sampleBillTicketData(branding: TicketBranding, serviceCharge: ServiceChargeSettings): BillTicketData {
+  const lines: TicketLine[] = [
+    { itemName: 'Sample curry', qty: 2, modifierNames: ['Medium'], note: null, lineTotalMinor: paisa(240_000) },
+    { itemName: 'Sample bread', qty: 4, modifierNames: [], note: 'well done', lineTotalMinor: paisa(36_000) },
+    { itemName: 'Sample drink', qty: 1, modifierNames: [], note: null, lineTotalMinor: paisa(18_000) },
+  ];
+  const subtotalMinor = paisa(294_000);
+  // A round 5% of the sample subtotal when the charge is switched on,
+  // so the line reads like a real one; zero when it is not, so the
+  // preview shows the ticket this restaurant actually prints.
+  const serviceChargeMinor = serviceCharge.enabled ? paisa(14_700) : paisa(0);
+  return {
+    branding,
+    orderId: 0,
+    tableLabel: '1',
+    orderType: 'dine in',
+    waiterName: 'Sample waiter',
+    lines,
+    subtotalMinor,
+    discountMinor: paisa(0),
+    discountReason: null,
+    taxMinor: paisa(0),
+    serviceChargeMinor,
+    serviceChargeLabel: serviceChargeLabel(serviceCharge, serviceCharge.enabled ? 500 : null),
+    roundingAdjustmentMinor: paisa(0),
+    totalMinor: paisa(294_000 + (serviceCharge.enabled ? 14_700 : 0)),
+    printedAt: new Date().toISOString(),
+    paymentOptions: [],
+  };
+}
+
+/**
  * Print the test strip. Uses the same fallback path as everything else,
  * so a till with no thermal printer gets it through the browser and can
  * at least check the layout — though the question it answers is only
