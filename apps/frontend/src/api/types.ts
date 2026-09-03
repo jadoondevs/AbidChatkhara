@@ -278,12 +278,6 @@ export interface PaymentOption {
   blockedReason: string | null;
 }
 
-/** How a ticket was printed. `fallback` carries the ticket as HTML for
- * the browser's own print dialog — see api/printing.ts. */
-export type PrintOutcome =
-  | { method: 'thermal' }
-  | { method: 'fallback'; reason: 'not_configured' | 'unreachable'; detail: string | null; html: string };
-
 export interface RestaurantSettings {
   name: string;
   addressLine1: string;

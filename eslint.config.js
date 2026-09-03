@@ -10,6 +10,11 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/*.d.ts',
       'apps/frontend/dist/**',
+      // The print agent is a standalone Node service (plain ESM JS, no
+      // TypeScript) with its own `npm test`. This flat config is written
+      // for the TypeScript workspaces and has no Node globals wired in,
+      // so it is linted on its own terms, not swept in here. See agent/.
+      'agent/**',
     ],
   },
   js.configs.recommended,

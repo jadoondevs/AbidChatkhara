@@ -1,15 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  useAgentStatus,
   useCreatePaymentAccount,
   useCreateUser,
   usePaymentAccounts,
   usePaymentMethods,
-  usePrinterSettings,
   usePrintTest,
   useReceiptPreview,
   useSaveReceiptSettings,
-  useSavePrinterSettings,
   useSaveRestaurantSettings,
   useSaveServiceChargeSettings,
   useSetUserPassword,
@@ -19,9 +18,9 @@ import {
   useUpdateUser,
   useUsers,
 } from '../api/hooks.js';
-import type { PaymentAccount, PrinterSettings, ReceiptSettings, RestaurantSettings, Role, ServiceChargeSettings, User } from '../api/types.js';
+import type { PaymentAccount, ReceiptSettings, RestaurantSettings, Role, ServiceChargeSettings, User } from '../api/types.js';
 import { TicketPreview } from '../components/PrintDecision.tsx';
-import { ErrorBanner, Loading, Modal, PasswordInput } from '../components/ui.tsx';
+import { ErrorBanner, Loading, Modal, PasswordInput, PrinterStatus } from '../components/ui.tsx';
 import { PaymentMethodsPanel } from './PaymentMethodConfigScreen.tsx';
 
 type Tab = 'restaurant' | 'receipt' | 'service-charge' | 'methods' | 'accounts' | 'printer' | 'users';
@@ -389,117 +388,49 @@ function ServiceChargePanel(): JSX.Element {
 }
 
 function PrinterPanel(): JSX.Element {
-  const printer = usePrinterSettings(true);
-  const save = useSavePrinterSettings();
+  const printer = useAgentStatus();
   const testPrint = usePrintTest();
-  const [draft, setDraft] = useState<PrinterSettings | null>(null);
-  const [saved, setSaved] = useState(false);
-
-  if (printer.isLoading) return <Loading />;
-  if (printer.error) return <ErrorBanner error={printer.error} />;
-  const current = draft ?? printer.data;
-  if (!current) return <Loading />;
-
-  const update = (patch: Partial<PrinterSettings>) => {
-    setSaved(false);
-    setDraft({ ...current, ...patch });
-  };
+  const [tested, setTested] = useState<'ok' | 'failed' | null>(null);
 
   return (
     <div className="card col settings-panel">
-      <ErrorBanner error={save.error} />
-
-      {/* Configuring a printer is optional, and a till with none is a
-          supported setup — not a broken one. Saying so here is what
-          stops an operator hunting for a fault that isn't there. */}
-      <div className={current.host.trim() === '' ? 'blocked-notice info' : 'blocked-notice ok'}>
+      {/* Receipts print through the till's local ESC/POS agent (see the
+          repo's agent/), which sends raw bytes to the BIXOLON — the
+          Windows driver renders blank pages, so it is bypassed entirely.
+          This is a live reading of that agent and its printer, not a
+          stored setting: it is the honest answer to "can this till print
+          right now?". */}
+      <div className={printer.data === true ? 'blocked-notice ok' : 'blocked-notice info'}>
         <strong>
-          {current.host.trim() === ''
-            ? 'No POS printer configured — receipts use Windows printing.'
-            : `Receipts print directly to ${current.host.trim()}:${current.port}.`}
+          <PrinterStatus connected={printer.data === true} checking={printer.isLoading} />
         </strong>
         <p className="muted">
-          {current.host.trim() === ''
-            ? 'Printing opens the normal Windows print dialog, where you can choose any installed printer or Microsoft Print to PDF. Set an address below to print straight to a thermal POS printer instead.'
-            : 'If that printer cannot be reached, printing falls back to the Windows print dialog rather than failing.'}
-        </p>
-      </div>
-
-      <div>
-        <label htmlFor="printer-host">Printer address (optional)</label>
-        <input id="printer-host" value={current.host} onChange={(event) => update({ host: event.target.value })} placeholder="e.g. 192.168.1.50" />
-        <p className="muted field-hint">
-          The receipt printer’s address on the restaurant’s own network. Leave blank to use whatever the server was started with
-          (POS_PRINTER_HOST), or to print through Windows.
-        </p>
-      </div>
-
-      <div style={{ maxWidth: 200 }}>
-        <label htmlFor="printer-port">Port</label>
-        <input
-          id="printer-port"
-          inputMode="numeric"
-          value={String(current.port)}
-          onChange={(event) => update({ port: Math.min(65535, Math.max(1, Number(event.target.value.replace(/[^0-9]/g, '') || 1))) })}
-        />
-        <p className="muted field-hint">9100 unless your printer’s manual says otherwise.</p>
-      </div>
-
-      {/* Darkness is a property of the printer, not of the text. This
-          is the only way to make ORDINARY receipt lines dark without
-          emphasising every one of them, which would leave a receipt
-          with no difference between a total and the line above it. */}
-      <div style={{ maxWidth: 320 }}>
-        <label htmlFor="printer-density">Print darkness</label>
-        <select
-          id="printer-density"
-          value={current.densityLevel}
-          onChange={(event) => update({ densityLevel: Number(event.target.value) })}
-        >
-          <option value={0}>Use the printer’s own setting</option>
-          {[1, 2, 3, 4, 5, 6, 7, 8].map((level) => (
-            <option key={level} value={level}>
-              Level {level}
-              {level === 5 ? ' (default)' : ''}
-              {level === 8 ? ' (darkest)' : ''}
-            </option>
-          ))}
-        </select>
-        <p className="muted field-hint">
-          Raise this if ordinary receipt text prints grey. Print the test strip below, look at the paper, and adjust — the printer is the
-          only thing that can answer this. Some printers ignore the command entirely; if the test strip does not change between levels,
-          set the darkness in the printer’s own configuration utility instead.
+          {printer.data === true
+            ? 'The print agent is running on this till and the receipt printer is reachable. Bills and receipts print straight to it.'
+            : 'The print agent on this till isn’t answering, or the printer is unreachable. Start the agent and switch the printer on, then this turns green — nothing needs saving here.'}
         </p>
       </div>
 
       <div className="row">
-        <button disabled={testPrint.isPending} onClick={() => testPrint.mutate()}>
+        <button
+          disabled={testPrint.isPending}
+          onClick={() =>
+            testPrint.mutate(undefined, {
+              onSuccess: () => setTested('ok'),
+              onError: () => setTested('failed'),
+            })
+          }
+        >
           {testPrint.isPending ? 'Printing…' : 'Print test strip'}
         </button>
-        {testPrint.data?.via === 'thermal' && <span className="pill ok">Sent to the printer</span>}
-        {testPrint.data?.via === 'fallback' && <span className="muted">No POS printer — sent to Windows printing</span>}
+        {tested === 'ok' && <span className="pill ok">Sent to the printer</span>}
+        {tested === 'failed' && <span className="warn-text">Nothing printed — the agent or printer isn’t ready.</span>}
       </div>
       <ErrorBanner error={testPrint.error} />
       <p className="muted field-hint" style={{ marginTop: 0 }}>
         The strip prints one block of ordinary text and one emphasised block. Ordinary text must be readable; the emphasised block must be
-        visibly heavier. Save any change above before printing it.
+        visibly heavier. Print darkness is set in the agent’s own configuration — see agent/README.md.
       </p>
-
-      <label className="checkbox-row">
-        <input type="checkbox" checked={current.enabled} onChange={(event) => update({ enabled: event.target.checked })} />
-        Printing enabled
-      </label>
-      <p className="muted field-hint">
-        Turn this off while the printer is away for repair: printing then goes straight to the Windows dialog instead of every receipt
-        waiting on a connection that will never answer.
-      </p>
-
-      <div className="row">
-        <button className="primary" disabled={save.isPending} onClick={() => save.mutate(current, { onSuccess: () => setSaved(true) })}>
-          {save.isPending ? 'Saving…' : 'Save'}
-        </button>
-        <SavedNote saved={saved} />
-      </div>
     </div>
   );
 }

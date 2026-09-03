@@ -1,8 +1,7 @@
 import type { Paisa } from '@pos/shared';
 import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 import { api, query, type RequestOptions } from './client.js';
-import { completePrint } from './printing.js';
-import type { PrintResult } from './printing.js';
+import { agentHealthy, printViaAgent } from './agent.js';
 import type {
   AppSettings,
   BillTotals,
@@ -13,7 +12,6 @@ import type {
   OrderHistory,
   PartnerRecord,
   PaymentOption,
-  PrintOutcome,
   PrinterSettings,
   ReceiptSettings,
   RestaurantSettings,
@@ -376,20 +374,39 @@ export function usePaymentOptions(): UseQueryResult<PaymentOption[]> {
 }
 
 /**
- * Printing always succeeds as far as the server is concerned: it either
- * printed to the thermal printer or handed back the ticket as HTML.
- * `completePrint` then opens the browser's print dialog for the second
- * case (api/printing.ts), so a caller gets one promise for "the ticket
- * has been dealt with" however this till prints.
+ * Printing goes through the till's local ESC/POS agent (api/agent.ts),
+ * not the browser: the server builds the ticket (masking account numbers
+ * as it does), the browser forwards it to the agent, and the agent
+ * prints raw bytes to the BIXOLON. A print that does not happen THROWS —
+ * there is no silent `window.print()` fallback — so a caller's `onError`
+ * is where "tell the cashier, let them retry" lives, and nothing treats
+ * a failure as a success.
  */
+
 /**
- * Print the darkness test strip. Same fallback path as any other print,
- * so a till with no thermal printer still gets something to look at.
+ * Is the local print agent up and its printer reachable? Polled, because
+ * a printer that was there a minute ago may be unplugged now, and the
+ * cashier should see that before they try to print rather than after.
+ * `GET /health` prints nothing, so polling is free. Never throws — a
+ * down agent is simply `false`.
  */
-export function usePrintTest(): UseMutationResult<PrintResult, Error, void> {
-  return useMutation({
-    mutationFn: async () => completePrint(await api.post<PrintOutcome>('/api/printer/test-print')),
+export function useAgentStatus(): UseQueryResult<boolean> {
+  return useQuery({
+    queryKey: ['agent-health'],
+    queryFn: agentHealthy,
+    refetchInterval: 5000,
+    refetchOnWindowFocus: true,
+    retry: false,
+    // The status is a live fact about hardware, not something to cache
+    // as fresh across a mount.
+    staleTime: 0,
+    gcTime: 0,
   });
+}
+
+/** Print the darkness test strip, straight to the agent. */
+export function usePrintTest(): UseMutationResult<void, Error, void> {
+  return useMutation({ mutationFn: () => printViaAgent({ kind: 'test' }) });
 }
 
 /**
@@ -409,15 +426,21 @@ export function useReceiptPreview(): UseMutationResult<
   });
 }
 
-export function usePrintBill(): UseMutationResult<PrintResult, Error, number> {
+/**
+ * Print a bill: fetch the masked ticket the server built for this order,
+ * then hand it to the agent. Two awaits, one promise — if either the
+ * fetch or the print fails, the mutation rejects and the bill is NOT
+ * treated as printed.
+ */
+export function usePrintBill(): UseMutationResult<void, Error, number> {
   return useMutation({
-    mutationFn: async (orderId: number) => completePrint(await api.post<PrintOutcome>(`/api/orders/${orderId}/print-bill`)),
+    mutationFn: async (orderId: number) => printViaAgent(await api.get<unknown>(`/api/orders/${orderId}/bill-ticket`)),
   });
 }
 
-export function usePrintReceipt(): UseMutationResult<PrintResult, Error, number> {
+export function usePrintReceipt(): UseMutationResult<void, Error, number> {
   return useMutation({
-    mutationFn: async (orderId: number) => completePrint(await api.post<PrintOutcome>(`/api/orders/${orderId}/print-receipt`)),
+    mutationFn: async (orderId: number) => printViaAgent(await api.get<unknown>(`/api/orders/${orderId}/receipt-ticket`)),
   });
 }
 
