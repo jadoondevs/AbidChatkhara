@@ -1,5 +1,6 @@
 import { paisa, type Paisa } from '@pos/shared';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   useCategories,
   useClearItemModifierPrice,
@@ -9,6 +10,7 @@ import {
   useCreateModifierGroup,
   useItemModifierGroups,
   useItemModifierPrices,
+  useItemsWithoutOwnership,
   useLinkModifierGroup,
   useMenu,
   useModifierGroups,
@@ -42,6 +44,11 @@ import { ErrorBanner, Loading, Modal, Money, MoneyInput } from '../components/ui
 export function MenuConfigScreen(): JSX.Element {
   const categories = useCategories(true);
   const menu = useMenu();
+  // An item nobody owns cannot be sold at all — the sale fails at
+  // allocation, at the payment screen, with an error a cashier can do
+  // nothing about. Flagging it here puts the problem where the person
+  // who can fix it is already standing.
+  const unowned = useItemsWithoutOwnership();
   const createCategory = useCreateCategory();
   const createItem = useCreateItem();
   const setPrice = useSetItemPrice();
@@ -134,6 +141,13 @@ export function MenuConfigScreen(): JSX.Element {
                 <tr key={item.id}>
                   <td>
                     <strong>{item.name}</strong>
+                    {unowned.data?.includes(item.id) && (
+                      <div>
+                        <Link to="/config/partners" className="pill warn">
+                          No owner — can't be sold
+                        </Link>
+                      </div>
+                    )}
                   </td>
                   <td className="muted">{categoryName_(item.categoryId)}</td>
                   <td className="num">

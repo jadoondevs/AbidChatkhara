@@ -341,6 +341,22 @@ given instant, and writes `line_allocation` rows.
   new ones inside one transaction, so "shares sum to exactly 10000" can
   be checked before anything is written. Same effective-dating pattern
   as `item_price` (see the Catalog section above), applied to ownership.
+- **A bulk apply is the same write, repeated, in one transaction.**
+  `setOwnershipForCategories` gives every active item in the chosen
+  categories one split, by calling the same per-item write inside a
+  single transaction — so a fifty-item menu is two operations rather
+  than fifty, and a failure halfway leaves nothing half-written. Each
+  item still gets its own `item.set_ownership` audit entry: a bulk
+  change is fifty changes to fifty items' money, and the log should say
+  so item by item. Inactive items are skipped — a retired item cannot be
+  sold, so there is nothing to allocate.
+- **An item nobody owns cannot be sold, and the Menu screen says so.**
+  Allocation splits every line's net sales across its owners, and a line
+  with no owners and a nonzero base makes `splitByShares` throw rather
+  than write a partial allocation — so an unowned item takes a cashier
+  all the way to payment and then fails. `listItemsWithoutOwnership`
+  (`GET /api/ownership/unset-items`) is what the Menu screen flags each
+  such item with, where the person who can fix it is already standing.
 - **Ownership shares are snapshotted onto every allocation** —
   `line_allocation.share_bp_snapshot` — so a later ownership change, or a
   refund computed after one, can never alter a historical allocation.

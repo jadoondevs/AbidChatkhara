@@ -2022,6 +2022,39 @@ tbody tr:hover {
   min-height: 34px;
 }
 
+/* Categories to apply one ownership split to. They wrap because a
+   real menu has eleven of them and a column of eleven checkboxes
+   pushes the split editor below the fold, where nobody scrolls to
+   check the total before pressing Apply. */
+.category-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.category-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.category-pick.picked {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+
+.category-pick input {
+  width: auto;
+  min-height: 0;
+  margin: 0;
+}
+
 /* A name that opens a record reads as a name, not as a button — but it
    is a button, so it keeps keyboard focus and Enter. */
 button.link-button {

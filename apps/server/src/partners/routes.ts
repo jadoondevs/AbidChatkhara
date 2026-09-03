@@ -10,9 +10,11 @@ import {
   getActiveItemOwnership,
   getActiveModifierOwnership,
   getPartnerRecord,
+  listItemsWithoutOwnership,
   listPartners,
   renamePartner,
   setItemOwnership,
+  setOwnershipForCategories,
   setModifierOwnership,
   setPartnerActive,
 } from './service.js';
@@ -134,6 +136,37 @@ export const partnersRoutes: FastifyPluginAsync<PartnersPluginOptions> = async (
       const actor = requireRole(request, reply, 'manager');
       const rows = await setModifierOwnership(db, request.params.id, request.body.split, { actorId: actor.userId, terminalId: actor.terminalId });
       return rows.map((r) => ({ partnerId: r.partnerId, shareBp: r.shareBp }));
+    },
+  );
+
+  /**
+   * One split across whole categories at once. Manager-only like every
+   * other ownership write, and audited per item by the service — see
+   * setOwnershipForCategories for why a bulk change is still logged as
+   * fifty individual ones.
+   */
+  app.put(
+    '/api/ownership/by-category',
+    {
+      schema: {
+        body: z.object({ categoryIds: z.array(z.number().int()).min(1), split: z.array(ownershipSplitEntrySchema).min(1) }),
+        response: { 200: z.object({ itemIds: z.array(z.number().int()) }) },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      return setOwnershipForCategories(db, request.body.categoryIds, request.body.split, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  /** Active items nobody owns yet — items that cannot be sold. Readable
+   * by anyone signed in, because the Menu screen flags them. */
+  app.get(
+    '/api/ownership/unset-items',
+    { schema: { response: { 200: z.array(z.number().int()) } } },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      return listItemsWithoutOwnership(db);
     },
   );
 

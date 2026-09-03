@@ -441,11 +441,30 @@ export function useItemOwnership(itemId: number | null): UseQueryResult<Ownershi
 }
 
 export function useSetItemOwnership(): UseMutationResult<OwnershipShare[], Error, { itemId: number; split: OwnershipShare[] }> {
-  const queryClient = useQueryClient();
+  const invalidate = useInvalidateOnSuccess(['item-ownership', 'items-without-ownership']);
   return useMutation({
     mutationFn: ({ itemId, split }) => api.put<OwnershipShare[]>(`/api/items/${itemId}/ownership`, { split }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['item-ownership'] }),
+    onSuccess: invalidate,
   });
+}
+
+/** One split applied to every active item in the chosen categories. */
+export function useSetOwnershipForCategories(): UseMutationResult<
+  { itemIds: number[] },
+  Error,
+  { categoryIds: number[]; split: OwnershipShare[] }
+> {
+  const invalidate = useInvalidateOnSuccess(['item-ownership', 'items-without-ownership', 'partner-record']);
+  return useMutation({
+    mutationFn: (body) => api.put<{ itemIds: number[] }>('/api/ownership/by-category', body),
+    onSuccess: invalidate,
+  });
+}
+
+/** Active items nobody owns yet — they cannot be sold until they have a
+ * split, so the Menu screen says so on the item itself. */
+export function useItemsWithoutOwnership(): UseQueryResult<number[]> {
+  return useQuery({ queryKey: ['items-without-ownership'], queryFn: () => api.get<number[]>('/api/ownership/unset-items') });
 }
 
 // ---------------------------------------------------------------------
@@ -591,7 +610,11 @@ export function useCreateCategory(): UseMutationResult<Category, Error, { name: 
 }
 
 export function useCreateItem(): UseMutationResult<MenuItem, Error, { categoryId: number; name: string }> {
-  const invalidate = useInvalidateOnSuccess(['menu']);
+  // A new item is owned by nobody, so it joins the unsellable list the
+  // moment it is created — the Menu screen has to hear about that in
+  // the same breath as the item itself, or the flag only appears on a
+  // reload nobody does.
+  const invalidate = useInvalidateOnSuccess(['menu', 'items-without-ownership']);
   return useMutation({ mutationFn: (body) => api.post<MenuItem>('/api/items', body), onSuccess: invalidate });
 }
 
@@ -625,7 +648,7 @@ export function useUpdateItem(): UseMutationResult<
 /** Take an item off the menu. The server decides whether that means
  * deleting it or retiring it, and says which — see `removeItem`. */
 export function useRemoveItem(): UseMutationResult<{ outcome: 'deleted' | 'retired' }, Error, number> {
-  const invalidate = useInvalidateOnSuccess(['menu', 'item-modifier-groups']);
+  const invalidate = useInvalidateOnSuccess(['menu', 'item-modifier-groups', 'items-without-ownership']);
   return useMutation({
     mutationFn: (itemId) => api.del<{ outcome: 'deleted' | 'retired' }>(`/api/items/${itemId}`),
     onSuccess: invalidate,

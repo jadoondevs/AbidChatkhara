@@ -1,6 +1,6 @@
 import { paisa, sum } from '@pos/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createCategory, createItem, setItemPrice } from '../catalog/service.js';
+import { createCategory, createItem, removeItem, setItemPrice } from '../catalog/service.js';
 import { createUser } from '../identity/service.js';
 import { addLine, billOrder, createOrder } from '../ordering/service.js';
 import { createTestDb } from '../platform/db/test-helpers.js';
@@ -10,12 +10,14 @@ import {
   createPartner,
   getActiveItemOwnership,
   getPartnerRecord,
+  listItemsWithoutOwnership,
   listPartners,
   renamePartner,
   reverseLineAllocations,
   reverseOrderAllocations,
   scheduleOwnershipIntegrityCheck,
   setItemOwnership,
+  setOwnershipForCategories,
   setPartnerActive,
 } from './service.js';
 
@@ -417,6 +419,126 @@ describe('partners/service', () => {
 
       const violations = await checkOwnershipIntegrity(ctx.db);
       expect(violations).toContainEqual({ kind: 'item', id: item.id, totalShareBp: 4000 });
+    });
+  });
+
+  describe('setOwnershipForCategories', () => {
+    it('applies one split to every active item in the chosen categories', async () => {
+      const { actor, alice, bob, category, item } = await setupBase();
+      const second = await createItem(ctx.db, { categoryId: category.id, name: 'Biryani' }, actor);
+      const otherCategory = await createCategory(ctx.db, { name: 'Drinks' }, actor);
+      const untouched = await createItem(ctx.db, { categoryId: otherCategory.id, name: 'Tea' }, actor);
+
+      const { itemIds } = await setOwnershipForCategories(
+        ctx.db,
+        [category.id],
+        [
+          { partnerId: alice.id, shareBp: 8000 },
+          { partnerId: bob.id, shareBp: 2000 },
+        ],
+        actor,
+      );
+
+      expect(itemIds).toEqual([item.id, second.id]);
+      for (const id of itemIds) {
+        expect(await getActiveItemOwnership(ctx.db, id)).toEqual([
+          { partnerId: alice.id, shareBp: 8000 },
+          { partnerId: bob.id, shareBp: 2000 },
+        ]);
+      }
+      // A category nobody picked is left exactly as it was.
+      expect(await getActiveItemOwnership(ctx.db, untouched.id)).toEqual([]);
+    });
+
+    it('closes the previous split rather than overwriting it, and audits each item', async () => {
+      const { actor, alice, bob, category, item } = await setupBase();
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: alice.id, shareBp: 10_000 }], actor);
+
+      await setOwnershipForCategories(
+        ctx.db,
+        [category.id],
+        [
+          { partnerId: alice.id, shareBp: 5000 },
+          { partnerId: bob.id, shareBp: 5000 },
+        ],
+        actor,
+      );
+
+      const rows = await ctx.db.selectFrom('item_ownership').selectAll().where('item_id', '=', item.id).orderBy('id', 'asc').execute();
+      expect(rows).toHaveLength(3);
+      expect(rows[0]!.valid_to).not.toBeNull(); // the 100% row was closed, not edited
+      expect(rows.slice(1).every((r) => r.valid_to === null)).toBe(true);
+
+      // A bulk change is still a change to this item's money, and the
+      // log should say so item by item.
+      const audits = await ctx.db.selectFrom('audit_log').selectAll().where('action', '=', 'item.set_ownership').where('entity_id', '=', String(item.id)).execute();
+      expect(audits).toHaveLength(2);
+    });
+
+    it('skips retired items, refuses an unbalanced split, and refuses an unknown category', async () => {
+      const { actor, alice, bob, category, item } = await setupBase();
+      const retired = await createItem(ctx.db, { categoryId: category.id, name: 'Old dish' }, actor);
+      expect(await removeItem(ctx.db, retired.id, actor)).toBe('deleted');
+      const stillThere = await createItem(ctx.db, { categoryId: category.id, name: 'Kept' }, actor);
+      await ctx.db.updateTable('item').set({ active: 0 }).where('id', '=', stillThere.id).execute();
+
+      const balanced = [
+        { partnerId: alice.id, shareBp: 8000 },
+        { partnerId: bob.id, shareBp: 2000 },
+      ];
+      const { itemIds } = await setOwnershipForCategories(ctx.db, [category.id], balanced, actor);
+      expect(itemIds).toEqual([item.id]); // the deactivated item is not touched
+
+      await expect(setOwnershipForCategories(ctx.db, [category.id], [{ partnerId: alice.id, shareBp: 9000 }], actor)).rejects.toThrow(
+        /sum to exactly 10000/,
+      );
+      await expect(setOwnershipForCategories(ctx.db, [category.id + 999], balanced, actor)).rejects.toThrow(/not found/);
+      await expect(setOwnershipForCategories(ctx.db, [], balanced, actor)).rejects.toThrow(/at least one category/);
+    });
+
+    it('leaves nothing half-written when one item in the batch fails', async () => {
+      const { actor, alice, category, item } = await setupBase();
+      const second = await createItem(ctx.db, { categoryId: category.id, name: 'Biryani' }, actor);
+
+      // A partner id that does not exist trips the foreign key on the
+      // SECOND item, after the first has already been written.
+      await expect(
+        setOwnershipForCategories(
+          ctx.db,
+          [category.id],
+          [
+            { partnerId: alice.id, shareBp: 5000 },
+            { partnerId: 9999, shareBp: 5000 },
+          ],
+          actor,
+        ),
+      ).rejects.toThrow();
+
+      expect(await getActiveItemOwnership(ctx.db, item.id)).toEqual([]);
+      expect(await getActiveItemOwnership(ctx.db, second.id)).toEqual([]);
+    });
+  });
+
+  describe('listItemsWithoutOwnership', () => {
+    it('lists active items nobody owns, and drops them once a split is set', async () => {
+      const { actor, alice, category, item } = await setupBase();
+      const second = await createItem(ctx.db, { categoryId: category.id, name: 'Biryani' }, actor);
+
+      expect(await listItemsWithoutOwnership(ctx.db)).toEqual([item.id, second.id]);
+
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: alice.id, shareBp: 10_000 }], actor);
+      expect(await listItemsWithoutOwnership(ctx.db)).toEqual([second.id]);
+
+      // Retired items can't be sold, so they are not waiting on anything.
+      await ctx.db.updateTable('item').set({ active: 0 }).where('id', '=', second.id).execute();
+      expect(await listItemsWithoutOwnership(ctx.db)).toEqual([]);
+    });
+
+    it('reports an item whose only ownership rows have been closed', async () => {
+      const { actor, alice, item } = await setupBase();
+      await setItemOwnership(ctx.db, item.id, [{ partnerId: alice.id, shareBp: 10_000 }], actor);
+      await ctx.db.updateTable('item_ownership').set({ valid_to: new Date().toISOString() }).where('item_id', '=', item.id).execute();
+      expect(await listItemsWithoutOwnership(ctx.db)).toContain(item.id);
     });
   });
 

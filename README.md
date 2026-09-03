@@ -166,6 +166,16 @@ their shares, and their recent allocations at the share each sale was
 written at. Marking a partner as left records a departure; it does not
 reassign what they own, and the confirmation says so, with a count.
 
+**Ownership by category** applies one split to every item in the
+categories you tick — a whole menu is a couple of operations rather than
+one per dish, and each item stays individually editable afterwards. The
+confirmation names how many items it will change before it changes them.
+
+An item nobody owns **cannot be sold**: the sale fails when the takings
+are split. The Menu screen flags any such item ("No owner — can't be
+sold") and links straight here, so a newly added dish never reaches a
+cashier in that state unnoticed.
+
 Ownership splits still apply **from now forward only**: past sales keep
 the shares they were allocated under (`docs/decisions/006`).
 
