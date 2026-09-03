@@ -54,6 +54,19 @@ it was fixed:
   importer writes an override for each one, including the base size's
   zero, rather than leaving any of them to a default that is only
   correct by accident.
+- **The delta is an implementation detail — no human ever sees one.**
+  The storage is a delta (`final − base`), but a delta is not a price
+  anyone reasons in. So both faces of the app work in final prices: the
+  item editor shows and takes "Half Rs 1,100, Full Rs 2,100" and does
+  the `final − base` conversion itself, and the cashier's picker shows
+  each size's final price and the resulting line price before the item
+  is added. Optional add-on groups (extra cheese) are the one place a
+  "+Rs" adjustment is shown, because that is honestly what an add-on is.
+- **Modifiers are configured where the item is, not on a second screen.**
+  They live inside Edit Item, alongside name/category/price, because a
+  manager who opens an item to change its size expects to find the size
+  there. The global "Modifier groups" screen keeps only the reusable
+  definitions (names and choice rules); all pricing is per item.
 
 ## Consequences
 

@@ -158,10 +158,12 @@ line in every report and never inside a sales figure.
 
 ### The menu
 
-**Menu** is every detail of an item, not just its price: its name, the
-category it sits in, its price, whether it is available tonight, which
-option groups it offers, and what each of those options costs *on this
-item*. Nothing about the menu is compiled in.
+**Menu → Edit** is every detail of an item in one dialog: its name, the
+category it sits in, its base price, whether it is available tonight,
+and its **Modifiers** — the sizes and add-ons it offers and what each
+costs *on this item*. Nothing about the menu is compiled in, and nothing
+about it is edited on a second, separate screen: the Options column in
+the list is a read-only summary, and everything is configured from Edit.
 
 Two edits that look alike are different underneath. A price change
 writes a new effective-dated row, so past orders keep the price they
@@ -174,12 +176,15 @@ is deleted outright; one that has been sold is retired instead — off the
 till, still in the reports — because deleting it would take its sales
 with it. The screen says which of the two happened, and why.
 
-**Sizes are option groups.** A dish sold Half and Full is one item with
-a required Half/Full choice, and the price difference is set per item —
-a shared "Half / Full" group is attached to sixteen dishes that each
-price Full differently. Set that under **Options…** on the item. See
-`docs/decisions/024` for why sizes are modifiers here rather than
-separate items, and what that costs.
+**Sizes are option groups.** A dish sold Half and Full is one item —
+never two — with a required Half/Full choice. The price of each size is
+shown and edited as the item's **final price at that size** (Half
+Rs 1,100, Full Rs 2,100), not as an adjustment to add in your head; the
+group itself ("Half / Full") is reusable, attached to as many dishes as
+you like, and each dish prices its own sizes. The same holds for
+Small / Medium / Large or any other set. Set all of it under **Edit →
+Modifiers** on the item. See `docs/decisions/024` for why sizes are
+modifiers here rather than separate items, and what that costs.
 
 An item with no ownership split cannot be sold; the screen flags it. See
 **Partners** below.
