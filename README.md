@@ -73,6 +73,37 @@ they're sequential and fake on purpose. The script refuses to run
 against a database that already has users, so it can't quietly
 double-seed a real till.
 
+### Loading a real menu
+
+The seed's eight items are a fiction for demos and tests. A real menu is
+a data file plus one command:
+
+```bash
+npm run menu:import -- --plan   # show exactly what would change
+npm run menu:import             # do it
+```
+
+The file it reads by default is `apps/server/menu/abid-chatkhara.json` —
+categories, items, prices in whole rupees, and for an item sold in sizes
+the group of sizes and the absolute price of each. Point it at a
+different file with `--file path.json`.
+
+It is safe to run against a till that is already taking orders, and safe
+to run twice: it writes only what differs, a changed price becomes a new
+effective-dated row rather than an edit to the old one, and a second run
+reports nothing to do. Editing the file and re-running is the intended
+way to put a price rise through — the Menu screen is for one item, this
+is for the menu.
+
+The preview flag is `--plan`, not `--dry-run`: npm keeps `--dry-run` for
+itself, and a preview flag that silently imports for real is worse than
+none.
+
+**The import deliberately sets no ownership.** Who owns which item is a
+partnership agreement, not menu data, so imported items arrive owned by
+nobody, the Menu screen flags them as unsellable, and Partners →
+Ownership by category is where that is answered.
+
 For a real restaurant, create the first admin account directly instead
 — see `apps/server/src/identity/service.test.ts` for the pattern
 (`createUser` with `actorId: null`, a system action, is how the very first
@@ -124,6 +155,34 @@ reads 5% — on screen and on a reprinted receipt — after an admin sets
 The charge is money held for the waiter who earned it, not the
 restaurant's revenue (`docs/decisions/008`), so it appears on its own
 line in every report and never inside a sales figure.
+
+### The menu
+
+**Menu** is every detail of an item, not just its price: its name, the
+category it sits in, its price, whether it is available tonight, which
+option groups it offers, and what each of those options costs *on this
+item*. Nothing about the menu is compiled in.
+
+Two edits that look alike are different underneath. A price change
+writes a new effective-dated row, so past orders keep the price they
+were rung up at. A rename updates in place, and is safe for the same
+reason from the other side: a sold line snapshots the name it was sold
+under, so fixing a typo does not rewrite last month's bills.
+
+**Remove** takes an item off the menu. An item that has never been sold
+is deleted outright; one that has been sold is retired instead — off the
+till, still in the reports — because deleting it would take its sales
+with it. The screen says which of the two happened, and why.
+
+**Sizes are option groups.** A dish sold Half and Full is one item with
+a required Half/Full choice, and the price difference is set per item —
+a shared "Half / Full" group is attached to sixteen dishes that each
+price Full differently. Set that under **Options…** on the item. See
+`docs/decisions/024` for why sizes are modifiers here rather than
+separate items, and what that costs.
+
+An item with no ownership split cannot be sold; the screen flags it. See
+**Partners** below.
 
 ### Orders
 

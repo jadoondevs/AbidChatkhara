@@ -296,6 +296,17 @@ describe('catalog/service', () => {
       expect((await listModifiers(ctx.db, { groupId: group.id })).map((m) => m.name)).toEqual(['Extra cheese']);
     });
 
+    it('lists a group’s options in the order they were entered, not alphabetically', async () => {
+      const actor = await setupActor();
+      const group = await createModifierGroup(ctx.db, { name: 'Half / Full', minSelect: 1, maxSelect: 1 }, actor);
+      await createModifier(ctx.db, { groupId: group.id, name: 'Half', priceDeltaMinor: paisa(0) }, actor);
+      await createModifier(ctx.db, { groupId: group.id, name: 'Full', priceDeltaMinor: paisa(0) }, actor);
+
+      // Alphabetically this is Full, Half — which would put the
+      // dearer size first AND make it the till's pre-selected default.
+      expect((await listModifiers(ctx.db, { groupId: group.id })).map((m) => m.name)).toEqual(['Half', 'Full']);
+    });
+
     it('lists all modifier groups, ordered by name', async () => {
       const actor = await setupActor();
       await createModifierGroup(ctx.db, { name: 'Spice level', minSelect: 1, maxSelect: 1 }, actor);

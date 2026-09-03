@@ -641,10 +641,21 @@ export async function createModifier(
   return summary;
 }
 
+/**
+ * A group's options in the order they were entered, NOT alphabetically.
+ *
+ * A group's options are a deliberate sequence — Half then Full, Mild
+ * then Medium then Extra hot — and the till both displays them in this
+ * order and pre-selects the first one of a required group. Sorted by
+ * name, "Half / Full" reads Full, Half: the most expensive size, shown
+ * first and pre-selected, so a cashier who takes the default charges
+ * double. Creation order is the menu's own order and the only one that
+ * makes the default the base size.
+ */
 export async function listModifiers(db: Kysely<Database>, opts: { groupId?: number | undefined } = {}): Promise<ModifierSummary[]> {
   let query = db.selectFrom('modifier').selectAll();
   if (opts.groupId !== undefined) query = query.where('group_id', '=', opts.groupId);
-  const rows = await query.orderBy('name', 'asc').execute();
+  const rows = await query.orderBy('id', 'asc').execute();
   return rows.map(toModifierSummary);
 }
 

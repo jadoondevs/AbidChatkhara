@@ -235,6 +235,32 @@ Items, categories, modifier groups/modifiers, and item availability
   `order_line` row will separately snapshot the unit price actually
   charged, so catalog-level price history and a specific sale's price are
   two different things protected two different ways.
+- **A modifier group's options are a sequence, not a set.** Half then
+  Full, Mild then Medium then Extra hot — `listModifiers` returns them
+  in creation order, never alphabetically, because the till displays
+  them in that order AND pre-selects the first one of a required group.
+  Sorted by name, "Half / Full" reads Full, Half: the dearer size shown
+  first and taken by default, which is a double charge every time a
+  cashier accepts the default. The order options were entered is the
+  menu's own order.
+- **A real menu is imported, never seeded.** `catalog/menu-import.ts`
+  plus `npm run menu:import` load a checked-in data file (categories,
+  items, whole-rupee prices, and per-item size prices) into a till. It
+  is deliberately separate from `seed.ts`, which is a fictional demo the
+  test suites assert on: a real menu changes on the restaurant's
+  schedule and has to be loadable into a database that is already taking
+  orders. The importer plans first and applies second — the same
+  description drives `--plan` and the real run — and every write is an
+  ordinary catalog call with its own audit entry, so a half-finished run
+  is re-runnable rather than something to unwind. A price that differs
+  becomes a new effective-dated row, so importing a price rise keeps the
+  history exactly as the Menu screen would. It sets no ownership: see
+  the Partners section.
+- **The same dish can appear twice on one menu, so a name is not an
+  address.** This restaurant's printed menu lists one item twice at
+  different prices and asked for it kept that way, so the importer
+  addresses an item by category, name AND occurrence — "the Nth item
+  called X in category Y, by creation order" — and upserts on that.
 - **`item_availability` is a 1:1 sidecar, not a log.** One row per item,
   updated in place (there's no historical-sales reason for it to be
   append-only), created automatically alongside the item itself so no

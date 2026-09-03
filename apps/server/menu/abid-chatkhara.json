@@ -1,0 +1,133 @@
+{
+  "modifierGroups": [
+    {
+      "name": "Half / Full",
+      "minSelect": 1,
+      "maxSelect": 1,
+      "options": ["Half", "Full"]
+    },
+    {
+      "name": "Small / Large",
+      "minSelect": 1,
+      "maxSelect": 1,
+      "options": ["Small", "Large"]
+    },
+    {
+      "name": "Bottle size",
+      "minSelect": 1,
+      "maxSelect": 1,
+      "options": ["Half litre", "Litre", "1.5 litre"]
+    }
+  ],
+  "categories": [
+    {
+      "name": "Tawa Chicken",
+      "items": [
+        { "name": "Tawa Piece", "price": 800 },
+        { "name": "Tawa Piece Makhni", "price": 900 },
+        { "name": "Tawa Piece Boneless", "price": 900 },
+        { "name": "Tawa Piece Boneless Makhni", "price": 950 },
+        { "name": "Tawa Piece Masala", "price": 900 },
+        { "name": "Tawa Piece Masala Makhni", "price": 950 },
+        { "name": "Reshmi Malai Boti Plate", "price": 950 },
+        { "name": "Tawa Piece Boti", "price": 800 },
+        { "name": "Tawa Piece Boti Makhni", "price": 950 }
+      ]
+    },
+    {
+      "name": "B.B.Q",
+      "items": [
+        { "name": "Chicken Tikka Leg Piece", "price": 420 },
+        { "name": "Chicken Tikka Chest Piece", "price": 440 },
+        { "name": "Chicken Boti", "price": 360, "sizes": { "group": "Half / Full", "prices": { "Half": 360, "Full": 680 } } },
+        { "name": "Chicken Malai Boti", "price": 360, "sizes": { "group": "Half / Full", "prices": { "Half": 360, "Full": 720 } } },
+        { "name": "Chicken Seekh Kabab", "price": 200, "sizes": { "group": "Half / Full", "prices": { "Half": 200, "Full": 800 } } },
+        { "name": "Beef Seekh Kabab", "price": 200, "sizes": { "group": "Half / Full", "prices": { "Half": 200, "Full": 800 } } }
+      ]
+    },
+    {
+      "name": "Karahi",
+      "items": [
+        { "name": "Chicken Karahi", "price": 1100, "sizes": { "group": "Half / Full", "prices": { "Half": 1100, "Full": 2100 } } },
+        { "name": "Chicken Karahi Makhni", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2400 } } },
+        { "name": "Chicken Achari Karahi", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2400 } } },
+        { "name": "Chicken Achari Karahi Makhni", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2500 } } },
+        { "name": "Chicken Karahi White", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2500 } } },
+        { "name": "Chicken Karahi Makhni", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2500 } } },
+        { "name": "Chicken Boneless Karahi", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2600 } } },
+        { "name": "Seekh Kabab Karahi", "price": 1000, "sizes": { "group": "Half / Full", "prices": { "Half": 1000, "Full": 2000 } } },
+        { "name": "Shinwari Karahi", "price": 2000, "sizes": { "group": "Half / Full", "prices": { "Half": 2000, "Full": 3800 } } }
+      ]
+    },
+    {
+      "name": "Biryani",
+      "items": [
+        { "name": "Matka Tikka Biryani", "price": 600 },
+        { "name": "Matka Malai Boti Biryani", "price": 650 },
+        { "name": "Tawa Chicken With Rice", "price": 850 },
+        { "name": "Chicken Biryani", "price": 400 }
+      ]
+    },
+    {
+      "name": "Chatni, Roti & Sides",
+      "items": [
+        { "name": "Mint Chatni", "price": 100 },
+        { "name": "Mint Raita", "price": 100 },
+        { "name": "Zeera Raita", "price": 100 },
+        { "name": "Fresh Salad", "price": 150 },
+        { "name": "Chapati", "price": 30 }
+      ]
+    },
+    {
+      "name": "Chaat Corner",
+      "items": [
+        { "name": "Golgappa", "price": 200, "sizes": { "group": "Half / Full", "prices": { "Half": 200, "Full": 380 } } },
+        { "name": "Papri Chana Chaat", "price": 250 },
+        { "name": "Fruit Chaat", "price": 300 }
+      ]
+    },
+    {
+      "name": "Tea",
+      "items": [
+        { "name": "Tea", "price": 100 },
+        { "name": "Cardamom Tea", "price": 100 },
+        { "name": "Green Tea", "price": 80 }
+      ]
+    },
+    {
+      "name": "Fresh Juices",
+      "items": [
+        { "name": "Fresh Orange Juice", "price": 300 },
+        { "name": "Fresh Carrot Juice", "price": 250 },
+        { "name": "Fresh Apple Juice", "price": 450 }
+      ]
+    },
+    {
+      "name": "Milk Shakes",
+      "items": [
+        { "name": "Apple Shake", "price": 250 },
+        { "name": "Banana Shake", "price": 250 },
+        { "name": "Mango Shake", "price": 300 },
+        { "name": "Oreo Shake", "price": 300 }
+      ]
+    },
+    {
+      "name": "Lassi & Traditional Drinks",
+      "items": [
+        { "name": "Meethi Lassi", "price": 200 },
+        { "name": "Namkeen Lassi", "price": 200 },
+        { "name": "Tang", "price": 100 }
+      ]
+    },
+    {
+      "name": "Refreshers & Soft Drinks",
+      "items": [
+        { "name": "Mint Margarita", "price": 250 },
+        { "name": "Lemon Soda", "price": 150 },
+        { "name": "Fresh Lemonade", "price": 200 },
+        { "name": "Soft Drinks", "price": 100, "sizes": { "group": "Bottle size", "prices": { "Half litre": 100, "Litre": 150, "1.5 litre": 200 } } },
+        { "name": "Mineral Water", "price": 70, "sizes": { "group": "Small / Large", "prices": { "Small": 70, "Large": 120 } } }
+      ]
+    }
+  ]
+}
