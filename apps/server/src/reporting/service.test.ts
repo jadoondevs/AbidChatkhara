@@ -1,7 +1,16 @@
 import { paisa, sum } from '@pos/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createPaymentMethod, recordPayment, refundOrder, settleConsumption } from '../billing/service.js';
-import { createCategory, createItem, createModifier, createModifierGroup, linkModifierGroup, setItemPrice } from '../catalog/service.js';
+import {
+  createCategory,
+  createItem,
+  createModifier,
+  createModifierGroup,
+  linkModifierGroup,
+  setItemModifierPrice,
+  setItemPrice,
+  updateModifier,
+} from '../catalog/service.js';
 import { createPerson } from '../consumption/service.js';
 import { createUser } from '../identity/service.js';
 import { addLine, billOrder, createOrder, setDiscount, voidLine, voidOrder } from '../ordering/service.js';
@@ -43,6 +52,21 @@ describe('reporting/service', () => {
     const cash = await createPaymentMethod(ctx.db, { code: 'cash', displayName: 'Cash', kind: 'cash' }, actor);
 
     return { admin, actor, waiter, category, item, partner, cash };
+  }
+
+  /** Sell `qty` of an item with the given modifiers and close the order,
+   * so the sale reaches the item-mix report. */
+  async function sellClosed(
+    actor: { actorId: number; terminalId: string },
+    cashId: number,
+    itemId: number,
+    modifierIds: number[],
+    qty: number,
+  ): Promise<void> {
+    const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+    await addLine(ctx.db, order.id, { itemId, qty, modifierIds }, actor);
+    const billed = await billOrder(ctx.db, order.id, {}, actor);
+    await recordPayment(ctx.db, order.id, { paymentMethodId: cashId, amountMinor: billed.totalMinor }, actor);
   }
 
   async function closedCustomerOrder(
@@ -215,6 +239,8 @@ describe('reporting/service', () => {
         {
           itemId: item.id,
           itemName: 'Karahi',
+          modifierNames: '',
+          variantName: 'Karahi',
           categoryName: 'Mains',
           qty: 3,
           netSalesMinor: 3000_00,
@@ -238,6 +264,89 @@ describe('reporting/service', () => {
 
       const report = await itemMixReport(ctx.db);
       expect(report.find((line) => line.itemName === 'Lassi')?.categoryName).toBe('Drinks');
+    });
+
+    it('splits an item sold Half and Full into two rows whose quantities sum to the item total', async () => {
+      const { actor, item, cash, partner } = await setupBase();
+      const size = await createModifierGroup(ctx.db, { name: 'Size', minSelect: 1, maxSelect: 1 }, actor);
+      const half = await createModifier(ctx.db, { groupId: size.id, name: 'Half', priceDeltaMinor: paisa(0) }, actor);
+      const full = await createModifier(ctx.db, { groupId: size.id, name: 'Full', priceDeltaMinor: paisa(0) }, actor);
+      await linkModifierGroup(ctx.db, item.id, size.id, actor);
+      await setItemModifierPrice(ctx.db, item.id, full.id, paisa(1000_00), actor); // Full = base 1000 + 1000 = 2000
+
+      await sellClosed(actor, cash.id, item.id, [half.id], 6);
+      await sellClosed(actor, cash.id, item.id, [full.id], 9);
+
+      const rows = (await itemMixReport(ctx.db)).filter((l) => l.itemId === item.id);
+      // Separate rows, in menu order (Half before Full), not aggregated.
+      expect(rows.map((l) => l.variantName)).toEqual(['Karahi — Half', 'Karahi — Full']);
+      const halfRow = rows.find((l) => l.modifierNames === 'Half');
+      const fullRow = rows.find((l) => l.modifierNames === 'Full');
+      expect(halfRow?.qty).toBe(6);
+      expect(fullRow?.qty).toBe(9);
+      // Variant quantities add up to the item's overall total (15), and
+      // there is no leftover aggregate row swallowing them.
+      expect(rows.reduce((total, l) => total + l.qty, 0)).toBe(15);
+      expect(rows.some((l) => l.modifierNames === '')).toBe(false);
+      // Value is the whole line (item + size): Half at 1000, Full at 2000.
+      expect(halfRow?.netSalesMinor).toBe(6000_00);
+      expect(fullRow?.netSalesMinor).toBe(18000_00);
+      // Owners ride along on each variant, from the item's current split.
+      expect(fullRow?.owners).toEqual([{ partnerId: partner.id, partnerName: 'Alice', shareBp: 10_000 }]);
+    });
+
+    it('splits Small / Medium / Large into three separate rows', async () => {
+      const { actor, item, cash } = await setupBase();
+      const size = await createModifierGroup(ctx.db, { name: 'Cup size', minSelect: 1, maxSelect: 1 }, actor);
+      const small = await createModifier(ctx.db, { groupId: size.id, name: 'Small', priceDeltaMinor: paisa(0) }, actor);
+      const medium = await createModifier(ctx.db, { groupId: size.id, name: 'Medium', priceDeltaMinor: paisa(0) }, actor);
+      const large = await createModifier(ctx.db, { groupId: size.id, name: 'Large', priceDeltaMinor: paisa(0) }, actor);
+      await linkModifierGroup(ctx.db, item.id, size.id, actor);
+
+      await sellClosed(actor, cash.id, item.id, [small.id], 20);
+      await sellClosed(actor, cash.id, item.id, [medium.id], 14);
+      await sellClosed(actor, cash.id, item.id, [large.id], 7);
+
+      const rows = (await itemMixReport(ctx.db)).filter((l) => l.itemId === item.id);
+      expect(rows.map((l) => `${l.variantName}:${l.qty}`)).toEqual(['Karahi — Small:20', 'Karahi — Medium:14', 'Karahi — Large:7']);
+      expect(rows.reduce((total, l) => total + l.qty, 0)).toBe(41);
+    });
+
+    it('keeps an item sold with no modifier as one plain row', async () => {
+      const { actor, item, cash } = await setupBase();
+      await sellClosed(actor, cash.id, item.id, [], 5);
+      const rows = (await itemMixReport(ctx.db)).filter((l) => l.itemId === item.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ variantName: 'Karahi', modifierNames: '', qty: 5 });
+    });
+
+    it('uses the modifier name as it was sold, even after the modifier is renamed', async () => {
+      const { actor, item, cash } = await setupBase();
+      const size = await createModifierGroup(ctx.db, { name: 'Size', minSelect: 1, maxSelect: 1 }, actor);
+      const full = await createModifier(ctx.db, { groupId: size.id, name: 'Full', priceDeltaMinor: paisa(0) }, actor);
+      await linkModifierGroup(ctx.db, item.id, size.id, actor);
+      await sellClosed(actor, cash.id, item.id, [full.id], 2);
+
+      // Rename Full AFTER the sale — the report must still read "Full".
+      await updateModifier(ctx.db, full.id, { name: 'Full plate' }, actor);
+
+      const rows = (await itemMixReport(ctx.db)).filter((l) => l.itemId === item.id);
+      expect(rows.map((l) => l.variantName)).toEqual(['Karahi — Full']);
+    });
+
+    it('keeps the value at what was charged, even after the size is repriced', async () => {
+      const { actor, item, cash } = await setupBase();
+      const size = await createModifierGroup(ctx.db, { name: 'Size', minSelect: 1, maxSelect: 1 }, actor);
+      const full = await createModifier(ctx.db, { groupId: size.id, name: 'Full', priceDeltaMinor: paisa(0) }, actor);
+      await linkModifierGroup(ctx.db, item.id, size.id, actor);
+      await setItemModifierPrice(ctx.db, item.id, full.id, paisa(1000_00), actor); // Full = 2000
+      await sellClosed(actor, cash.id, item.id, [full.id], 1); // sold at 2000
+
+      // Reprice Full to +1500 (=> 2500) AFTER the sale.
+      await setItemModifierPrice(ctx.db, item.id, full.id, paisa(1500_00), actor);
+
+      const rows = (await itemMixReport(ctx.db)).filter((l) => l.itemId === item.id);
+      expect(rows[0]?.netSalesMinor).toBe(2000_00); // the sold price, not 2500
     });
   });
 

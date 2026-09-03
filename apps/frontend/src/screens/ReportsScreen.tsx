@@ -291,9 +291,9 @@ function Dashboard({ range }: { range: DateRange }): JSX.Element {
                 </thead>
                 <tbody>
                   {top.map((line) => (
-                    <tr key={line.itemId}>
+                    <tr key={`${line.itemId}-${line.modifierNames}`}>
                       <td>
-                        <strong>{line.itemName}</strong>
+                        <strong>{line.variantName}</strong>
                       </td>
                       <td className="muted">{line.categoryName ?? '—'}</td>
                       <td className="num">{line.qty}</td>
@@ -532,10 +532,10 @@ function ItemMix({ range }: { range: DateRange }): JSX.Element {
     <div className="col">
       <StatCards
         cards={[
-          { label: 'Items sold', value: lines.length, note: 'distinct menu items' },
+          { label: 'Lines', value: lines.length, note: 'items and sizes' },
           { label: 'Units', value: unitsSold, note: 'individual portions' },
           { label: 'Net sales', value: <Money minor={sum(lines.map((line) => line.netSalesMinor))} />, note: 'across every item' },
-          { label: 'Best seller', value: best?.itemName ?? '—', note: best ? <Money minor={best.netSalesMinor} /> : undefined },
+          { label: 'Best seller', value: best?.variantName ?? '—', note: best ? <Money minor={best.netSalesMinor} /> : undefined },
         ]}
       />
 
@@ -551,8 +551,8 @@ function ItemMix({ range }: { range: DateRange }): JSX.Element {
         </thead>
         <tbody>
           {report.data?.map((line) => (
-            <tr key={line.itemId}>
-              <td>{line.itemName}</td>
+            <tr key={`${line.itemId}-${line.modifierNames}`}>
+              <td>{line.variantName}</td>
               <td className="num">{line.qty}</td>
               <td className="num">
                 <Money minor={line.netSalesMinor} />

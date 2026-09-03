@@ -186,6 +186,12 @@ Small / Medium / Large or any other set. Set all of it under **Edit →
 Modifiers** on the item. See `docs/decisions/024` for why sizes are
 modifiers here rather than separate items, and what that costs.
 
+Because one item can be sold in several sizes, the **Item mix** report
+breaks its rows out by what was actually sold — "Chicken Karahi — Half"
+and "Chicken Karahi — Full" are separate lines, a plain item stays one —
+using the size names frozen on each sale, so renaming or repricing a
+size never rewrites a past report (`docs/decisions/025`).
+
 An item with no ownership split cannot be sold; the screen flags it. See
 **Partners** below.
 

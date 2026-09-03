@@ -70,11 +70,19 @@ it was fixed:
 
 ## Consequences
 
-The item-mix report counts "Chicken Karahi" once rather than splitting
-halves from fulls — the thing separate items would have given for free.
-The order line's modifier breakdown still records which size was sold,
-so the information is there; no report reads it that way yet.
+The item-mix report splits by the sold configuration rather than
+aggregating an item across its sizes: "Chicken Karahi — Half" and
+"Chicken Karahi — Full" are two rows, an item sold plain stays one. The
+split is read from each line's own `order_line_modifier` snapshot — the
+frozen name and, through the line's net-sales, the price it was charged
+at — so renaming or repricing a size never rewrites a past report.
+Because a line's `net_sales_minor` is already the whole line (item + its
+modifiers, see ordering/pipeline), the per-variant quantities and values
+still sum to exactly the item's overall total. This is the one thing
+separate items would have given for free, recovered here without them.
+See docs/decisions/025.
 
-Ownership is per item, so both sizes of a dish are owned identically.
-For this restaurant that is correct — the split follows the dish, not
-the portion.
+Ownership is per item, so both sizes of a dish are owned identically —
+the item-mix report shows the same owners on every variant of an item.
+For this restaurant that is correct: the split follows the dish, not the
+portion.

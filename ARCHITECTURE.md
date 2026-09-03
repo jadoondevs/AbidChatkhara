@@ -1015,6 +1015,21 @@ re-deriving anything from raw tables a second time.
   duplicate rather than a shared cross-module helper — the scoping key
   differs, order-closed-date-range here versus `shift_id` there, and
   the duplication is a few lines, not worth a fragile shared internal).
+- **Item mix splits by the sold configuration, from the line's own
+  snapshot.** A size is a modifier, not a separate item
+  (docs/decisions/024), so `itemMixReport` groups by base item AND the
+  set of `order_line_modifier.modifier_name_snapshot` names on the line:
+  "Chicken Karahi — Half" and "— Full" are two rows, a plain item is
+  one. The names come only from the snapshot, never a join to the live
+  `modifier` table, so a later rename or reprice cannot rewrite a past
+  report; and because `order_line.net_sales_minor` is already the whole
+  line (item + its modifiers), the per-variant quantities and values sum
+  to exactly the item's overall total. Ownership stays a property of the
+  base item (the current active split), so every variant of an item
+  shows the same owners. See docs/decisions/025. The consumption report
+  was already variant-aware — its detail lines carry the same snapshot
+  names — so only item mix (and the dashboard top-sellers that composes
+  it) needed this.
 - **The partner-statement reconciliation counts only *original*
   allocations, deliberately excluding reversals** — see
   docs/decisions/012. Summing every `line_allocation` row (reversals

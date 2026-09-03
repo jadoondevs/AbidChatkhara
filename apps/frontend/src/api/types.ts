@@ -515,6 +515,12 @@ export interface PartnerStatement {
 export interface ItemMixLine {
   itemId: number;
   itemName: string;
+  /** The sizes/add-ons this configuration was sold with (snapshot
+   * names), or '' when sold plain. */
+  modifierNames: string;
+  /** The item name, plus " — <sizes>" when sold with modifiers — what to
+   * show in the Item column. */
+  variantName: string;
   categoryName: string | null;
   qty: number;
   netSalesMinor: Paisa;
