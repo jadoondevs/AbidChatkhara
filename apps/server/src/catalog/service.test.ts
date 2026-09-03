@@ -7,10 +7,13 @@ import {
   createItem,
   createModifier,
   createModifierGroup,
+  clearItemModifierPrice,
   getAvailability,
   getCurrentPrice,
+  getItemModifierPrice,
   getPriceHistory,
   linkModifierGroup,
+  listItemModifierPrices,
   listCategories,
   listItems,
   listMenu,
@@ -18,6 +21,7 @@ import {
   listModifierGroupsForItem,
   listModifiers,
   setAvailability,
+  setItemModifierPrice,
   setItemPrice,
   unlinkModifierGroup,
   updateCategory,
@@ -153,6 +157,75 @@ describe('catalog/service', () => {
     it('rejects setting a price on a nonexistent item', async () => {
       const actor = await setupActor();
       await expect(setItemPrice(ctx.db, 999, paisa(100), actor)).rejects.toThrow(/item 999 not found/);
+    });
+  });
+
+  describe('per-item modifier prices', () => {
+    /** One size group shared by two items whose Full is worth different
+     * money — the case the whole table exists for. */
+    async function twoKarahis() {
+      const actor = await setupActor();
+      const category = await createCategory(ctx.db, { name: 'Karahi' }, actor);
+      const size = await createModifierGroup(ctx.db, { name: 'Half / Full', minSelect: 1, maxSelect: 1 }, actor);
+      const half = await createModifier(ctx.db, { groupId: size.id, name: 'Half', priceDeltaMinor: paisa(0) }, actor);
+      const full = await createModifier(ctx.db, { groupId: size.id, name: 'Full', priceDeltaMinor: paisa(1000_00) }, actor);
+
+      const chicken = await createItem(ctx.db, { categoryId: category.id, name: 'Chicken Karahi' }, actor);
+      const shinwari = await createItem(ctx.db, { categoryId: category.id, name: 'Shinwari Karahi' }, actor);
+      await linkModifierGroup(ctx.db, chicken.id, size.id, actor);
+      await linkModifierGroup(ctx.db, shinwari.id, size.id, actor);
+      return { actor, size, half, full, chicken, shinwari };
+    }
+
+    it("falls back to the modifier's own delta when an item has no override", async () => {
+      const { chicken, full } = await twoKarahis();
+      expect(await getItemModifierPrice(ctx.db, chicken.id, full.id)).toBeNull();
+    });
+
+    it('lets one shared group carry a different uplift per item', async () => {
+      const { actor, chicken, shinwari, full } = await twoKarahis();
+      await setItemModifierPrice(ctx.db, chicken.id, full.id, paisa(1000_00), actor);
+      await setItemModifierPrice(ctx.db, shinwari.id, full.id, paisa(1800_00), actor);
+
+      expect(await getItemModifierPrice(ctx.db, chicken.id, full.id)).toBe(1000_00);
+      expect(await getItemModifierPrice(ctx.db, shinwari.id, full.id)).toBe(1800_00);
+    });
+
+    it('closes the open row rather than updating a price in place', async () => {
+      const { actor, chicken, full } = await twoKarahis();
+      await setItemModifierPrice(ctx.db, chicken.id, full.id, paisa(1000_00), actor);
+      await setItemModifierPrice(ctx.db, chicken.id, full.id, paisa(1200_00), actor);
+
+      const rows = await ctx.db.selectFrom('item_modifier_price').selectAll().where('item_id', '=', chicken.id).execute();
+      expect(rows).toHaveLength(2);
+      expect(rows.filter((row) => row.valid_to === null)).toHaveLength(1);
+      expect(await getItemModifierPrice(ctx.db, chicken.id, full.id)).toBe(1200_00);
+    });
+
+    it('clearing an override restores the modifier default', async () => {
+      const { actor, chicken, full } = await twoKarahis();
+      await setItemModifierPrice(ctx.db, chicken.id, full.id, paisa(1200_00), actor);
+      await clearItemModifierPrice(ctx.db, chicken.id, full.id, actor);
+      expect(await getItemModifierPrice(ctx.db, chicken.id, full.id)).toBeNull();
+    });
+
+    it('lists only the overrides currently in effect', async () => {
+      const { actor, chicken, half, full } = await twoKarahis();
+      await setItemModifierPrice(ctx.db, chicken.id, full.id, paisa(1000_00), actor);
+      await setItemModifierPrice(ctx.db, chicken.id, half.id, paisa(0), actor);
+      await clearItemModifierPrice(ctx.db, chicken.id, half.id, actor);
+
+      expect(await listItemModifierPrices(ctx.db, chicken.id)).toEqual([{ modifierId: full.id, priceDeltaMinor: 1000_00 }]);
+    });
+
+    it('refuses an override for a modifier the item cannot be sold with', async () => {
+      const { actor, chicken } = await twoKarahis();
+      const other = await createModifierGroup(ctx.db, { name: 'Add-ons', minSelect: 0, maxSelect: 1 }, actor);
+      const cheese = await createModifier(ctx.db, { groupId: other.id, name: 'Extra cheese', priceDeltaMinor: paisa(100_00) }, actor);
+
+      // The group is not linked to this item, so the override could
+      // never be read — a configuration mistake, not a price.
+      await expect(setItemModifierPrice(ctx.db, chicken.id, cheese.id, paisa(50_00), actor)).rejects.toThrow(/not linked/);
     });
   });
 

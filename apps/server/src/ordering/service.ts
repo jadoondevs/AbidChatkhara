@@ -1,6 +1,6 @@
 import { add, paisa, proportionalAmount, roundToRupee, sub, type Paisa } from '@pos/shared';
 import { sql, type Kysely, type Transaction } from 'kysely';
-import { getItem, getModifier, getCurrentPrice, listModifierGroupsForItem } from '../catalog/service.js';
+import { getItem, getItemModifierPrice, getModifier, getCurrentPrice, listModifierGroupsForItem } from '../catalog/service.js';
 import { recordAudit } from '../identity/audit.js';
 import type { Database } from '../platform/db/types.js';
 import { eventBus } from '../platform/events/bus.js';
@@ -855,7 +855,18 @@ export async function addLine(db: Kysely<Database>, orderId: number, input: AddL
 
   const modifierIds = input.modifierIds ?? [];
   await validateModifierSelection(db, input.itemId, modifierIds);
-  const modifiers = await Promise.all(modifierIds.map((id) => getModifier(db, id)));
+  // What each modifier costs ON THIS ITEM: a per-item override where one
+  // is configured, the modifier's own default otherwise. A shared
+  // "Half / Full" group is attached to every karahi, but Full is worth a
+  // different amount on each of them — see migration 0020.
+  const modifiers = await Promise.all(
+    modifierIds.map(async (id) => {
+      const modifier = await getModifier(db, id);
+      if (!modifier) return null;
+      const override = await getItemModifierPrice(db, input.itemId, id);
+      return override === null ? modifier : { ...modifier, priceDeltaMinor: override };
+    }),
+  );
 
   const modifierKey = [...modifierIds].sort((a, b) => a - b).join(',');
   const note = input.note?.trim() ? input.note.trim() : null;

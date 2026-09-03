@@ -1,6 +1,14 @@
 import { paisa } from '@pos/shared';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createCategory, createItem, createModifier, createModifierGroup, linkModifierGroup, setItemPrice } from '../catalog/service.js';
+import {
+  createCategory,
+  createItem,
+  createModifier,
+  createModifierGroup,
+  linkModifierGroup,
+  setItemModifierPrice,
+  setItemPrice,
+} from '../catalog/service.js';
 import { createPaymentMethod, recordPayment } from '../billing/service.js';
 import { createPerson } from '../consumption/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
@@ -189,6 +197,36 @@ describe('ordering/service', () => {
 
       expect(detail.lines[0]?.grossMinor).toBe(520_00);
       expect(detail.lines[0]?.modifiers[0]).toMatchObject({ modifierId: extraHot.id, grossMinor: 20_00 });
+    });
+
+    it("charges the item's own modifier price where one is configured", async () => {
+      const { itemWithModifiers, extraHot, orderActor } = await setupMenu();
+      // The same modifier is worth more on this item than its group
+      // default says — migration 0020's whole reason for existing.
+      await setItemModifierPrice(ctx.db, itemWithModifiers.id, extraHot.id, paisa(75_00), orderActor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      const detail = await addLine(ctx.db, order.id, { itemId: itemWithModifiers.id, qty: 1, modifierIds: [extraHot.id] }, orderActor);
+
+      expect(detail.lines[0]?.modifiers[0]).toMatchObject({ modifierId: extraHot.id, priceDeltaMinor: 75_00, grossMinor: 75_00 });
+      expect(detail.lines[0]?.grossMinor).toBe(575_00);
+    });
+
+    it('leaves a line already sold at the price it charged when the override changes', async () => {
+      const { itemWithModifiers, extraHot, orderActor } = await setupMenu();
+      await setItemModifierPrice(ctx.db, itemWithModifiers.id, extraHot.id, paisa(75_00), orderActor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: itemWithModifiers.id, qty: 1, modifierIds: [extraHot.id] }, orderActor);
+
+      // Re-price the modifier for this item AFTER the line exists.
+      await setItemModifierPrice(ctx.db, itemWithModifiers.id, extraHot.id, paisa(500_00), orderActor);
+
+      // order_line_modifier snapshots the delta it charged, so the line
+      // is untouched — the same protection item_price already has.
+      const detail = await getOrder(ctx.db, order.id);
+      expect(detail?.lines[0]?.modifiers[0]?.priceDeltaMinor).toBe(75_00);
+      expect(detail?.lines[0]?.grossMinor).toBe(575_00);
     });
 
     it('rejects a selection that violates the modifier group min/max', async () => {
