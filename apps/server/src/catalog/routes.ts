@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { requireAuth, requireRole } from '../identity/require-auth.js';
 import type { Database } from '../platform/db/types.js';
 import {
+  clearItemModifierPrice,
   createCategory,
   createItem,
   createModifier,
@@ -13,18 +14,21 @@ import {
   getPriceHistory,
   linkModifierGroup,
   listCategories,
+  listItemModifierPrices,
   listItems,
   listMenu,
   listModifierGroups,
   listModifierGroupsForItem,
   listModifiers,
+  removeItem,
   setAvailability,
+  setItemModifierPrice,
   setItemPrice,
   unlinkModifierGroup,
   updateCategory,
   updateItem,
-  updateModifierGroup,
   updateModifier,
+  updateModifierGroup,
 } from './service.js';
 
 const categorySchema = z.object({
@@ -210,6 +214,77 @@ export const catalogRoutes: FastifyPluginAsync<CatalogPluginOptions> = async (fa
     async (request, reply) => {
       requireAuth(request, reply);
       return getPriceHistory(db, request.params.id);
+    },
+  );
+
+  /**
+   * Take an item off the menu. Deleted outright if it was never sold,
+   * retired if it was — the server decides, and says which it did, so
+   * the screen can tell the manager rather than guess.
+   */
+  app.delete(
+    '/api/items/:id',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        response: { 200: z.object({ outcome: z.enum(['deleted', 'retired']) }) },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      const outcome = await removeItem(db, request.params.id, { actorId: actor.userId, terminalId: actor.terminalId });
+      return { outcome };
+    },
+  );
+
+  // ---- what a modifier costs on THIS item ----
+
+  app.get(
+    '/api/items/:id/modifier-prices',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        response: { 200: z.array(z.object({ modifierId: z.number().int(), priceDeltaMinor: paisaSchema })) },
+      },
+    },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      return listItemModifierPrices(db, request.params.id);
+    },
+  );
+
+  app.put(
+    '/api/items/:id/modifier-prices/:modifierId',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int(), modifierId: z.coerce.number().int() }),
+        body: z.object({ priceDeltaMinor: paisaSchema }),
+      },
+    },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      await setItemModifierPrice(db, request.params.id, request.params.modifierId, request.body.priceDeltaMinor, {
+        actorId: actor.userId,
+        terminalId: actor.terminalId,
+      });
+      return reply.code(204).send();
+    },
+  );
+
+  app.delete(
+    '/api/items/:id/modifier-prices/:modifierId',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int(), modifierId: z.coerce.number().int() }),
+      },
+    },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      await clearItemModifierPrice(db, request.params.id, request.params.modifierId, {
+        actorId: actor.userId,
+        terminalId: actor.terminalId,
+      });
+      return reply.code(204).send();
     },
   );
 

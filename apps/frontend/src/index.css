@@ -1951,6 +1951,45 @@ tbody tr:hover {
   gap: 2px;
 }
 
+/* ---------------------------------------------------------------------
+   Menu configuration
+   --------------------------------------------------------------------- */
+
+.menu-screen {
+  max-width: 1100px;
+}
+
+/* Edit and Remove sit together at the end of a row; they are small
+   because the row is a lookup, not a touch target. */
+.menu-row-actions {
+  white-space: nowrap;
+}
+
+.menu-row-actions button {
+  min-height: 34px;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.option-group {
+  background: var(--surface-2);
+}
+
+/* An option's price on THIS item, beside the option's name. */
+.option-prices {
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--divider);
+}
+
+.option-price-row {
+  gap: 10px;
+}
+
+.option-price-row input {
+  max-width: 160px;
+}
+
 /* ---------------------------------------------------------------
    Partner management.
    --------------------------------------------------------------- */

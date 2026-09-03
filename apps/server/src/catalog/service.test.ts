@@ -20,6 +20,7 @@ import {
   listModifierGroups,
   listModifierGroupsForItem,
   listModifiers,
+  removeItem,
   setAvailability,
   setItemModifierPrice,
   setItemPrice,
@@ -157,6 +158,44 @@ describe('catalog/service', () => {
     it('rejects setting a price on a nonexistent item', async () => {
       const actor = await setupActor();
       await expect(setItemPrice(ctx.db, 999, paisa(100), actor)).rejects.toThrow(/item 999 not found/);
+    });
+  });
+
+  describe('taking an item off the menu', () => {
+    it('deletes an item that was never sold, along with everything hanging off it', async () => {
+      const actor = await setupActor();
+      const category = await createCategory(ctx.db, { name: 'Mains' }, actor);
+      const item = await createItem(ctx.db, { categoryId: category.id, name: 'Chiken Karahi' }, actor);
+      await setItemPrice(ctx.db, item.id, paisa(1000_00), actor);
+      await setAvailability(ctx.db, item.id, false, actor);
+      const group = await createModifierGroup(ctx.db, { name: 'Half / Full', minSelect: 1, maxSelect: 1 }, actor);
+      const full = await createModifier(ctx.db, { groupId: group.id, name: 'Full', priceDeltaMinor: paisa(500_00) }, actor);
+      await linkModifierGroup(ctx.db, item.id, group.id, actor);
+      await setItemModifierPrice(ctx.db, item.id, full.id, paisa(900_00), actor);
+
+      // A typo should leave no trace.
+      expect(await removeItem(ctx.db, item.id, actor)).toBe('deleted');
+      expect((await listItems(ctx.db)).map((i) => i.id)).not.toContain(item.id);
+      for (const table of ['item_price', 'item_availability', 'item_modifier_group', 'item_modifier_price'] as const) {
+        const rows = await ctx.db.selectFrom(table).select('item_id').where('item_id', '=', item.id).execute();
+        expect(rows, table).toEqual([]);
+      }
+    });
+
+    it('leaves the audit trail behind even though the item is gone', async () => {
+      const actor = await setupActor();
+      const category = await createCategory(ctx.db, { name: 'Mains' }, actor);
+      const item = await createItem(ctx.db, { categoryId: category.id, name: 'Typo' }, actor);
+      await removeItem(ctx.db, item.id, actor);
+
+      const audit = await ctx.db.selectFrom('audit_log').selectAll().where('action', '=', 'item.delete').execute();
+      expect(audit).toHaveLength(1);
+      expect(String(audit[0]?.before_json)).toContain('Typo');
+    });
+
+    it('rejects an item that does not exist', async () => {
+      const actor = await setupActor();
+      await expect(removeItem(ctx.db, 4242, actor)).rejects.toThrow(/item 4242 not found/);
     });
   });
 

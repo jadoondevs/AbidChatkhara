@@ -761,6 +761,75 @@ function toAvailabilityStatus(row: AvailabilityRow): AvailabilityStatus {
   return { itemId: row.item_id, available: row.available === 1, changedBy: row.changed_by, changedAt: row.changed_at };
 }
 
+/** What happened when a manager asked for an item to go away. */
+export type ItemRemoval = 'deleted' | 'retired';
+
+/**
+ * Take an item off the menu.
+ *
+ * Two different things wear the same button, and which one happens is
+ * decided by the data, not by the manager:
+ *
+ *  - An item that has NEVER been sold is deleted outright, along with
+ *    its prices, availability, modifier links and ownership. A typo
+ *    should leave no trace, exactly as an empty order does
+ *    (docs/decisions/021).
+ *  - An item that HAS been sold is retired instead (`active = 0`). Every
+ *    `order_line` that sold it still points at it, and history is not
+ *    negotiable. It vanishes from the till and stays in the reports.
+ *
+ * The caller is told which happened so it can say so, rather than
+ * leaving a manager to wonder why one item disappeared from the reports
+ * and another did not.
+ *
+ * Availability is a different question and stays where it is: "we are
+ * out of it tonight" is not "it is off the menu".
+ */
+export async function removeItem(db: Kysely<Database>, id: number, actor: ActorContext): Promise<ItemRemoval> {
+  return db.transaction().execute(async (trx) => {
+    const item = await trx.selectFrom('item').selectAll().where('id', '=', id).executeTakeFirst();
+    if (!item) throw new Error(`item ${id} not found`);
+
+    const sold = await trx.selectFrom('order_line').select('id').where('item_id', '=', id).limit(1).executeTakeFirst();
+
+    if (sold) {
+      if (item.active === 0) return 'retired';
+      await trx.updateTable('item').set({ active: 0 }).where('id', '=', id).execute();
+      await recordAudit(trx, {
+        actorId: actor.actorId,
+        terminalId: actor.terminalId,
+        action: 'item.retire',
+        entity: 'item',
+        entityId: id,
+        before: toItemSummary(item),
+        after: toItemSummary({ ...item, active: 0 }),
+      });
+      return 'retired';
+    }
+
+    // Audited BEFORE the delete: the audit row is the only thing that
+    // will remain, so it has to carry what the item was.
+    await recordAudit(trx, {
+      actorId: actor.actorId,
+      terminalId: actor.terminalId,
+      action: 'item.delete',
+      entity: 'item',
+      entityId: id,
+      before: toItemSummary(item),
+    });
+
+    // Everything that references the item, then the item. No order line
+    // can be among them — that is what `sold` just established.
+    await trx.deleteFrom('item_modifier_price').where('item_id', '=', id).execute();
+    await trx.deleteFrom('item_modifier_group').where('item_id', '=', id).execute();
+    await trx.deleteFrom('item_availability').where('item_id', '=', id).execute();
+    await trx.deleteFrom('item_price').where('item_id', '=', id).execute();
+    await trx.deleteFrom('item_ownership').where('item_id', '=', id).execute();
+    await trx.deleteFrom('item').where('id', '=', id).execute();
+    return 'deleted';
+  });
+}
+
 export async function setAvailability(
   db: Kysely<Database>,
   itemId: number,

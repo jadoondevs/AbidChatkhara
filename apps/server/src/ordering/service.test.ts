@@ -6,6 +6,8 @@ import {
   createModifier,
   createModifierGroup,
   linkModifierGroup,
+  listItems,
+  removeItem,
   setItemModifierPrice,
   setItemPrice,
 } from '../catalog/service.js';
@@ -197,6 +199,33 @@ describe('ordering/service', () => {
 
       expect(detail.lines[0]?.grossMinor).toBe(520_00);
       expect(detail.lines[0]?.modifiers[0]).toMatchObject({ modifierId: extraHot.id, grossMinor: 20_00 });
+    });
+
+    it('RETIRES an item that has been sold rather than deleting it', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+
+      // order_line.item_id is a real foreign key and the sale is part of
+      // the record — the item leaves the till, not the history.
+      expect(await removeItem(ctx.db, item.id, orderActor)).toBe('retired');
+
+      const stillThere = await ctx.db.selectFrom('item').select(['id', 'active']).where('id', '=', item.id).executeTakeFirst();
+      expect(stillThere).toMatchObject({ id: item.id, active: 0 });
+      // Gone from the till's list of what can be sold.
+      expect((await listItems(ctx.db)).map((i) => i.id)).not.toContain(item.id);
+      // And the line that sold it still reads correctly.
+      const detail = await getOrder(ctx.db, order.id);
+      expect(detail?.lines[0]?.itemName).toBe(item.name);
+    });
+
+    it('retiring an already-retired item is a no-op, not an error', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+
+      expect(await removeItem(ctx.db, item.id, orderActor)).toBe('retired');
+      expect(await removeItem(ctx.db, item.id, orderActor)).toBe('retired');
     });
 
     it("charges the item's own modifier price where one is configured", async () => {
