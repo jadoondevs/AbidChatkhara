@@ -494,6 +494,12 @@ export interface DailySalesReport {
   serviceChargeByWaiter: WaiterPayoutLine[];
   roundingAdjustmentMinor: Paisa;
   paymentMethodBreakdown: { paymentMethodId: number; paymentMethodName: string; totalMinor: Paisa }[];
+  /** Customer bills closed in the range. Staff and owner meals are
+   * excluded — they are consumption, not trade. */
+  orderCount: number;
+  /** Takings by local hour, for the dashboard bars. Only hours that saw
+   * a sale are present. */
+  salesByHour: { hour: number; orderCount: number; totalMinor: Paisa }[];
 }
 
 export interface PartnerStatement {
@@ -509,6 +515,7 @@ export interface PartnerStatement {
 export interface ItemMixLine {
   itemId: number;
   itemName: string;
+  categoryName: string | null;
   qty: number;
   netSalesMinor: Paisa;
   owners: { partnerId: number; partnerName: string; shareBp: number }[];

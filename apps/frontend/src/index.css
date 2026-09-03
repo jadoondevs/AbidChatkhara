@@ -1649,6 +1649,107 @@ tbody tr:hover {
   margin-bottom: 0;
 }
 
+/* ---------------------------------------------------------------------
+   Reports — a row of figures above the table they summarise, and the
+   dashboard's shape-of-the-evening bars.
+   --------------------------------------------------------------------- */
+
+.stat-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 1100px) {
+  .stat-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .stat-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+.stat-card {
+  padding: 14px 16px;
+  min-width: 0;
+}
+
+/* The figure is always ink. Colour goes on the note beneath it, so a red
+   number on this screen only ever means the amount itself is negative —
+   never that somebody thought it was interesting. */
+.stat-card .figure {
+  margin: 3px 0 2px;
+  overflow-wrap: anywhere;
+}
+
+.stat-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.stat-note.good {
+  color: var(--success);
+}
+
+.stat-note.bad {
+  color: var(--accent-press);
+}
+
+.dashboard-grid {
+  grid-template-columns: minmax(0, 1fr) 340px;
+  align-items: start;
+}
+
+@media (max-width: 1200px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* One div per hour rather than a charting library: the bar is a width,
+   and the width is the only thing being said. */
+.hour-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.hour-bar {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.hour-bar-label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.hour-bar-fill {
+  height: 16px;
+  background: var(--ink);
+  min-width: 2px;
+}
+
+/* The busiest hour of the day is the one thing on this chart worth the
+   accent. */
+.hour-bar-fill.peak {
+  background: var(--accent);
+}
+
+.hour-bar-value {
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .table-scroll {
   overflow-x: auto;
 }

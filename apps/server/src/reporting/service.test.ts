@@ -79,6 +79,46 @@ describe('reporting/service', () => {
       expect(report.paymentMethodBreakdown).toMatchObject([{ paymentMethodName: 'Cash', totalMinor: 1050_00 }]);
     });
 
+    it('counts CUSTOMER bills only — a staff meal is consumption, not trade', async () => {
+      const { actor, item, cash } = await setupBase();
+      await closedCustomerOrder(item, cash.id, actor);
+      await closedCustomerOrder(item, cash.id, actor);
+
+      const person = await createPerson(ctx.db, { name: 'Ahmed', kind: 'staff', mealPolicy: 'free' }, actor);
+      const mealOrder = await createOrder(ctx.db, { orderType: 'takeaway', channel: 'staff_meal', beneficiaryPersonId: person.id }, actor);
+      await addLine(ctx.db, mealOrder.id, { itemId: item.id, qty: 1 }, actor);
+      await billOrder(ctx.db, mealOrder.id, {}, actor);
+      await settleConsumption(ctx.db, mealOrder.id, { settlementType: 'house_expense' }, actor);
+
+      const report = await dailySalesReport(ctx.db);
+      expect(report.orderCount).toBe(2);
+    });
+
+    it('buckets takings by the LOCAL hour a bill closed, busiest hours included', async () => {
+      const { actor, item, cash } = await setupBase();
+      await closedCustomerOrder(item, cash.id, actor);
+      await closedCustomerOrder(item, cash.id, actor);
+
+      const report = await dailySalesReport(ctx.db);
+      // Both bills closed in the same hour, so there is exactly one
+      // bucket and it carries the whole day's takings.
+      expect(report.salesByHour).toHaveLength(1);
+      expect(report.salesByHour[0]?.orderCount).toBe(2);
+      expect(report.salesByHour[0]?.totalMinor).toBe(report.totalCollectedMinor);
+      // Local, not UTC: an order settled at 9pm here is a 9pm order.
+      expect(report.salesByHour[0]?.hour).toBe(new Date().getHours());
+    });
+
+    it('reports no orders and no hours for an empty range', async () => {
+      const { actor, item, cash } = await setupBase();
+      await closedCustomerOrder(item, cash.id, actor);
+
+      const future = new Date(Date.now() + 60_000).toISOString();
+      const report = await dailySalesReport(ctx.db, { fromInclusive: future });
+      expect(report.orderCount).toBe(0);
+      expect(report.salesByHour).toEqual([]);
+    });
+
     it('filters by order.closed_at range', async () => {
       const { actor, item, cash } = await setupBase();
       await closedCustomerOrder(item, cash.id, actor);
@@ -172,8 +212,32 @@ describe('reporting/service', () => {
 
       const report = await itemMixReport(ctx.db);
       expect(report).toEqual([
-        { itemId: item.id, itemName: 'Karahi', qty: 3, netSalesMinor: 3000_00, owners: [{ partnerId: partner.id, partnerName: 'Alice', shareBp: 10_000 }] },
+        {
+          itemId: item.id,
+          itemName: 'Karahi',
+          categoryName: 'Mains',
+          qty: 3,
+          netSalesMinor: 3000_00,
+          owners: [{ partnerId: partner.id, partnerName: 'Alice', shareBp: 10_000 }],
+        },
       ]);
+    });
+
+    it('names the section each item sits under, for the dashboard to group by', async () => {
+      const { actor, cash } = await setupBase();
+      const drinks = await createCategory(ctx.db, { name: 'Drinks' }, actor);
+      const lassi = await createItem(ctx.db, { categoryId: drinks.id, name: 'Lassi' }, actor);
+      await setItemPrice(ctx.db, lassi.id, paisa(200_00), actor);
+      const partner2 = await createPartner(ctx.db, 'Bob', actor);
+      await setItemOwnership(ctx.db, lassi.id, [{ partnerId: partner2.id, shareBp: 10_000 }], actor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      await addLine(ctx.db, order.id, { itemId: lassi.id, qty: 1 }, actor);
+      const billed = await billOrder(ctx.db, order.id, {}, actor);
+      await recordPayment(ctx.db, order.id, { paymentMethodId: cash.id, amountMinor: billed.totalMinor }, actor);
+
+      const report = await itemMixReport(ctx.db);
+      expect(report.find((line) => line.itemName === 'Lassi')?.categoryName).toBe('Drinks');
     });
   });
 

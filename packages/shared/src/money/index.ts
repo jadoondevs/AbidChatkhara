@@ -10,6 +10,8 @@ export {
   sub,
   sum,
   mulQty,
+  divideBy,
+  ratio,
   compare,
   max,
   min,
