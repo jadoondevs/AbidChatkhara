@@ -1990,6 +1990,22 @@ tbody tr:hover {
   max-width: 160px;
 }
 
+/* The option-name field in the "add option" row is a name, not a price,
+   so it takes the width a price field gives up. */
+.option-price-row input.option-name-input {
+  max-width: none;
+  flex: 1;
+}
+
+/* The Modifiers block sits below the item's own fields in Edit Item;
+   a rule sets it apart from name/category/price above it. */
+.item-modifiers {
+  border-top: 2px solid var(--divider);
+  margin-top: 6px;
+  padding-top: 12px;
+  gap: 12px;
+}
+
 /* ---------------------------------------------------------------
    Partner management.
    --------------------------------------------------------------- */

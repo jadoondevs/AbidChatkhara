@@ -322,8 +322,18 @@ export interface ItemMixOwnerShare {
 }
 
 export interface ItemMixLine {
+  /** The base menu item. Not unique across rows: an item sold in two
+   * sizes produces two rows that share this id. */
   readonly itemId: number;
   readonly itemName: string;
+  /** The modifiers this configuration was sold with, as their snapshot
+   * names ("Half", "Full", "Small, Extra cheese"), or '' when the item
+   * was sold plain. Taken from `order_line_modifier`'s frozen names, so
+   * renaming a modifier later never rewrites a past report. */
+  readonly modifierNames: string;
+  /** What to show in the Item column: the item name, plus " — <sizes>"
+   * when it was sold with modifiers. */
+  readonly variantName: string;
   /** The section it sits under on the menu today. Null only if the item
    * has since lost its category — the report still names the item. */
   readonly categoryName: string | null;
@@ -332,31 +342,82 @@ export interface ItemMixLine {
   readonly owners: readonly ItemMixOwnerShare[];
 }
 
-/** Spec: "quantity and value per item, with owning partners and their
- * shares shown." Ownership shown is the CURRENT active split, not a
- * historical snapshot — this report describes the menu as it stands
- * today, unlike a partner statement, which is built from each sale's
- * own frozen `share_bp_snapshot`. */
+/**
+ * Spec: "quantity and value per item, with owning partners and their
+ * shares shown" — but a size is not an item, so an item sold Half and
+ * Full is two rows, not one aggregate. The split is by the SOLD
+ * configuration, read from each line's own `order_line_modifier`
+ * snapshot (names and, through the line's net-sales, the price it was
+ * charged at), never from the current menu — so if Full is later
+ * renamed or repriced, a past report still reads "Full" at what it sold
+ * for. An item sold plain stays a single row. Because a line's
+ * `net_sales_minor` is already the whole line (item + its modifiers,
+ * see ordering/pipeline), the per-variant values still sum to exactly
+ * the item's overall total.
+ *
+ * Ownership shown is the CURRENT active split, not a historical
+ * snapshot — this report describes the menu as it stands today, unlike
+ * a partner statement, which is built from each sale's own frozen
+ * `share_bp_snapshot`. It is a property of the base item, so every
+ * variant of an item shows the same owners.
+ */
 export async function itemMixReport(db: Kysely<Database>, opts: DateRangeOptions = {}): Promise<ItemMixLine[]> {
   let query = db
     .selectFrom('order_line')
     .innerJoin('order', 'order.id', 'order_line.order_id')
-    .select(['order_line.item_id as itemId', 'order_line.qty as qty', 'order_line.net_sales_minor as netSalesMinor'])
+    .select(['order_line.id as lineId', 'order_line.item_id as itemId', 'order_line.qty as qty', 'order_line.net_sales_minor as netSalesMinor'])
     .where('order.status', '=', 'closed')
     .where('order_line.voided', '=', 0);
   if (opts.fromInclusive) query = query.where('order.closed_at', '>=', opts.fromInclusive);
   if (opts.toExclusive) query = query.where('order.closed_at', '<', opts.toExclusive);
   const rows = await query.execute();
 
-  const byItem = new Map<number, { qty: number; amounts: Paisa[] }>();
-  for (const row of rows) {
-    const entry = byItem.get(row.itemId) ?? { qty: 0, amounts: [] };
-    entry.qty += row.qty;
-    entry.amounts.push(row.netSalesMinor);
-    byItem.set(row.itemId, entry);
+  // The sold configuration of each line, from the frozen snapshot — the
+  // whole point is that this does not consult the current menu.
+  const modifierRows = rows.length
+    ? await db
+        .selectFrom('order_line_modifier')
+        .select([
+          'order_line_modifier.order_line_id as lineId',
+          'order_line_modifier.modifier_id as modifierId',
+          'order_line_modifier.modifier_name_snapshot as name',
+        ])
+        .where(
+          'order_line_modifier.order_line_id',
+          'in',
+          rows.map((r) => r.lineId),
+        )
+        .execute()
+    : [];
+  const modsByLine = new Map<number, { id: number; name: string }[]>();
+  for (const m of modifierRows) {
+    const list = modsByLine.get(m.lineId) ?? [];
+    list.push({ id: m.modifierId, name: m.name ?? `modifier ${m.modifierId}` });
+    modsByLine.set(m.lineId, list);
   }
 
-  const itemIds = [...byItem.keys()];
+  interface Variant {
+    itemId: number;
+    modifierNames: string;
+    /** The configuration's modifier ids, ascending — used only to order
+     * an item's variants the way the menu does (Half, a smaller id than
+     * Full, comes first) rather than alphabetically. */
+    sortIds: number[];
+    qty: number;
+    amounts: Paisa[];
+  }
+  const byVariant = new Map<string, Variant>();
+  for (const row of rows) {
+    const mods = (modsByLine.get(row.lineId) ?? []).slice().sort((a, b) => a.id - b.id);
+    const modifierNames = mods.map((m) => m.name).join(', ');
+    const key = `${row.itemId} ${modifierNames}`;
+    const variant = byVariant.get(key) ?? { itemId: row.itemId, modifierNames, sortIds: mods.map((m) => m.id), qty: 0, amounts: [] };
+    variant.qty += row.qty;
+    variant.amounts.push(row.netSalesMinor);
+    byVariant.set(key, variant);
+  }
+
+  const itemIds = [...new Set([...byVariant.values()].map((v) => v.itemId))];
   // The category rides along on the join the name already needs, so the
   // dashboard can group by section without a second query.
   const itemRows =
@@ -371,22 +432,40 @@ export async function itemMixReport(db: Kysely<Database>, opts: DateRangeOptions
   const itemNameById = new Map(itemRows.map((i) => [i.id, i.name]));
   const categoryNameById = new Map(itemRows.map((i) => [i.id, i.categoryName]));
 
-  const lines: ItemMixLine[] = [];
-  for (const [itemId, { qty, amounts }] of byItem) {
+  // Owners are per base item, so resolve them once per item, not once
+  // per variant.
+  const ownersByItem = new Map<number, ItemMixOwnerShare[]>();
+  for (const itemId of itemIds) {
     const owners = await getActiveItemOwnership(db, itemId);
     const partnerIds = owners.map((o) => o.partnerId);
     const partnerRows = partnerIds.length > 0 ? await db.selectFrom('partner').select(['id', 'name']).where('id', 'in', partnerIds).execute() : [];
     const partnerNameById = new Map(partnerRows.map((p) => [p.id, p.name]));
-    lines.push({
+    ownersByItem.set(
       itemId,
-      itemName: itemNameById.get(itemId) ?? `item ${itemId}`,
-      categoryName: categoryNameById.get(itemId) ?? null,
-      qty,
-      netSalesMinor: sum(amounts),
-      owners: owners.map((o) => ({ partnerId: o.partnerId, partnerName: partnerNameById.get(o.partnerId) ?? `partner ${o.partnerId}`, shareBp: o.shareBp })),
-    });
+      owners.map((o) => ({ partnerId: o.partnerId, partnerName: partnerNameById.get(o.partnerId) ?? `partner ${o.partnerId}`, shareBp: o.shareBp })),
+    );
   }
-  return lines.sort((a, b) => a.itemName.localeCompare(b.itemName));
+
+  const firstSortId = (v: Variant) => (v.sortIds.length > 0 ? (v.sortIds[0] as number) : -1);
+  const variants = [...byVariant.values()].sort((a, b) => {
+    const nameA = itemNameById.get(a.itemId) ?? `item ${a.itemId}`;
+    const nameB = itemNameById.get(b.itemId) ?? `item ${b.itemId}`;
+    return nameA.localeCompare(nameB) || firstSortId(a) - firstSortId(b) || a.modifierNames.localeCompare(b.modifierNames);
+  });
+
+  return variants.map((v) => {
+    const itemName = itemNameById.get(v.itemId) ?? `item ${v.itemId}`;
+    return {
+      itemId: v.itemId,
+      itemName,
+      modifierNames: v.modifierNames,
+      variantName: v.modifierNames ? `${itemName} — ${v.modifierNames}` : itemName,
+      categoryName: categoryNameById.get(v.itemId) ?? null,
+      qty: v.qty,
+      netSalesMinor: sum(v.amounts),
+      owners: ownersByItem.get(v.itemId) ?? [],
+    };
+  });
 }
 
 // ---------------------------------------------------------------------

@@ -54,14 +54,35 @@ it was fixed:
   importer writes an override for each one, including the base size's
   zero, rather than leaving any of them to a default that is only
   correct by accident.
+- **The delta is an implementation detail — no human ever sees one.**
+  The storage is a delta (`final − base`), but a delta is not a price
+  anyone reasons in. So both faces of the app work in final prices: the
+  item editor shows and takes "Half Rs 1,100, Full Rs 2,100" and does
+  the `final − base` conversion itself, and the cashier's picker shows
+  each size's final price and the resulting line price before the item
+  is added. Optional add-on groups (extra cheese) are the one place a
+  "+Rs" adjustment is shown, because that is honestly what an add-on is.
+- **Modifiers are configured where the item is, not on a second screen.**
+  They live inside Edit Item, alongside name/category/price, because a
+  manager who opens an item to change its size expects to find the size
+  there. The global "Modifier groups" screen keeps only the reusable
+  definitions (names and choice rules); all pricing is per item.
 
 ## Consequences
 
-The item-mix report counts "Chicken Karahi" once rather than splitting
-halves from fulls — the thing separate items would have given for free.
-The order line's modifier breakdown still records which size was sold,
-so the information is there; no report reads it that way yet.
+The item-mix report splits by the sold configuration rather than
+aggregating an item across its sizes: "Chicken Karahi — Half" and
+"Chicken Karahi — Full" are two rows, an item sold plain stays one. The
+split is read from each line's own `order_line_modifier` snapshot — the
+frozen name and, through the line's net-sales, the price it was charged
+at — so renaming or repricing a size never rewrites a past report.
+Because a line's `net_sales_minor` is already the whole line (item + its
+modifiers, see ordering/pipeline), the per-variant quantities and values
+still sum to exactly the item's overall total. This is the one thing
+separate items would have given for free, recovered here without them.
+See docs/decisions/025.
 
-Ownership is per item, so both sizes of a dish are owned identically.
-For this restaurant that is correct — the split follows the dish, not
-the portion.
+Ownership is per item, so both sizes of a dish are owned identically —
+the item-mix report shows the same owners on every variant of an item.
+For this restaurant that is correct: the split follows the dish, not the
+portion.

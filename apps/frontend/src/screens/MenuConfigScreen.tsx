@@ -1,4 +1,4 @@
-import { paisa, type Paisa } from '@pos/shared';
+import { add, paisa, sub, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -22,7 +22,7 @@ import {
   useUnlinkModifierGroup,
   useUpdateItem,
 } from '../api/hooks.js';
-import type { MenuItem, ModifierGroup } from '../api/types.js';
+import type { MenuItem, Modifier, ModifierGroup } from '../api/types.js';
 import { ErrorBanner, Loading, Modal, Money, MoneyInput } from '../components/ui.tsx';
 
 /**
@@ -60,7 +60,6 @@ export function MenuConfigScreen(): JSX.Element {
   const [itemName, setItemName] = useState('');
   const [itemCategoryId, setItemCategoryId] = useState<number | ''>('');
   const [editing, setEditing] = useState<MenuItem | null>(null);
-  const [modifiersFor, setModifiersFor] = useState<MenuItem | null>(null);
   const [removing, setRemoving] = useState<MenuItem | null>(null);
   const [groupsOpen, setGroupsOpen] = useState(false);
   // What the server did the last time an item was taken off the menu.
@@ -134,6 +133,10 @@ export function MenuConfigScreen(): JSX.Element {
                 <th>Options</th>
                 <th>Tonight</th>
                 <th className="num">Edit</th>
+                {/* "Options…" was its own button and its own dialog,
+                    separate from Edit — so a manager who clicked Edit to
+                    change a size never found the sizes. Options now live
+                    inside Edit; this column is a read-only summary. */}
               </tr>
             </thead>
             <tbody>
@@ -153,10 +156,8 @@ export function MenuConfigScreen(): JSX.Element {
                   <td className="num">
                     {item.priceMinor === null ? <span className="pill warn">No price</span> : <Money minor={item.priceMinor} />}
                   </td>
-                  <td>
-                    <button className="ghost" onClick={() => setModifiersFor(item)}>
-                      Options…
-                    </button>
+                  <td className="muted">
+                    <ItemOptionsSummary itemId={item.id} />
                   </td>
                   <td>
                     {/* "Available" is tonight's question — we are out of
@@ -187,7 +188,6 @@ export function MenuConfigScreen(): JSX.Element {
       </div>
 
       {editing && <ItemDialog item={editing} onClose={() => setEditing(null)} />}
-      {modifiersFor && <ItemModifiersDialog item={modifiersFor} onClose={() => setModifiersFor(null)} />}
       {groupsOpen && <ModifierGroupsDialog onClose={() => setGroupsOpen(false)} />}
       {removing && (
         <RemoveItemDialog
@@ -207,16 +207,39 @@ export function MenuConfigScreen(): JSX.Element {
   );
 }
 
-/** Name, category and price in one place, because they are one thought:
- * "this item is wrong". */
+/** The read-only "Options" cell in the item table: the names of the
+ * groups an item offers, so the list shows at a glance which items have
+ * sizes without opening each one. Configuring them is done in Edit. */
+function ItemOptionsSummary({ itemId }: { itemId: number }): JSX.Element {
+  const groups = useItemModifierGroups(itemId);
+  const names = (groups.data ?? []).map((group) => group.name);
+  if (names.length === 0) return <span className="muted">—</span>;
+  return <>{names.join(', ')}</>;
+}
+
+/**
+ * Everything about one item, in one dialog: name, category, base price,
+ * availability, and its modifiers.
+ *
+ * The modifiers used to live behind a separate "Options…" button with
+ * its own dialog, so a manager who opened Edit to change a size never
+ * found the size. They are folded in here now, and their prices are
+ * shown as the FINAL price of the item at that size — not a delta the
+ * manager has to add to the base in their head.
+ */
 function ItemDialog({ item, onClose }: { item: MenuItem; onClose: () => void }): JSX.Element {
   const categories = useCategories(true);
   const updateItem = useUpdateItem();
   const setPrice = useSetItemPrice();
+  const setAvailability = useSetItemAvailability();
 
   const [name, setName] = useState(item.name);
   const [categoryId, setCategoryId] = useState(item.categoryId);
   const [priceMinor, setPriceMinor] = useState<Paisa>(item.priceMinor ?? paisa(0));
+  // Availability toggles on its own request, so it needs its own live
+  // state — the `item` prop is the snapshot the row was opened with and
+  // does not update underneath the open dialog.
+  const [available, setAvailable] = useState(item.available);
 
   const pending = updateItem.isPending || setPrice.isPending;
   const detailsChanged = name.trim() !== item.name || categoryId !== item.categoryId;
@@ -238,10 +261,16 @@ function ItemDialog({ item, onClose }: { item: MenuItem; onClose: () => void }):
     afterDetails();
   };
 
+  const toggleAvailable = () => {
+    const next = !available;
+    setAvailable(next);
+    setAvailability.mutate({ itemId: item.id, available: next });
+  };
+
   return (
-    <Modal title={`Edit ${item.name}`} onClose={onClose}>
+    <Modal title={`Edit ${item.name}`} wide onClose={onClose}>
       <div className="col">
-        <ErrorBanner error={updateItem.error ?? setPrice.error} />
+        <ErrorBanner error={updateItem.error ?? setPrice.error ?? setAvailability.error} />
 
         <div>
           <label htmlFor="item-name">Item name</label>
@@ -263,9 +292,19 @@ function ItemDialog({ item, onClose }: { item: MenuItem; onClose: () => void }):
         </div>
 
         <div>
-          <label htmlFor="item-price">Price</label>
+          <label htmlFor="item-price">Base price</label>
           <MoneyInput id="item-price" valueMinor={priceMinor} onChange={setPriceMinor} />
-          <p className="muted field-hint">A new price applies from now. Orders already taken keep the price they were rung up at.</p>
+          <p className="muted field-hint">
+            The price with no size chosen. A new price applies from now; orders already taken keep the price they were rung up at.
+          </p>
+        </div>
+
+        <div>
+          <label>Availability</label>
+          <div>
+            <button onClick={toggleAvailable}>{available ? 'Available tonight' : 'Unavailable tonight'}</button>
+            <p className="muted field-hint">Whether the kitchen can make it right now. Separate from taking it off the menu.</p>
+          </div>
         </div>
 
         {!item.active && (
@@ -279,119 +318,224 @@ function ItemDialog({ item, onClose }: { item: MenuItem; onClose: () => void }):
         <button className="primary big" disabled={!name.trim() || pending} onClick={save}>
           {pending ? 'Saving…' : 'Save item'}
         </button>
+
+        <ItemModifiers item={item} basePriceMinor={item.priceMinor ?? paisa(0)} basePriceDirty={priceChanged} />
       </div>
     </Modal>
   );
 }
 
 /**
- * Which option groups this item offers, and what each option costs on
- * THIS item.
+ * The Modifiers section of the item editor: the size and add-on groups
+ * this item offers, each with its options and their per-item prices.
  *
- * The group is shared — one "Half / Full" hangs off every karahi — but
- * the uplift is not: Full is worth a different amount on each of them.
- * A blank price here means "use the group's own default".
+ * A group is a reusable definition — one "Size" is shared across every
+ * karahi — so this both lets an item reuse an existing group and create
+ * a brand-new one, without leaving the item editor.
  */
-function ItemModifiersDialog({ item, onClose }: { item: MenuItem; onClose: () => void }): JSX.Element {
+function ItemModifiers({
+  item,
+  basePriceMinor,
+  basePriceDirty,
+}: {
+  item: MenuItem;
+  basePriceMinor: Paisa;
+  basePriceDirty: boolean;
+}): JSX.Element {
   const allGroups = useModifierGroups();
   const attached = useItemModifierGroups(item.id);
   const link = useLinkModifierGroup();
   const unlink = useUnlinkModifierGroup();
+  const createGroup = useCreateModifierGroup();
+
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupRequired, setNewGroupRequired] = useState(true);
 
   const attachedIds = new Set((attached.data ?? []).map((group) => group.id));
+  const attachedGroups = (allGroups.data ?? []).filter((group) => attachedIds.has(group.id));
+  const reusableGroups = (allGroups.data ?? []).filter((group) => !attachedIds.has(group.id));
+
+  const addGroup = async () => {
+    const created = await createGroup.mutateAsync({
+      name: newGroupName.trim(),
+      minSelect: newGroupRequired ? 1 : 0,
+      maxSelect: newGroupRequired ? 1 : 5,
+    });
+    await link.mutateAsync({ itemId: item.id, groupId: created.id });
+    setNewGroupName('');
+  };
 
   return (
-    <Modal title={`Options for ${item.name}`} wide onClose={onClose}>
-      <div className="col">
-        <ErrorBanner error={link.error ?? unlink.error} />
-        <p className="muted" style={{ margin: 0 }}>
-          A group with one required choice becomes a size: the till asks before the item joins the bill.
-        </p>
+    <div className="col item-modifiers">
+      <h3 style={{ margin: '4px 0 0' }}>Modifiers</h3>
+      <p className="muted field-hint" style={{ marginTop: 0 }}>
+        A required, choose-one group is a size. The price next to each option is the item&apos;s <strong>final price</strong> at that
+        size — no adding to the base in your head.
+      </p>
+      <ErrorBanner error={link.error ?? unlink.error ?? createGroup.error} />
+      {basePriceDirty && <p className="muted field-hint">Save the base price first, then its sizes are priced against it.</p>}
 
-        {allGroups.isLoading && <Loading />}
-        {allGroups.data?.length === 0 && (
-          <p className="muted">No modifier groups exist yet. Create one from the Menu screen&apos;s “Modifier groups” button.</p>
-        )}
+      {allGroups.isLoading && <Loading />}
+      {attachedGroups.length === 0 && <p className="muted">No modifiers on this item yet.</p>}
 
-        {allGroups.data?.map((group) => (
-          <div key={group.id} className="card col option-group">
-            <div className="row">
-              <div style={{ flex: 1 }}>
-                <strong>{group.name}</strong>{' '}
-                <span className="muted">
-                  {group.minSelect === 1 && group.maxSelect === 1
-                    ? 'one required choice'
-                    : `choose ${group.minSelect}–${group.maxSelect}`}
-                </span>
-              </div>
-              <button
-                disabled={link.isPending || unlink.isPending}
-                onClick={() =>
-                  attachedIds.has(group.id)
-                    ? unlink.mutate({ itemId: item.id, groupId: group.id })
-                    : link.mutate({ itemId: item.id, groupId: group.id })
-                }
-              >
-                {attachedIds.has(group.id) ? 'Remove from item' : 'Add to item'}
-              </button>
-            </div>
+      {attachedGroups.map((group) => (
+        <ItemGroupCard
+          key={group.id}
+          item={item}
+          group={group}
+          basePriceMinor={basePriceMinor}
+          basePriceDirty={basePriceDirty}
+          onRemove={() => unlink.mutate({ itemId: item.id, groupId: group.id })}
+        />
+      ))}
 
-            {attachedIds.has(group.id) && <GroupPrices item={item} group={group} />}
-          </div>
-        ))}
+      {reusableGroups.length > 0 && (
+        <div className="row" style={{ flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <span className="muted field-hint" style={{ margin: 0 }}>
+            Reuse a group:
+          </span>
+          {reusableGroups.map((group) => (
+            <button key={group.id} className="ghost" disabled={link.isPending} onClick={() => link.mutate({ itemId: item.id, groupId: group.id })}>
+              + {group.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input
+          placeholder="New group name (e.g. Size)"
+          value={newGroupName}
+          onChange={(event) => setNewGroupName(event.target.value)}
+          style={{ flex: 1, minWidth: 160 }}
+        />
+        <label className="checkbox-row" style={{ margin: 0 }}>
+          <input type="checkbox" checked={newGroupRequired} onChange={(event) => setNewGroupRequired(event.target.checked)} /> required, choose one
+        </label>
+        <button disabled={!newGroupName.trim() || createGroup.isPending || link.isPending} onClick={() => void addGroup()}>
+          + Add modifier group
+        </button>
       </div>
-    </Modal>
+    </div>
   );
 }
 
-/** Each option in an attached group, with what it costs on this item. */
-function GroupPrices({ item, group }: { item: MenuItem; group: ModifierGroup }): JSX.Element {
+/**
+ * One attached group inside the item editor: its options and, for each,
+ * the price on THIS item.
+ *
+ * For a size (required, choose-one) the field is the item's final price
+ * at that size — Half Rs 1,100, Full Rs 2,100 — and the delta the
+ * database actually stores (final − base) is computed here so the
+ * manager never sees or types one. For an optional add-on group the
+ * field is what the option adds, because that is what "extra cheese
+ * +Rs 100" honestly is.
+ */
+function ItemGroupCard({
+  item,
+  group,
+  basePriceMinor,
+  basePriceDirty,
+  onRemove,
+}: {
+  item: MenuItem;
+  group: ModifierGroup;
+  basePriceMinor: Paisa;
+  basePriceDirty: boolean;
+  onRemove: () => void;
+}): JSX.Element {
   const modifiers = useModifiers(group.id);
   const overrides = useItemModifierPrices(item.id);
   const setPrice = useSetItemModifierPrice();
   const clearPrice = useClearItemModifierPrice();
+  const createModifier = useCreateModifier();
+
+  const isSize = group.minSelect === 1 && group.maxSelect === 1;
   const [edits, setEdits] = useState<Record<number, Paisa>>({});
+  const [newName, setNewName] = useState('');
+  const [newPrice, setNewPrice] = useState<Paisa>(isSize ? basePriceMinor : paisa(0));
 
   const overrideFor = (modifierId: number) => overrides.data?.find((row) => row.modifierId === modifierId)?.priceDeltaMinor;
+  const effectiveDelta = (modifier: Modifier) => overrideFor(modifier.id) ?? modifier.priceDeltaMinor;
+  // What the field shows: for a size, the final price (base + delta);
+  // for an add-on, the amount it adds.
+  const fieldOf = (modifier: Modifier): Paisa => (isSize ? add(basePriceMinor, effectiveDelta(modifier)) : effectiveDelta(modifier));
+  // What the field is turned back into for storage: a size's final price
+  // becomes a delta against the base; an add-on already is one.
+  const toDelta = (fieldValue: Paisa): Paisa => (isSize ? sub(fieldValue, basePriceMinor) : fieldValue);
+
+  const dropEdit = (modifierId: number) =>
+    setEdits((all) => Object.fromEntries(Object.entries(all).filter(([key]) => Number(key) !== modifierId)));
+
+  const addOption = async () => {
+    // The option's price is a per-item override, so the group's own
+    // default stays zero — the same shape the menu import writes.
+    const created = await createModifier.mutateAsync({ groupId: group.id, name: newName.trim(), priceDeltaMinor: paisa(0) });
+    const delta = toDelta(newPrice);
+    if (delta !== 0) await setPrice.mutateAsync({ itemId: item.id, modifierId: created.id, priceDeltaMinor: delta });
+    setNewName('');
+    setNewPrice(isSize ? basePriceMinor : paisa(0));
+  };
 
   return (
-    <div className="col option-prices">
-      <ErrorBanner error={setPrice.error ?? clearPrice.error} />
-      {modifiers.data?.map((modifier) => {
-        const override = overrideFor(modifier.id);
-        const current = edits[modifier.id] ?? override ?? modifier.priceDeltaMinor;
-        return (
-          <div key={modifier.id} className="row option-price-row">
-            <span style={{ flex: 1 }}>{modifier.name}</span>
-            <MoneyInput valueMinor={current} onChange={(next) => setEdits((all) => ({ ...all, [modifier.id]: next }))} />
-            <button
-              disabled={setPrice.isPending || current === (override ?? modifier.priceDeltaMinor)}
-              onClick={() => setPrice.mutate({ itemId: item.id, modifierId: modifier.id, priceDeltaMinor: current })}
-            >
-              Set
-            </button>
-            {override === undefined ? (
-              <span className="muted field-hint" style={{ margin: 0, minWidth: 96 }}>
-                group default
-              </span>
-            ) : (
+    <div className="card col option-group">
+      <div className="row">
+        <div style={{ flex: 1 }}>
+          <strong>{group.name}</strong>{' '}
+          <span className="muted">{isSize ? 'required — choose one (a size)' : `choose ${group.minSelect}–${group.maxSelect} (add-ons)`}</span>
+        </div>
+        <button className="ghost" onClick={onRemove}>
+          Remove from item
+        </button>
+      </div>
+
+      <div className="col option-prices">
+        <ErrorBanner error={setPrice.error ?? clearPrice.error ?? createModifier.error} />
+        {modifiers.data?.map((modifier) => {
+          const field = edits[modifier.id] ?? fieldOf(modifier);
+          const unchanged = field === fieldOf(modifier);
+          const hasOverride = overrideFor(modifier.id) !== undefined;
+          return (
+            <div key={modifier.id} className="row option-price-row">
+              <span style={{ flex: 1 }}>{modifier.name}</span>
+              {!isSize && <span className="muted">+</span>}
+              <MoneyInput valueMinor={field} onChange={(next) => setEdits((all) => ({ ...all, [modifier.id]: next }))} />
               <button
-                className="ghost"
-                disabled={clearPrice.isPending}
-                onClick={() => {
-                  // Drop this modifier's pending edit so the row falls
-                  // back to showing the group default again.
-                  setEdits((all) => Object.fromEntries(Object.entries(all).filter(([key]) => Number(key) !== modifier.id)));
-                  clearPrice.mutate({ itemId: item.id, modifierId: modifier.id });
-                }}
+                disabled={basePriceDirty || setPrice.isPending || unchanged}
+                onClick={() =>
+                  setPrice.mutate({ itemId: item.id, modifierId: modifier.id, priceDeltaMinor: toDelta(field) }, { onSuccess: () => dropEdit(modifier.id) })
+                }
               >
-                Use default
+                Save
               </button>
-            )}
-          </div>
-        );
-      })}
-      {modifiers.data?.length === 0 && <p className="muted field-hint">This group has no options yet.</p>}
+              {hasOverride && (
+                <button
+                  className="ghost"
+                  disabled={clearPrice.isPending}
+                  onClick={() => clearPrice.mutate({ itemId: item.id, modifierId: modifier.id }, { onSuccess: () => dropEdit(modifier.id) })}
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+          );
+        })}
+        {modifiers.data?.length === 0 && <p className="muted field-hint">No options yet — add the first one below.</p>}
+
+        <div className="row option-price-row">
+          <input
+            className="option-name-input"
+            placeholder={isSize ? 'New size (e.g. Full)' : 'New add-on'}
+            value={newName}
+            onChange={(event) => setNewName(event.target.value)}
+          />
+          {!isSize && <span className="muted">+</span>}
+          <MoneyInput valueMinor={newPrice} onChange={setNewPrice} />
+          <button disabled={!newName.trim() || basePriceDirty || createModifier.isPending || setPrice.isPending} onClick={() => void addOption()}>
+            + Add
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -406,12 +550,15 @@ function ModifierGroupsDialog({ onClose }: { onClose: () => void }): JSX.Element
   const [required, setRequired] = useState(true);
   const [optionFor, setOptionFor] = useState<number | ''>('');
   const [optionName, setOptionName] = useState('');
-  const [optionDelta, setOptionDelta] = useState<Paisa>(paisa(0));
 
   return (
     <Modal title="Modifier groups" wide onClose={onClose}>
       <div className="col">
         <ErrorBanner error={createGroup.error ?? createModifier.error} />
+        <p className="muted field-hint" style={{ marginTop: 0 }}>
+          Reusable choices you attach to items — Size (Half / Full), Spice level, and so on. Set the <strong>prices</strong> on each
+          item, under Edit → Modifiers, because the same size costs a different amount on different dishes.
+        </p>
 
         <div className="card col">
           <h3 style={{ margin: 0 }}>New group</h3>
@@ -456,26 +603,15 @@ function ModifierGroupsDialog({ onClose }: { onClose: () => void }): JSX.Element
           <div>
             <label htmlFor="option-name">Option name</label>
             <input id="option-name" placeholder="Full" value={optionName} onChange={(event) => setOptionName(event.target.value)} />
-          </div>
-          <div>
-            <label htmlFor="option-delta">Default price change</label>
-            <MoneyInput id="option-delta" valueMinor={optionDelta} onChange={setOptionDelta} />
-            <p className="muted field-hint">
-              What this option adds by default. Any item can override it — set the item&apos;s own price under Options.
-            </p>
+            <p className="muted field-hint">Just the name here. Its price is set per item, under Edit → Modifiers.</p>
           </div>
           <button
             className="primary"
             disabled={!optionName.trim() || optionFor === '' || createModifier.isPending}
             onClick={() =>
               createModifier.mutate(
-                { groupId: Number(optionFor), name: optionName.trim(), priceDeltaMinor: optionDelta },
-                {
-                  onSuccess: () => {
-                    setOptionName('');
-                    setOptionDelta(paisa(0));
-                  },
-                },
+                { groupId: Number(optionFor), name: optionName.trim(), priceDeltaMinor: paisa(0) },
+                { onSuccess: () => setOptionName('') },
               )
             }
           >

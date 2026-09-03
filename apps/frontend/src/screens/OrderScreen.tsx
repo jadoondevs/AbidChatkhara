@@ -1,4 +1,4 @@
-import { type Paisa } from '@pos/shared';
+import { add, mulQty, paisa, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../api/client.js';
@@ -275,6 +275,15 @@ function ModifierPicker({
 
   const chosen = selected ?? [];
 
+  // The item's own price, and the line's price once the chosen options
+  // are applied — the same sum the server does in addLine, shown to the
+  // cashier before they commit rather than only appearing on the bill.
+  const base = item.priceMinor ?? paisa(0);
+  const unitMinor = chosen.reduce<Paisa>((total, id) => {
+    const modifier = allModifiers.find((m) => m.id === id);
+    return modifier ? add(total, deltaFor(modifier)) : total;
+  }, base);
+
   const toggle = (modifierId: number, group: ModifierGroup) => {
     setSelected((current) => {
       const list = current ?? [];
@@ -309,6 +318,11 @@ function ModifierPicker({
         {groups.data?.map((group) => {
           const options = optionsFor(group);
           const required = group.minSelect > 0;
+          // A required, choose-one group is a size, so each option shows
+          // the item's FINAL price at that size (Half Rs 1,100, Full
+          // Rs 2,100) — the price that actually goes on the bill. An
+          // optional group is an add-on, so it shows what it adds.
+          const isSize = group.minSelect === 1 && group.maxSelect === 1;
           return (
             <div key={group.id}>
               <label>
@@ -321,12 +335,15 @@ function ModifierPicker({
               <div className="tabs">
                 {options.map((modifier) => (
                   <button key={modifier.id} className={chosen.includes(modifier.id) ? 'active' : ''} onClick={() => toggle(modifier.id, group)}>
-                    {modifier.name}
-                    {deltaFor(modifier) !== 0 && (
-                      <>
-                        {' '}
-                        <Money minor={deltaFor(modifier)} />
-                      </>
+                    {modifier.name}{' '}
+                    {isSize ? (
+                      <Money minor={add(base, deltaFor(modifier))} />
+                    ) : (
+                      deltaFor(modifier) !== 0 && (
+                        <>
+                          +<Money minor={deltaFor(modifier)} />
+                        </>
+                      )
                     )}
                   </button>
                 ))}
@@ -346,6 +363,21 @@ function ModifierPicker({
             Choose an option for {unsatisfied.map((group) => group.name).join(', ')} before adding this item.
           </p>
         )}
+
+        {/* The price that will land on the bill, worked out for the
+            cashier rather than left for them to add up. */}
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <span className="muted">Line price</span>
+          <strong>
+            <Money minor={unitMinor} />
+            {qty > 1 && (
+              <>
+                {' '}
+                × {qty} = <Money minor={mulQty(unitMinor, qty)} />
+              </>
+            )}
+          </strong>
+        </div>
 
         <button
           className="primary big"
