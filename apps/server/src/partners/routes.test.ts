@@ -14,9 +14,10 @@ async function setup() {
   const category = await createCategory(ctx.db, { name: 'Mains' }, catalogActor);
   const item = await createItem(ctx.db, { categoryId: category.id, name: 'Karahi' }, catalogActor);
   await setItemPrice(ctx.db, item.id, paisa(500_00), catalogActor);
+  const second = await createItem(ctx.db, { categoryId: category.id, name: 'Biryani' }, catalogActor);
 
   const app = await buildApp({ db: ctx.db, logger: false });
-  return { ctx, app, admin, server, item };
+  return { ctx, app, admin, server, category, item, second };
 }
 
 async function loginAs(app: FastifyInstance, username: string, password: string): Promise<string> {
@@ -70,6 +71,40 @@ describe('partners routes', () => {
       headers: { authorization: `Bearer ${serverToken}` }, // reads are open to any authenticated staff
     });
     expect(getRes.json()).toEqual([{ partnerId: partner.id, shareBp: 10_000 }]);
+  });
+
+  it('applies one split to a whole category, manager-only, and clears the unset-items list', async () => {
+    const started = await setup();
+    ({ app, ctx } = started);
+    const serverToken = await loginAs(app, started.server.username, '1234');
+    const adminToken = await loginAs(app, started.admin.username, '9999');
+
+    const partner = (
+      await app.inject({ method: 'POST', url: '/api/partners', headers: { authorization: `Bearer ${adminToken}` }, payload: { name: 'Alice' } })
+    ).json() as { id: number };
+
+    const before = await app.inject({ method: 'GET', url: '/api/ownership/unset-items', headers: { authorization: `Bearer ${serverToken}` } });
+    expect(before.json()).toEqual([started.item.id, started.second.id]);
+
+    const denied = await app.inject({
+      method: 'PUT',
+      url: '/api/ownership/by-category',
+      headers: { authorization: `Bearer ${serverToken}` },
+      payload: { categoryIds: [started.category.id], split: [{ partnerId: partner.id, shareBp: 10_000 }] },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const applied = await app.inject({
+      method: 'PUT',
+      url: '/api/ownership/by-category',
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: { categoryIds: [started.category.id], split: [{ partnerId: partner.id, shareBp: 10_000 }] },
+    });
+    expect(applied.statusCode).toBe(200);
+    expect(applied.json()).toEqual({ itemIds: [started.item.id, started.second.id] });
+
+    const after = await app.inject({ method: 'GET', url: '/api/ownership/unset-items', headers: { authorization: `Bearer ${serverToken}` } });
+    expect(after.json()).toEqual([]);
   });
 
   it('rejects a split that does not sum to 10000, with a 500 mapped from a thrown Error', async () => {

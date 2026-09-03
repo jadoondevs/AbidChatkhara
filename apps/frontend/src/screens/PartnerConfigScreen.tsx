@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  useCategories,
   useCreatePartner,
   useItemOwnership,
   useMenu,
   usePartnerRecord,
   usePartners,
   useSetItemOwnership,
+  useSetOwnershipForCategories,
   useUpdatePartner,
 } from '../api/hooks.js';
-import type { Partner, PartnerRecord } from '../api/types.js';
+import type { OwnershipShare, Partner, PartnerRecord } from '../api/types.js';
 import { ErrorBanner, Loading, Money } from '../components/ui.tsx';
 
 /**
@@ -88,7 +90,171 @@ export function PartnerConfigScreen(): JSX.Element {
         </div>
       </div>
 
+      <BulkOwnershipCard />
+
       {selectedId !== null && <PartnerRecordPanel partnerId={selectedId} onClose={() => setSelectedId(null)} />}
+    </div>
+  );
+}
+
+/**
+ * The percent-per-partner grid, shared by both ownership editors.
+ *
+ * Held in basis points because that is what the server stores and what
+ * "must total exactly 100%" is checked in; the field shows percent
+ * because that is what a partner agreement is written in.
+ */
+function SplitInputs({
+  partners,
+  shares,
+  onChange,
+}: {
+  partners: readonly Partner[];
+  shares: Record<number, number>;
+  onChange: (partnerId: number, shareBp: number) => void;
+}): JSX.Element {
+  return (
+    <div className="col">
+      {partners.map((partner) => (
+        <div key={partner.id} className="row">
+          <span style={{ flex: 1 }}>{partner.name}</span>
+          <input
+            style={{ maxWidth: 120 }}
+            inputMode="decimal"
+            placeholder="0"
+            aria-label={`${partner.name} share`}
+            value={shares[partner.id] === undefined ? '' : String(shares[partner.id]! / 100)}
+            onChange={(event) => {
+              const percent = Number(event.target.value);
+              onChange(partner.id, Number.isFinite(percent) ? Math.round(percent * 100) : 0);
+            }}
+          />
+          <span className="muted">%</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The entries actually worth sending: a partner left blank owns
+ * nothing and should not get a zero-share row. */
+function splitEntries(shares: Record<number, number>): OwnershipShare[] {
+  return Object.entries(shares)
+    .map(([partnerId, shareBp]) => ({ partnerId: Number(partnerId), shareBp }))
+    .filter((entry) => entry.shareBp > 0);
+}
+
+function SplitTotal({ totalBp }: { totalBp: number }): JSX.Element {
+  const balanced = totalBp === 10_000;
+  return (
+    <strong style={{ flex: 1, color: balanced ? 'var(--success)' : 'var(--warn)' }}>
+      Total {totalBp / 100}% {balanced ? '✓' : '— must be exactly 100%'}
+    </strong>
+  );
+}
+
+/**
+ * One split applied to whole categories at once.
+ *
+ * A fifty-item menu is usually owned by a handful of arrangements, not
+ * fifty — a couple of partners split the grill between them and one owns
+ * everything else — and setting that item by item is where menu
+ * configuration quietly stops being finished. This does it in one
+ * operation per arrangement, and every item it touches stays
+ * individually editable above afterwards, because the bulk apply writes
+ * exactly the same rows the per-item editor writes.
+ */
+function BulkOwnershipCard(): JSX.Element {
+  const partners = usePartners();
+  const categories = useCategories();
+  const menu = useMenu();
+  const apply = useSetOwnershipForCategories();
+  const [picked, setPicked] = useState<number[]>([]);
+  const [shares, setShares] = useState<Record<number, number>>({});
+  const [confirming, setConfirming] = useState(false);
+  const [applied, setApplied] = useState<number | null>(null);
+
+  const entries = splitEntries(shares);
+  const totalBp = entries.reduce((total, entry) => total + entry.shareBp, 0);
+  const balanced = totalBp === 10_000;
+  // Counted from the same menu the manager is looking at, so the
+  // confirmation names a real number rather than "some items".
+  const itemCount = (menu.data ?? []).filter((item) => picked.includes(item.categoryId)).length;
+
+  const toggle = (categoryId: number) => {
+    setApplied(null);
+    setPicked((current) => (current.includes(categoryId) ? current.filter((id) => id !== categoryId) : [...current, categoryId]));
+  };
+
+  return (
+    <div className="card col">
+      <h3 style={{ margin: 0 }}>Ownership by category</h3>
+      <p className="muted" style={{ margin: 0 }}>
+        Give every item in the chosen categories the same split. Each item can still be changed on its own above.
+      </p>
+      <ErrorBanner error={apply.error} />
+
+      <div className="category-picker">
+        {categories.data?.map((category) => (
+          <label key={category.id} className={`category-pick${picked.includes(category.id) ? ' picked' : ''}`}>
+            <input type="checkbox" checked={picked.includes(category.id)} onChange={() => toggle(category.id)} />
+            <span>{category.name}</span>
+          </label>
+        ))}
+      </div>
+
+      <SplitInputs
+        partners={partners.data ?? []}
+        shares={shares}
+        onChange={(partnerId, shareBp) => {
+          setApplied(null);
+          setShares((current) => ({ ...current, [partnerId]: shareBp }));
+        }}
+      />
+      <div className="row">
+        <SplitTotal totalBp={totalBp} />
+      </div>
+
+      {applied !== null && (
+        <p className="muted" style={{ margin: 0 }}>
+          Applied to {applied} item{applied === 1 ? '' : 's'}.
+        </p>
+      )}
+
+      {confirming ? (
+        <div className="card">
+          <p style={{ marginTop: 0 }}>
+            This replaces the split on <strong>{itemCount}</strong> item{itemCount === 1 ? '' : 's'}, including any you have already set by hand.
+            It applies <strong>from now forward only</strong>: past sales keep the shares they were allocated under.
+          </p>
+          <div className="row">
+            <button className="ghost" onClick={() => setConfirming(false)}>
+              Cancel
+            </button>
+            <button
+              className="primary"
+              disabled={apply.isPending}
+              onClick={() =>
+                apply.mutate(
+                  { categoryIds: picked, split: entries },
+                  {
+                    onSuccess: (result) => {
+                      setApplied(result.itemIds.length);
+                      setConfirming(false);
+                    },
+                  },
+                )
+              }
+            >
+              Apply to {itemCount} item{itemCount === 1 ? '' : 's'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className="primary" disabled={!balanced || picked.length === 0} onClick={() => setConfirming(true)}>
+          Apply to selected categories
+        </button>
+      )}
     </div>
   );
 }
@@ -314,9 +480,7 @@ function OwnershipEditor({ itemId }: { itemId: number }): JSX.Element {
     setShares(next);
   }, [ownership.data]);
 
-  const entries = Object.entries(shares)
-    .map(([partnerId, shareBp]) => ({ partnerId: Number(partnerId), shareBp }))
-    .filter((entry) => entry.shareBp > 0);
+  const entries = splitEntries(shares);
   const totalBp = entries.reduce((total, entry) => total + entry.shareBp, 0);
   const balanced = totalBp === 10_000;
 
@@ -325,27 +489,14 @@ function OwnershipEditor({ itemId }: { itemId: number }): JSX.Element {
   return (
     <div className="col">
       <ErrorBanner error={setOwnership.error} />
-      {partners.data?.map((partner) => (
-        <div key={partner.id} className="row">
-          <span style={{ flex: 1 }}>{partner.name}</span>
-          <input
-            style={{ maxWidth: 120 }}
-            inputMode="decimal"
-            placeholder="0"
-            value={shares[partner.id] === undefined ? '' : String(shares[partner.id]! / 100)}
-            onChange={(event) => {
-              const percent = Number(event.target.value);
-              setShares((current) => ({ ...current, [partner.id]: Number.isFinite(percent) ? Math.round(percent * 100) : 0 }));
-            }}
-          />
-          <span className="muted">%</span>
-        </div>
-      ))}
+      <SplitInputs
+        partners={partners.data ?? []}
+        shares={shares}
+        onChange={(partnerId, shareBp) => setShares((current) => ({ ...current, [partnerId]: shareBp }))}
+      />
 
       <div className="row">
-        <strong style={{ flex: 1, color: balanced ? 'var(--success)' : 'var(--warn)' }}>
-          Total {totalBp / 100}% {balanced ? '✓' : '— must be exactly 100%'}
-        </strong>
+        <SplitTotal totalBp={totalBp} />
       </div>
 
       {confirming ? (

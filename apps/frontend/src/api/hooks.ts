@@ -441,11 +441,30 @@ export function useItemOwnership(itemId: number | null): UseQueryResult<Ownershi
 }
 
 export function useSetItemOwnership(): UseMutationResult<OwnershipShare[], Error, { itemId: number; split: OwnershipShare[] }> {
-  const queryClient = useQueryClient();
+  const invalidate = useInvalidateOnSuccess(['item-ownership', 'items-without-ownership']);
   return useMutation({
     mutationFn: ({ itemId, split }) => api.put<OwnershipShare[]>(`/api/items/${itemId}/ownership`, { split }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['item-ownership'] }),
+    onSuccess: invalidate,
   });
+}
+
+/** One split applied to every active item in the chosen categories. */
+export function useSetOwnershipForCategories(): UseMutationResult<
+  { itemIds: number[] },
+  Error,
+  { categoryIds: number[]; split: OwnershipShare[] }
+> {
+  const invalidate = useInvalidateOnSuccess(['item-ownership', 'items-without-ownership', 'partner-record']);
+  return useMutation({
+    mutationFn: (body) => api.put<{ itemIds: number[] }>('/api/ownership/by-category', body),
+    onSuccess: invalidate,
+  });
+}
+
+/** Active items nobody owns yet — they cannot be sold until they have a
+ * split, so the Menu screen says so on the item itself. */
+export function useItemsWithoutOwnership(): UseQueryResult<number[]> {
+  return useQuery({ queryKey: ['items-without-ownership'], queryFn: () => api.get<number[]>('/api/ownership/unset-items') });
 }
 
 // ---------------------------------------------------------------------
@@ -591,7 +610,11 @@ export function useCreateCategory(): UseMutationResult<Category, Error, { name: 
 }
 
 export function useCreateItem(): UseMutationResult<MenuItem, Error, { categoryId: number; name: string }> {
-  const invalidate = useInvalidateOnSuccess(['menu']);
+  // A new item is owned by nobody, so it joins the unsellable list the
+  // moment it is created — the Menu screen has to hear about that in
+  // the same breath as the item itself, or the flag only appears on a
+  // reload nobody does.
+  const invalidate = useInvalidateOnSuccess(['menu', 'items-without-ownership']);
   return useMutation({ mutationFn: (body) => api.post<MenuItem>('/api/items', body), onSuccess: invalidate });
 }
 
@@ -603,6 +626,94 @@ export function useSetItemPrice(): UseMutationResult<unknown, Error, { itemId: n
 export function useSetItemAvailability(): UseMutationResult<unknown, Error, { itemId: number; available: boolean }> {
   const invalidate = useInvalidateOnSuccess(['menu']);
   return useMutation({ mutationFn: ({ itemId, available }) => api.patch(`/api/items/${itemId}/availability`, { available }), onSuccess: invalidate });
+}
+
+/**
+ * Rename an item, move it to another category, or reactivate a retired
+ * one. Renaming is safe at any time because a sold line snapshots the
+ * name it was sold under — see the note on the server's `renameItem`.
+ */
+export function useUpdateItem(): UseMutationResult<
+  MenuItem,
+  Error,
+  { itemId: number; name?: string; categoryId?: number; active?: boolean }
+> {
+  const invalidate = useInvalidateOnSuccess(['menu', 'categories']);
+  return useMutation({
+    mutationFn: ({ itemId, ...body }) => api.patch<MenuItem>(`/api/items/${itemId}`, body),
+    onSuccess: invalidate,
+  });
+}
+
+/** Take an item off the menu. The server decides whether that means
+ * deleting it or retiring it, and says which — see `removeItem`. */
+export function useRemoveItem(): UseMutationResult<{ outcome: 'deleted' | 'retired' }, Error, number> {
+  const invalidate = useInvalidateOnSuccess(['menu', 'item-modifier-groups', 'items-without-ownership']);
+  return useMutation({
+    mutationFn: (itemId) => api.del<{ outcome: 'deleted' | 'retired' }>(`/api/items/${itemId}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useCreateModifierGroup(): UseMutationResult<
+  ModifierGroup,
+  Error,
+  { name: string; minSelect: number; maxSelect: number }
+> {
+  const invalidate = useInvalidateOnSuccess(['modifier-groups']);
+  return useMutation({ mutationFn: (body) => api.post<ModifierGroup>('/api/modifier-groups', body), onSuccess: invalidate });
+}
+
+export function useCreateModifier(): UseMutationResult<
+  Modifier,
+  Error,
+  { groupId: number; name: string; priceDeltaMinor: Paisa }
+> {
+  const invalidate = useInvalidateOnSuccess(['modifiers', 'modifier-groups']);
+  return useMutation({ mutationFn: (body) => api.post<Modifier>('/api/modifiers', body), onSuccess: invalidate });
+}
+
+export function useLinkModifierGroup(): UseMutationResult<unknown, Error, { itemId: number; groupId: number }> {
+  const invalidate = useInvalidateOnSuccess(['item-modifier-groups', 'menu']);
+  return useMutation({
+    mutationFn: ({ itemId, groupId }) => api.post(`/api/items/${itemId}/modifier-groups`, { groupId }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUnlinkModifierGroup(): UseMutationResult<unknown, Error, { itemId: number; groupId: number }> {
+  const invalidate = useInvalidateOnSuccess(['item-modifier-groups', 'menu']);
+  return useMutation({
+    mutationFn: ({ itemId, groupId }) => api.del(`/api/items/${itemId}/modifier-groups/${groupId}`),
+    onSuccess: invalidate,
+  });
+}
+
+/** What each modifier costs on ONE item, where the item overrides its
+ * group's default. Absent means the default applies. */
+export function useItemModifierPrices(itemId: number | null): UseQueryResult<{ modifierId: number; priceDeltaMinor: Paisa }[]> {
+  return useQuery({
+    queryKey: ['item-modifier-prices', itemId],
+    queryFn: () => api.get<{ modifierId: number; priceDeltaMinor: Paisa }[]>(`/api/items/${itemId}/modifier-prices`),
+    enabled: itemId !== null,
+  });
+}
+
+export function useSetItemModifierPrice(): UseMutationResult<unknown, Error, { itemId: number; modifierId: number; priceDeltaMinor: Paisa }> {
+  const invalidate = useInvalidateOnSuccess(['item-modifier-prices', 'menu']);
+  return useMutation({
+    mutationFn: ({ itemId, modifierId, priceDeltaMinor }) =>
+      api.put(`/api/items/${itemId}/modifier-prices/${modifierId}`, { priceDeltaMinor }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useClearItemModifierPrice(): UseMutationResult<unknown, Error, { itemId: number; modifierId: number }> {
+  const invalidate = useInvalidateOnSuccess(['item-modifier-prices', 'menu']);
+  return useMutation({
+    mutationFn: ({ itemId, modifierId }) => api.del(`/api/items/${itemId}/modifier-prices/${modifierId}`),
+    onSuccess: invalidate,
+  });
 }
 
 export function useCreatePaymentMethod(): UseMutationResult<

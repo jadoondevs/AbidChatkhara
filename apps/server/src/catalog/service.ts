@@ -349,6 +349,141 @@ export async function getCurrentPrice(
   return row ? row.price_minor : null;
 }
 
+/**
+ * What a modifier costs on ONE item, overriding the modifier's own
+ * default delta.
+ *
+ * A shared "Half / Full" group is meant to be attached to every karahi
+ * on the menu, but Full is +Rs 1,000 on one and +Rs 1,800 on another.
+ * The modifier's own `price_delta_minor` stays the default for every
+ * item that has no override here — see migration 0020.
+ *
+ * Effective-dated exactly like `setItemPrice`: close the open row,
+ * insert a new one, never update in place.
+ */
+export async function setItemModifierPrice(
+  db: Kysely<Database>,
+  itemId: number,
+  modifierId: number,
+  priceDeltaMinor: Paisa,
+  actor: ActorContext,
+): Promise<void> {
+  const item = await db.selectFrom('item').select('id').where('id', '=', itemId).executeTakeFirst();
+  if (!item) throw new Error(`item ${itemId} not found`);
+  const modifier = await db.selectFrom('modifier').select(['id', 'group_id']).where('id', '=', modifierId).executeTakeFirst();
+  if (!modifier) throw new Error(`modifier ${modifierId} not found`);
+
+  // An override for a modifier the item cannot even be sold with is a
+  // configuration mistake, not a price — refuse it rather than storing
+  // a row nothing will ever read.
+  const linked = await db
+    .selectFrom('item_modifier_group')
+    .select('group_id')
+    .where('item_id', '=', itemId)
+    .where('group_id', '=', modifier.group_id)
+    .executeTakeFirst();
+  if (!linked) {
+    throw new Error(`modifier ${modifierId} belongs to a group that is not linked to item ${itemId}`);
+  }
+
+  await db.transaction().execute(async (trx) => {
+    const now = new Date().toISOString();
+    const current = await trx
+      .selectFrom('item_modifier_price')
+      .selectAll()
+      .where('item_id', '=', itemId)
+      .where('modifier_id', '=', modifierId)
+      .where('valid_to', 'is', null)
+      .executeTakeFirst();
+
+    if (current) {
+      if (current.price_delta_minor === priceDeltaMinor) return;
+      await trx.updateTable('item_modifier_price').set({ valid_to: now }).where('id', '=', current.id).execute();
+    }
+
+    await trx
+      .insertInto('item_modifier_price')
+      .values({ item_id: itemId, modifier_id: modifierId, price_delta_minor: priceDeltaMinor, valid_from: now, valid_to: null })
+      .execute();
+
+    await recordAudit(trx, {
+      actorId: actor.actorId,
+      terminalId: actor.terminalId,
+      action: 'item.set_modifier_price',
+      entity: 'item',
+      entityId: itemId,
+      before: current ? { modifierId, priceDeltaMinor: current.price_delta_minor } : null,
+      after: { modifierId, priceDeltaMinor },
+    });
+  });
+}
+
+/** Drop an item's override so the modifier's own default applies again. */
+export async function clearItemModifierPrice(
+  db: Kysely<Database>,
+  itemId: number,
+  modifierId: number,
+  actor: ActorContext,
+): Promise<void> {
+  await db.transaction().execute(async (trx) => {
+    const current = await trx
+      .selectFrom('item_modifier_price')
+      .selectAll()
+      .where('item_id', '=', itemId)
+      .where('modifier_id', '=', modifierId)
+      .where('valid_to', 'is', null)
+      .executeTakeFirst();
+    if (!current) return;
+
+    await trx.updateTable('item_modifier_price').set({ valid_to: new Date().toISOString() }).where('id', '=', current.id).execute();
+
+    await recordAudit(trx, {
+      actorId: actor.actorId,
+      terminalId: actor.terminalId,
+      action: 'item.clear_modifier_price',
+      entity: 'item',
+      entityId: itemId,
+      before: { modifierId, priceDeltaMinor: current.price_delta_minor },
+      after: null,
+    });
+  });
+}
+
+/**
+ * The delta in effect for this item/modifier pair at `atTime`, or null
+ * when the item has no override and the modifier's own default applies.
+ */
+export async function getItemModifierPrice(
+  db: Kysely<Database>,
+  itemId: number,
+  modifierId: number,
+  atTime: Date = new Date(),
+): Promise<Paisa | null> {
+  const at = atTime.toISOString();
+  const row = await db
+    .selectFrom('item_modifier_price')
+    .select('price_delta_minor')
+    .where('item_id', '=', itemId)
+    .where('modifier_id', '=', modifierId)
+    .where('valid_from', '<=', at)
+    .where((eb) => eb.or([eb('valid_to', 'is', null), eb('valid_to', '>', at)]))
+    .orderBy('valid_from', 'desc')
+    .executeTakeFirst();
+  return row ? row.price_delta_minor : null;
+}
+
+/** Every override currently in effect for one item, keyed by modifier —
+ * what the menu screen needs to show the prices it is editing. */
+export async function listItemModifierPrices(db: Kysely<Database>, itemId: number): Promise<{ modifierId: number; priceDeltaMinor: Paisa }[]> {
+  const rows = await db
+    .selectFrom('item_modifier_price')
+    .select(['modifier_id', 'price_delta_minor'])
+    .where('item_id', '=', itemId)
+    .where('valid_to', 'is', null)
+    .execute();
+  return rows.map((row) => ({ modifierId: row.modifier_id, priceDeltaMinor: row.price_delta_minor }));
+}
+
 export async function getPriceHistory(db: Kysely<Database>, itemId: number): Promise<ItemPriceRow[]> {
   const rows = await db.selectFrom('item_price').selectAll().where('item_id', '=', itemId).orderBy('valid_from', 'asc').execute();
   return rows.map(toItemPriceRow);
@@ -506,10 +641,21 @@ export async function createModifier(
   return summary;
 }
 
+/**
+ * A group's options in the order they were entered, NOT alphabetically.
+ *
+ * A group's options are a deliberate sequence — Half then Full, Mild
+ * then Medium then Extra hot — and the till both displays them in this
+ * order and pre-selects the first one of a required group. Sorted by
+ * name, "Half / Full" reads Full, Half: the most expensive size, shown
+ * first and pre-selected, so a cashier who takes the default charges
+ * double. Creation order is the menu's own order and the only one that
+ * makes the default the base size.
+ */
 export async function listModifiers(db: Kysely<Database>, opts: { groupId?: number | undefined } = {}): Promise<ModifierSummary[]> {
   let query = db.selectFrom('modifier').selectAll();
   if (opts.groupId !== undefined) query = query.where('group_id', '=', opts.groupId);
-  const rows = await query.orderBy('name', 'asc').execute();
+  const rows = await query.orderBy('id', 'asc').execute();
   return rows.map(toModifierSummary);
 }
 
@@ -624,6 +770,75 @@ interface AvailabilityRow {
 
 function toAvailabilityStatus(row: AvailabilityRow): AvailabilityStatus {
   return { itemId: row.item_id, available: row.available === 1, changedBy: row.changed_by, changedAt: row.changed_at };
+}
+
+/** What happened when a manager asked for an item to go away. */
+export type ItemRemoval = 'deleted' | 'retired';
+
+/**
+ * Take an item off the menu.
+ *
+ * Two different things wear the same button, and which one happens is
+ * decided by the data, not by the manager:
+ *
+ *  - An item that has NEVER been sold is deleted outright, along with
+ *    its prices, availability, modifier links and ownership. A typo
+ *    should leave no trace, exactly as an empty order does
+ *    (docs/decisions/021).
+ *  - An item that HAS been sold is retired instead (`active = 0`). Every
+ *    `order_line` that sold it still points at it, and history is not
+ *    negotiable. It vanishes from the till and stays in the reports.
+ *
+ * The caller is told which happened so it can say so, rather than
+ * leaving a manager to wonder why one item disappeared from the reports
+ * and another did not.
+ *
+ * Availability is a different question and stays where it is: "we are
+ * out of it tonight" is not "it is off the menu".
+ */
+export async function removeItem(db: Kysely<Database>, id: number, actor: ActorContext): Promise<ItemRemoval> {
+  return db.transaction().execute(async (trx) => {
+    const item = await trx.selectFrom('item').selectAll().where('id', '=', id).executeTakeFirst();
+    if (!item) throw new Error(`item ${id} not found`);
+
+    const sold = await trx.selectFrom('order_line').select('id').where('item_id', '=', id).limit(1).executeTakeFirst();
+
+    if (sold) {
+      if (item.active === 0) return 'retired';
+      await trx.updateTable('item').set({ active: 0 }).where('id', '=', id).execute();
+      await recordAudit(trx, {
+        actorId: actor.actorId,
+        terminalId: actor.terminalId,
+        action: 'item.retire',
+        entity: 'item',
+        entityId: id,
+        before: toItemSummary(item),
+        after: toItemSummary({ ...item, active: 0 }),
+      });
+      return 'retired';
+    }
+
+    // Audited BEFORE the delete: the audit row is the only thing that
+    // will remain, so it has to carry what the item was.
+    await recordAudit(trx, {
+      actorId: actor.actorId,
+      terminalId: actor.terminalId,
+      action: 'item.delete',
+      entity: 'item',
+      entityId: id,
+      before: toItemSummary(item),
+    });
+
+    // Everything that references the item, then the item. No order line
+    // can be among them — that is what `sold` just established.
+    await trx.deleteFrom('item_modifier_price').where('item_id', '=', id).execute();
+    await trx.deleteFrom('item_modifier_group').where('item_id', '=', id).execute();
+    await trx.deleteFrom('item_availability').where('item_id', '=', id).execute();
+    await trx.deleteFrom('item_price').where('item_id', '=', id).execute();
+    await trx.deleteFrom('item_ownership').where('item_id', '=', id).execute();
+    await trx.deleteFrom('item').where('id', '=', id).execute();
+    return 'deleted';
+  });
 }
 
 export async function setAvailability(

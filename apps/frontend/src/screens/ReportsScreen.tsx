@@ -1,3 +1,4 @@
+import { divideBy, ratio, sum, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { query } from '../api/client.js';
 import {
@@ -10,11 +11,15 @@ import {
   useVoidAndDiscountReport,
   type DateRange,
 } from '../api/hooks.js';
+import type { DailySalesReport, ItemMixLine } from '../api/types.js';
 import { ErrorBanner, Loading, Money } from '../components/ui.tsx';
 
-type ReportKey = 'daily-sales' | 'partner-statement' | 'item-mix' | 'consumption' | 'service-charge' | 'void-discount';
+type ReportKey = 'dashboard' | 'daily-sales' | 'partner-statement' | 'item-mix' | 'consumption' | 'service-charge' | 'void-discount';
 
 const REPORTS: { key: ReportKey; label: string; path: string }[] = [
+  // The dashboard composes two reports that already exist rather than
+  // being one of its own, so its CSV is the daily-sales export.
+  { key: 'dashboard', label: 'Dashboard', path: '/api/reports/daily-sales' },
   { key: 'daily-sales', label: 'Daily sales', path: '/api/reports/daily-sales' },
   { key: 'partner-statement', label: 'Partner statement', path: '/api/reports/partners' },
   { key: 'item-mix', label: 'Item mix', path: '/api/reports/item-mix' },
@@ -41,7 +46,7 @@ function daysAgo(n: number): string {
 }
 
 export function ReportsScreen(): JSX.Element {
-  const [active, setActive] = useState<ReportKey>('daily-sales');
+  const [active, setActive] = useState<ReportKey>('dashboard');
   // Day-granular and INCLUSIVE at both ends, which is what an operator
   // means by "From 31 August, To 31 August". The old fields were an
   // exact instant range with an exclusive upper bound, so that entry
@@ -149,6 +154,7 @@ export function ReportsScreen(): JSX.Element {
         </div>
       </div>
 
+      {active === 'dashboard' && <Dashboard range={range} />}
       {active === 'daily-sales' && <DailySales range={range} />}
       {active === 'partner-statement' && <PartnerStatementView partnerId={partnerId === '' ? null : partnerId} range={range} />}
       {active === 'item-mix' && <ItemMix range={range} />}
@@ -159,6 +165,166 @@ export function ReportsScreen(): JSX.Element {
   );
 }
 
+/**
+ * The four figures a manager reads first, above whatever table they came
+ * for.
+ *
+ * Every value here is already in the report the tab fetched — a card is
+ * a second reading of one number, never a second query and never a
+ * second calculation. `tone` colours the note underneath, not the
+ * figure: the number itself is ink, so a red one always means the
+ * amount is negative rather than merely notable.
+ */
+function StatCards({ cards }: { cards: readonly StatCard[] }): JSX.Element {
+  return (
+    <div className="stat-cards">
+      {cards.map((card) => (
+        <div key={card.label} className="card stat-card">
+          <p className="figure-label">{card.label}</p>
+          <p className="figure">{card.value}</p>
+          {card.note !== undefined && <p className={`stat-note${card.tone ? ` ${card.tone}` : ''}`}>{card.note}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+interface StatCard {
+  readonly label: string;
+  readonly value: React.ReactNode;
+  readonly note?: React.ReactNode;
+  readonly tone?: 'good' | 'bad';
+}
+
+/** How busy each hour was, drawn as bars rather than a chart library:
+ * one div per hour, width proportional to the busiest. */
+function HourlySales({ hours }: { hours: DailySalesReport['salesByHour'] }): JSX.Element {
+  if (hours.length === 0) return <p className="muted">No sales in this range.</p>;
+  // Comparison over branded amounts — no arithmetic.
+  const busiest = hours.reduce((best, row) => (row.totalMinor > best.totalMinor ? row : best), hours[0]!);
+
+  return (
+    <div className="hour-bars">
+      {hours.map((row) => (
+        <div key={row.hour} className="hour-bar">
+          <span className="hour-bar-label">{hourLabel(row.hour)}</span>
+          <span
+            className={`hour-bar-fill${row.hour === busiest.hour ? ' peak' : ''}`}
+            style={{ width: `${Math.max(2, Math.round(ratio(row.totalMinor, busiest.totalMinor) * 100))}%` }}
+          />
+          <span className="hour-bar-value">
+            <Money minor={row.totalMinor} />
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function hourLabel(hour: number): string {
+  const suffix = hour < 12 ? 'AM' : 'PM';
+  const twelve = hour % 12 === 0 ? 12 : hour % 12;
+  return `${twelve} ${suffix}`;
+}
+
+/**
+ * The opening screen of Reports: the day at a glance.
+ *
+ * It runs no query of its own — it composes the daily-sales and item-mix
+ * reports the other tabs already use, so nothing here can disagree with
+ * the tab it summarises.
+ */
+function Dashboard({ range }: { range: DateRange }): JSX.Element {
+  const sales = useDailySalesReport(range);
+  const items = useItemMixReport(range);
+
+  if (sales.isLoading || items.isLoading) return <Loading />;
+  if (sales.error) return <ErrorBanner error={sales.error} />;
+  if (items.error) return <ErrorBanner error={items.error} />;
+  const data = sales.data;
+  if (!data) return <p className="muted">No data.</p>;
+
+  const top = [...(items.data ?? [])].sort((a, b) => b.netSalesMinor - a.netSalesMinor).slice(0, 8);
+  const itemsTotalMinor = sum((items.data ?? []).map((line) => line.netSalesMinor));
+
+  return (
+    <div className="col">
+      <StatCards
+        cards={[
+          {
+            label: 'Net customer sales',
+            value: <Money minor={data.customerSalesMinor} />,
+            note: data.discountsMinor > 0 ? <>after <Money minor={data.discountsMinor} /> of discounts</> : 'no discounts given',
+          },
+          { label: 'Orders', value: data.orderCount, note: data.orderCount === 1 ? 'customer bill' : 'customer bills' },
+          {
+            label: 'Average bill',
+            // Rounded for display only — divideBy says so, and the real
+            // total is the card beside this one.
+            value: data.orderCount > 0 ? <Money minor={divideBy(data.totalCollectedMinor, data.orderCount)} /> : '—',
+            note: 'total collected ÷ bills',
+          },
+          {
+            label: 'Service charge',
+            value: <Money minor={data.serviceChargeMinor} />,
+            note: 'held for waiters, not revenue',
+          },
+        ]}
+      />
+
+      <div className="grid dashboard-grid">
+        <div className="card">
+          <h3 style={{ margin: 0 }}>Top selling items</h3>
+          {top.length === 0 ? (
+            <p className="muted">Nothing sold in this range.</p>
+          ) : (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Category</th>
+                    <th className="num">Qty</th>
+                    <th className="num">Net sales</th>
+                    <th className="num">Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {top.map((line) => (
+                    <tr key={line.itemId}>
+                      <td>
+                        <strong>{line.itemName}</strong>
+                      </td>
+                      <td className="muted">{line.categoryName ?? '—'}</td>
+                      <td className="num">{line.qty}</td>
+                      <td className="num">
+                        <Money minor={line.netSalesMinor} />
+                      </td>
+                      <td className="num muted">{sharePercent(line.netSalesMinor, itemsTotalMinor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="card">
+          <h3 style={{ margin: 0 }}>Sales by hour</h3>
+          <HourlySales hours={data.salesByHour} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** A share of the total, as a percentage. `ratio` is the money module's
+ * one division whose result is not money — the paisa cancel out. */
+function sharePercent(amountMinor: Paisa, totalMinor: Paisa): string {
+  if (totalMinor === 0) return '—';
+  return `${Math.round(ratio(amountMinor, totalMinor) * 100)}%`;
+}
+
 function DailySales({ range }: { range: DateRange }): JSX.Element {
   const report = useDailySalesReport(range);
   if (report.isLoading) return <Loading />;
@@ -167,6 +333,21 @@ function DailySales({ range }: { range: DateRange }): JSX.Element {
   if (!data) return <p className="muted">No data.</p>;
 
   return (
+    <div className="col">
+      <StatCards
+        cards={[
+          { label: 'Gross sales', value: <Money minor={data.grossSalesMinor} />, note: 'what was rung up' },
+          {
+            label: 'Discounts',
+            value: <Money minor={data.discountsMinor} />,
+            note: 'taken off the bills',
+            ...(data.discountsMinor > 0 ? { tone: 'bad' as const } : {}),
+          },
+          { label: 'Net customer sales', value: <Money minor={data.customerSalesMinor} />, note: 'after discounts' },
+          { label: 'Total collected', value: <Money minor={data.totalCollectedMinor} />, note: 'what customers handed over' },
+        ]}
+      />
+
     <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', alignItems: 'start' }}>
       {/* The whole chain, in the order it happens: what was rung up,
           what was taken off, what that leaves, what was added on top,
@@ -250,6 +431,7 @@ function DailySales({ range }: { range: DateRange }): JSX.Element {
         </table>
       </div>
     </div>
+    </div>
   );
 }
 
@@ -263,6 +445,20 @@ function PartnerStatementView({ partnerId, range }: { partnerId: number | null; 
 
   return (
     <div className="col">
+      <StatCards
+        cards={[
+          { label: 'Credited to date', value: <Money minor={data.totalAllocatedMinor} />, note: `to ${data.partnerName}` },
+          { label: 'From customer sales', value: <Money minor={data.customerSalesAllocatedMinor} />, note: 'bills settled' },
+          { label: 'From consumption', value: <Money minor={data.consumptionAllocatedMinor} />, note: 'staff and owner meals' },
+          {
+            label: 'Variance',
+            value: <Money minor={data.reconciliation.varianceMinor} />,
+            note: data.reconciliation.varianceMinor === 0 ? 'balanced' : 'must be zero',
+            tone: data.reconciliation.varianceMinor === 0 ? 'good' : 'bad',
+          },
+        ]}
+      />
+
       <div className="card">
         <h3 style={{ margin: 0 }}>{data.partnerName}</h3>
         <div className="total-line grand">
@@ -326,8 +522,23 @@ function ItemMix({ range }: { range: DateRange }): JSX.Element {
   const report = useItemMixReport(range);
   if (report.isLoading) return <Loading />;
   if (report.error) return <ErrorBanner error={report.error} />;
+  const lines = report.data ?? [];
+  // Reductions over the rows already fetched — no second query, and
+  // money is summed by the money module, never by `+`.
+  const unitsSold = lines.reduce((total, line) => total + line.qty, 0);
+  const best = lines.reduce<ItemMixLine | null>((top, line) => (top === null || line.netSalesMinor > top.netSalesMinor ? line : top), null);
 
   return (
+    <div className="col">
+      <StatCards
+        cards={[
+          { label: 'Items sold', value: lines.length, note: 'distinct menu items' },
+          { label: 'Units', value: unitsSold, note: 'individual portions' },
+          { label: 'Net sales', value: <Money minor={sum(lines.map((line) => line.netSalesMinor))} />, note: 'across every item' },
+          { label: 'Best seller', value: best?.itemName ?? '—', note: best ? <Money minor={best.netSalesMinor} /> : undefined },
+        ]}
+      />
+
     <div className="card">
       <table>
         <thead>
@@ -354,6 +565,7 @@ function ItemMix({ range }: { range: DateRange }): JSX.Element {
         </tbody>
       </table>
     </div>
+    </div>
   );
 }
 
@@ -366,6 +578,15 @@ function Consumption({ range }: { range: DateRange }): JSX.Element {
 
   return (
     <div className="col">
+      <StatCards
+        cards={[
+          { label: 'Menu value', value: <Money minor={sum(data.byPerson.map((p) => p.menuValueMinor))} />, note: 'what it would have sold for' },
+          { label: 'Charged', value: <Money minor={sum(data.byPerson.map((p) => p.chargedMinor))} />, note: 'after each meal policy' },
+          { label: 'Settled', value: <Money minor={sum(data.byPerson.map((p) => p.settlementMinor))} />, note: 'recovered from staff' },
+          { label: 'People', value: data.byPerson.length, note: `${data.lines.length} ${data.lines.length === 1 ? 'item' : 'items'} consumed` },
+        ]}
+      />
+
       <div className="card">
         <h3 style={{ margin: 0 }}>Per person</h3>
         <table>
@@ -462,8 +683,25 @@ function ServiceCharge({ range }: { range: DateRange }): JSX.Element {
   const report = useServiceChargeReport(range);
   if (report.isLoading) return <Loading />;
   if (report.error) return <ErrorBanner error={report.error} />;
+  const lines = report.data ?? [];
+  const owedMinor = sum(lines.map((line) => line.totalMinor));
+  const most = lines.reduce<(typeof lines)[number] | null>((top, line) => (top === null || line.totalMinor > top.totalMinor ? line : top), null);
 
   return (
+    <div className="col">
+      <StatCards
+        cards={[
+          { label: 'Owed to waiters', value: <Money minor={owedMinor} />, note: 'held, not revenue' },
+          { label: 'Waiters', value: lines.length, note: lines.length === 1 ? 'has a share' : 'have a share' },
+          {
+            label: 'Average share',
+            value: lines.length > 0 ? <Money minor={divideBy(owedMinor, lines.length)} /> : '—',
+            note: 'per waiter',
+          },
+          { label: 'Most owed', value: most?.waiterName ?? '—', note: most ? <Money minor={most.totalMinor} /> : undefined },
+        ]}
+      />
+
     <div className="card">
       <table>
         <thead>
@@ -489,6 +727,7 @@ function ServiceCharge({ range }: { range: DateRange }): JSX.Element {
         </tbody>
       </table>
     </div>
+    </div>
   );
 }
 
@@ -496,8 +735,23 @@ function VoidsAndDiscounts({ range }: { range: DateRange }): JSX.Element {
   const report = useVoidAndDiscountReport(range);
   if (report.isLoading) return <Loading />;
   if (report.error) return <ErrorBanner error={report.error} />;
+  const entries = report.data ?? [];
+  const count = (kind: string) => entries.filter((entry) => entry.kind === kind).length;
+  // Only discounts carry an amount; a void's value is the line it
+  // removed, which this report does not claim to know.
+  const discountedMinor = sum(entries.map((entry) => entry.discountMinor).filter((amount): amount is Paisa => amount !== null));
 
   return (
+    <div className="col">
+      <StatCards
+        cards={[
+          { label: 'Voided lines', value: count('void_line'), note: 'items taken off a bill', ...(count('void_line') > 0 ? { tone: 'bad' as const } : {}) },
+          { label: 'Voided orders', value: count('void_order'), note: 'whole bills cancelled', ...(count('void_order') > 0 ? { tone: 'bad' as const } : {}) },
+          { label: 'Discounts', value: count('discount'), note: 'bills reduced' },
+          { label: 'Discounted', value: <Money minor={discountedMinor} />, note: 'given away', ...(discountedMinor > 0 ? { tone: 'bad' as const } : {}) },
+        ]}
+      />
+
     <div className="card">
       <table>
         <thead>
@@ -528,6 +782,7 @@ function VoidsAndDiscounts({ range }: { range: DateRange }): JSX.Element {
           )}
         </tbody>
       </table>
+    </div>
     </div>
   );
 }

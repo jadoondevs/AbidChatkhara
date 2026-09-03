@@ -42,6 +42,17 @@ export interface ItemModifierGroupTable {
   group_id: number;
 }
 
+/** What one modifier costs on ONE item, overriding the modifier's own
+ * default. Effective-dated like item_price — see migration 0020. */
+export interface ItemModifierPriceTable {
+  id: Generated<number>;
+  item_id: number;
+  modifier_id: number;
+  price_delta_minor: Paisa;
+  valid_from: string;
+  valid_to: string | null;
+}
+
 export interface ItemAvailabilityTable {
   item_id: number;
   available: number;
@@ -56,5 +67,6 @@ export interface CatalogTables {
   modifier_group: ModifierGroupTable;
   modifier: ModifierTable;
   item_modifier_group: ItemModifierGroupTable;
+  item_modifier_price: ItemModifierPriceTable;
   item_availability: ItemAvailabilityTable;
 }

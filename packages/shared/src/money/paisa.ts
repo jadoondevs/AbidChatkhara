@@ -75,6 +75,44 @@ export function mulQty(amount: Paisa, qty: number): Paisa {
   return paisa(amount * qty);
 }
 
+/**
+ * Divide a money amount by a plain integer count — the average of a
+ * total over `count` things, e.g. an average bill.
+ *
+ * The counterpart to `mulQty`, and blessed for the same reason: a count
+ * is not money, so the result is unambiguously money. Unlike `mulQty`
+ * this one rounds, because paisa are indivisible — the average of
+ * Rs 10.00 over 3 bills is Rs 3.33 and the lost paisa are real. It is
+ * therefore only for DISPLAY. Never use it to split an amount that has
+ * to add back up: `distribute` exists for that and loses nothing.
+ */
+export function divideBy(amount: Paisa, count: number): Paisa {
+  if (!Number.isInteger(count)) {
+    throw new Error(`Count must be an integer; got ${count}`);
+  }
+  if (count <= 0) {
+    throw new Error(`Count must be positive; got ${count}`);
+  }
+  return paisa(Math.round(amount / count));
+}
+
+/**
+ * What fraction of `total` the `part` is — a plain number, not money.
+ *
+ * Dividing one amount by another is the one Paisa division whose result
+ * is NOT money: "24% of sales" is a ratio, and the paisa cancel out. It
+ * lives here anyway, because every operator on a Paisa lives here
+ * (docs/decisions/001) — a bare `a / b` in a screen is indistinguishable
+ * from the money bug the guard exists to catch.
+ *
+ * A zero total gives 0 rather than NaN: a report over a day with no
+ * sales should read "0%", not "NaN%".
+ */
+export function ratio(part: Paisa, total: Paisa): number {
+  if (total === 0) return 0;
+  return part / total;
+}
+
 export function compare(a: Paisa, b: Paisa): -1 | 0 | 1 {
   if (a < b) return -1;
   if (a > b) return 1;

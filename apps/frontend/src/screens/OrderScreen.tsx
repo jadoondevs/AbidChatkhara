@@ -1,3 +1,4 @@
+import { type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../api/client.js';
@@ -5,6 +6,7 @@ import {
   useAddLine,
   useCategories,
   useItemModifierGroups,
+  useItemModifierPrices,
   useMenu,
   useModifiers,
   useOrder,
@@ -246,10 +248,18 @@ function ModifierPicker({
 }): JSX.Element {
   const addLine = useAddLine();
   const groups = useItemModifierGroups(item.id);
+  // What each option costs ON THIS ITEM. A size group is shared by
+  // sixteen dishes that all price Full differently, so the group's own
+  // delta is zero and the real number lives here (migration 0020). The
+  // server already charges the override; showing the group default
+  // instead would put a price on screen that is not the price charged.
+  const overrides = useItemModifierPrices(item.id);
   const [qty, setQty] = useState(1);
   const [selected, setSelected] = useState<number[] | null>(null);
 
   const optionsFor = (group: ModifierGroup) => allModifiers.filter((modifier) => modifier.groupId === group.id);
+  const deltaFor = (modifier: Modifier): Paisa =>
+    overrides.data?.find((override) => override.modifierId === modifier.id)?.priceDeltaMinor ?? modifier.priceDeltaMinor;
 
   // Defaults, computed once the groups and modifiers have both arrived.
   if (selected === null && groups.data && allModifiers.length > 0) {
@@ -312,10 +322,10 @@ function ModifierPicker({
                 {options.map((modifier) => (
                   <button key={modifier.id} className={chosen.includes(modifier.id) ? 'active' : ''} onClick={() => toggle(modifier.id, group)}>
                     {modifier.name}
-                    {modifier.priceDeltaMinor !== 0 && (
+                    {deltaFor(modifier) !== 0 && (
                       <>
                         {' '}
-                        <Money minor={modifier.priceDeltaMinor} />
+                        <Money minor={deltaFor(modifier)} />
                       </>
                     )}
                   </button>

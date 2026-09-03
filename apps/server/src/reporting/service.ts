@@ -59,6 +59,22 @@ export interface DailySalesReport {
    * rounding. The figure the payment breakdown below adds up to. */
   readonly totalCollectedMinor: Paisa;
   readonly paymentMethodBreakdown: readonly PaymentMethodBreakdownLine[];
+  /** How many CUSTOMER bills closed in the range. Staff and owner meals
+   * are excluded: they are consumption, not trade, and counting them
+   * would quietly deflate the average bill below. */
+  readonly orderCount: number;
+  /** Takings by hour of the local day, for the dashboard's shape-of-the-
+   * evening bar. Only hours that actually saw a sale appear. */
+  readonly salesByHour: readonly HourlySalesLine[];
+}
+
+/** One hour of trading. `hour` is 0-23 in LOCAL time — the same local-day
+ * reasoning the date range itself uses, since a restaurant's evening
+ * straddles UTC midnight here. */
+export interface HourlySalesLine {
+  readonly hour: number;
+  readonly orderCount: number;
+  readonly totalMinor: Paisa;
 }
 
 /**
@@ -75,6 +91,7 @@ export async function dailySalesReport(db: Kysely<Database>, opts: DateRangeOpti
     .select([
       'id',
       'channel',
+      'closed_at',
       'subtotal_minor',
       'order_discount_minor',
       'net_sales_minor',
@@ -92,6 +109,9 @@ export async function dailySalesReport(db: Kysely<Database>, opts: DateRangeOpti
   const consumptionMinor = sum(orders.filter((o) => o.channel !== 'customer').map((o) => o.net_sales_minor));
   const taxCollectedMinor = sum(orders.map((o) => o.tax_minor));
   const roundingAdjustmentMinor = sum(orders.map((o) => o.rounding_adjustment_minor));
+
+  // Customer bills only — see the note on `orderCount`.
+  const customerOrders = orders.filter((o) => o.channel === 'customer');
 
   const serviceChargeByWaiter = await waiterPayoutTotals(db, { fromInclusive: opts.fromInclusive, toExclusive: opts.toExclusive });
   const paymentMethodBreakdown = await paymentMethodBreakdownForOrders(
@@ -114,7 +134,36 @@ export async function dailySalesReport(db: Kysely<Database>, opts: DateRangeOpti
     roundingAdjustmentMinor,
     totalCollectedMinor: sum(orders.map((o) => o.total_minor)),
     paymentMethodBreakdown,
+    orderCount: customerOrders.length,
+    salesByHour: hourlySales(customerOrders),
   };
+}
+
+/**
+ * Bucket takings by the LOCAL hour a bill closed.
+ *
+ * `new Date(...).getHours()` and not the UTC hour: an order settled at
+ * 9pm in Lahore is a 9pm order, and reading it as 4pm would put the
+ * dinner rush in the afternoon. This is the same reasoning the date
+ * range itself uses for day boundaries.
+ *
+ * Hours with no trade are left out rather than padded with zeroes — the
+ * caller draws a bar per row, and a restaurant that opens at 4pm should
+ * not render sixteen empty bars before it.
+ */
+function hourlySales(orders: readonly { closed_at: string | null; total_minor: Paisa }[]): HourlySalesLine[] {
+  const byHour = new Map<number, { orderCount: number; amounts: Paisa[] }>();
+  for (const order of orders) {
+    if (order.closed_at === null) continue;
+    const hour = new Date(order.closed_at).getHours();
+    const entry = byHour.get(hour) ?? { orderCount: 0, amounts: [] };
+    entry.orderCount += 1;
+    entry.amounts.push(order.total_minor);
+    byHour.set(hour, entry);
+  }
+  return [...byHour.entries()]
+    .map(([hour, { orderCount, amounts }]) => ({ hour, orderCount, totalMinor: sum(amounts) }))
+    .sort((a, b) => a.hour - b.hour);
 }
 
 // ---------------------------------------------------------------------
@@ -275,6 +324,9 @@ export interface ItemMixOwnerShare {
 export interface ItemMixLine {
   readonly itemId: number;
   readonly itemName: string;
+  /** The section it sits under on the menu today. Null only if the item
+   * has since lost its category — the report still names the item. */
+  readonly categoryName: string | null;
   readonly qty: number;
   readonly netSalesMinor: Paisa;
   readonly owners: readonly ItemMixOwnerShare[];
@@ -305,8 +357,19 @@ export async function itemMixReport(db: Kysely<Database>, opts: DateRangeOptions
   }
 
   const itemIds = [...byItem.keys()];
-  const itemRows = itemIds.length > 0 ? await db.selectFrom('item').select(['id', 'name']).where('id', 'in', itemIds).execute() : [];
+  // The category rides along on the join the name already needs, so the
+  // dashboard can group by section without a second query.
+  const itemRows =
+    itemIds.length > 0
+      ? await db
+          .selectFrom('item')
+          .innerJoin('category', 'category.id', 'item.category_id')
+          .select(['item.id as id', 'item.name as name', 'category.name as categoryName'])
+          .where('item.id', 'in', itemIds)
+          .execute()
+      : [];
   const itemNameById = new Map(itemRows.map((i) => [i.id, i.name]));
+  const categoryNameById = new Map(itemRows.map((i) => [i.id, i.categoryName]));
 
   const lines: ItemMixLine[] = [];
   for (const [itemId, { qty, amounts }] of byItem) {
@@ -317,6 +380,7 @@ export async function itemMixReport(db: Kysely<Database>, opts: DateRangeOptions
     lines.push({
       itemId,
       itemName: itemNameById.get(itemId) ?? `item ${itemId}`,
+      categoryName: categoryNameById.get(itemId) ?? null,
       qty,
       netSalesMinor: sum(amounts),
       owners: owners.map((o) => ({ partnerId: o.partnerId, partnerName: partnerNameById.get(o.partnerId) ?? `partner ${o.partnerId}`, shareBp: o.shareBp })),

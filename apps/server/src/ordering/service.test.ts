@@ -1,6 +1,16 @@
 import { paisa } from '@pos/shared';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createCategory, createItem, createModifier, createModifierGroup, linkModifierGroup, setItemPrice } from '../catalog/service.js';
+import {
+  createCategory,
+  createItem,
+  createModifier,
+  createModifierGroup,
+  linkModifierGroup,
+  listItems,
+  removeItem,
+  setItemModifierPrice,
+  setItemPrice,
+} from '../catalog/service.js';
 import { createPaymentMethod, recordPayment } from '../billing/service.js';
 import { createPerson } from '../consumption/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
@@ -189,6 +199,63 @@ describe('ordering/service', () => {
 
       expect(detail.lines[0]?.grossMinor).toBe(520_00);
       expect(detail.lines[0]?.modifiers[0]).toMatchObject({ modifierId: extraHot.id, grossMinor: 20_00 });
+    });
+
+    it('RETIRES an item that has been sold rather than deleting it', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+
+      // order_line.item_id is a real foreign key and the sale is part of
+      // the record — the item leaves the till, not the history.
+      expect(await removeItem(ctx.db, item.id, orderActor)).toBe('retired');
+
+      const stillThere = await ctx.db.selectFrom('item').select(['id', 'active']).where('id', '=', item.id).executeTakeFirst();
+      expect(stillThere).toMatchObject({ id: item.id, active: 0 });
+      // Gone from the till's list of what can be sold.
+      expect((await listItems(ctx.db)).map((i) => i.id)).not.toContain(item.id);
+      // And the line that sold it still reads correctly.
+      const detail = await getOrder(ctx.db, order.id);
+      expect(detail?.lines[0]?.itemName).toBe(item.name);
+    });
+
+    it('retiring an already-retired item is a no-op, not an error', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+
+      expect(await removeItem(ctx.db, item.id, orderActor)).toBe('retired');
+      expect(await removeItem(ctx.db, item.id, orderActor)).toBe('retired');
+    });
+
+    it("charges the item's own modifier price where one is configured", async () => {
+      const { itemWithModifiers, extraHot, orderActor } = await setupMenu();
+      // The same modifier is worth more on this item than its group
+      // default says — migration 0020's whole reason for existing.
+      await setItemModifierPrice(ctx.db, itemWithModifiers.id, extraHot.id, paisa(75_00), orderActor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      const detail = await addLine(ctx.db, order.id, { itemId: itemWithModifiers.id, qty: 1, modifierIds: [extraHot.id] }, orderActor);
+
+      expect(detail.lines[0]?.modifiers[0]).toMatchObject({ modifierId: extraHot.id, priceDeltaMinor: 75_00, grossMinor: 75_00 });
+      expect(detail.lines[0]?.grossMinor).toBe(575_00);
+    });
+
+    it('leaves a line already sold at the price it charged when the override changes', async () => {
+      const { itemWithModifiers, extraHot, orderActor } = await setupMenu();
+      await setItemModifierPrice(ctx.db, itemWithModifiers.id, extraHot.id, paisa(75_00), orderActor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: itemWithModifiers.id, qty: 1, modifierIds: [extraHot.id] }, orderActor);
+
+      // Re-price the modifier for this item AFTER the line exists.
+      await setItemModifierPrice(ctx.db, itemWithModifiers.id, extraHot.id, paisa(500_00), orderActor);
+
+      // order_line_modifier snapshots the delta it charged, so the line
+      // is untouched — the same protection item_price already has.
+      const detail = await getOrder(ctx.db, order.id);
+      expect(detail?.lines[0]?.modifiers[0]?.priceDeltaMinor).toBe(75_00);
+      expect(detail?.lines[0]?.grossMinor).toBe(575_00);
     });
 
     it('rejects a selection that violates the modifier group min/max', async () => {

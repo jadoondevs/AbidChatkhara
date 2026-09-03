@@ -145,35 +145,94 @@ export async function setItemOwnership(
   assertValidSplit(split);
   const item = await db.selectFrom('item').select('id').where('id', '=', itemId).executeTakeFirst();
   if (!item) throw new Error(`item ${itemId} not found`);
+  return db.transaction().execute((trx) => setItemOwnershipInTransaction(trx, itemId, split, actor));
+}
+
+/**
+ * The write half of `setItemOwnership`, inside a transaction the caller
+ * already holds open — so applying one split across a whole category is
+ * a single atomic operation rather than fifty separately-committed ones
+ * that can stop halfway and leave half a menu unsellable.
+ *
+ * The caller is responsible for validating the split and for checking
+ * the item exists; both are done once for the batch rather than per row.
+ */
+async function setItemOwnershipInTransaction(
+  trx: Transaction<Database>,
+  itemId: number,
+  split: readonly OwnershipSplitEntry[],
+  actor: ActorContext,
+  now: string = new Date().toISOString(),
+): Promise<OwnershipRow[]> {
+  const before = await trx.selectFrom('item_ownership').selectAll().where('item_id', '=', itemId).where('valid_to', 'is', null).execute();
+  if (before.length > 0) {
+    await trx.updateTable('item_ownership').set({ valid_to: now }).where('item_id', '=', itemId).where('valid_to', 'is', null).execute();
+  }
+
+  const inserted: OwnershipRow[] = [];
+  for (const entry of split) {
+    const row = await trx
+      .insertInto('item_ownership')
+      .values({ item_id: itemId, partner_id: entry.partnerId, share_bp: entry.shareBp, valid_from: now, valid_to: null })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    inserted.push({ id: row.id, partnerId: row.partner_id, shareBp: row.share_bp, validFrom: row.valid_from, validTo: row.valid_to });
+  }
+
+  await recordAudit(trx, {
+    actorId: actor.actorId,
+    terminalId: actor.terminalId,
+    action: 'item.set_ownership',
+    entity: 'item',
+    entityId: itemId,
+    before: before.map((r) => ({ partnerId: r.partner_id, shareBp: r.share_bp })),
+    after: split,
+  });
+
+  return inserted;
+}
+
+/**
+ * Apply ONE ownership split to every active item in the given
+ * categories — the difference between configuring a fifty-item menu and
+ * abandoning the attempt. Two partners who split the grill between them
+ * and own the rest of the menu outright is two operations here, not
+ * fifty trips through the per-item editor.
+ *
+ * Same rules as the per-item editor, because it is the same write: the
+ * split must total exactly 100%, every item's previous split is closed
+ * rather than overwritten, and each item gets its own audit entry (a
+ * bulk change is still fifty individual changes to fifty items' money —
+ * the log should say so item by item). Effective from now forward only;
+ * sales already allocated keep the shares they were written at.
+ *
+ * Inactive items are skipped: a retired item cannot be sold, so there is
+ * nothing to allocate, and rewriting its split would only add noise to
+ * the log.
+ */
+export async function setOwnershipForCategories(
+  db: Kysely<Database>,
+  categoryIds: readonly number[],
+  split: readonly OwnershipSplitEntry[],
+  actor: ActorContext,
+): Promise<{ itemIds: number[] }> {
+  assertValidSplit(split);
+  if (categoryIds.length === 0) throw new Error('pick at least one category');
+
+  const categories = await db.selectFrom('category').select('id').where('id', 'in', categoryIds).execute();
+  const found = new Set(categories.map((c) => c.id));
+  const missing = categoryIds.filter((id) => !found.has(id));
+  if (missing.length > 0) throw new Error(`category ${missing[0]} not found`);
 
   return db.transaction().execute(async (trx) => {
-    const before = await trx.selectFrom('item_ownership').selectAll().where('item_id', '=', itemId).where('valid_to', 'is', null).execute();
+    const items = await trx.selectFrom('item').select('id').where('category_id', 'in', categoryIds).where('active', '=', 1).orderBy('id', 'asc').execute();
+    // One timestamp for the whole batch: every item in it changed at the
+    // same moment, and reading the history back should say that.
     const now = new Date().toISOString();
-    if (before.length > 0) {
-      await trx.updateTable('item_ownership').set({ valid_to: now }).where('item_id', '=', itemId).where('valid_to', 'is', null).execute();
+    for (const item of items) {
+      await setItemOwnershipInTransaction(trx, item.id, split, actor, now);
     }
-
-    const inserted: OwnershipRow[] = [];
-    for (const entry of split) {
-      const row = await trx
-        .insertInto('item_ownership')
-        .values({ item_id: itemId, partner_id: entry.partnerId, share_bp: entry.shareBp, valid_from: now, valid_to: null })
-        .returningAll()
-        .executeTakeFirstOrThrow();
-      inserted.push({ id: row.id, partnerId: row.partner_id, shareBp: row.share_bp, validFrom: row.valid_from, validTo: row.valid_to });
-    }
-
-    await recordAudit(trx, {
-      actorId: actor.actorId,
-      terminalId: actor.terminalId,
-      action: 'item.set_ownership',
-      entity: 'item',
-      entityId: itemId,
-      before: before.map((r) => ({ partnerId: r.partner_id, shareBp: r.share_bp })),
-      after: split,
-    });
-
-    return inserted;
+    return { itemIds: items.map((i) => i.id) };
   });
 }
 
@@ -538,6 +597,35 @@ export async function reverseOrderAllocationsInTransaction(
 // ---------------------------------------------------------------------
 // Integrity check ("nightly integrity job")
 // ---------------------------------------------------------------------
+
+/**
+ * Active items nobody owns yet.
+ *
+ * This is not a cosmetic warning. An order containing such an item
+ * cannot be closed at all: allocation splits every line's net sales
+ * across its owners, and a line with no owners and a nonzero base makes
+ * `splitByShares` throw rather than write a partial allocation. So an
+ * unowned item is an item that takes a cashier all the way to payment
+ * and then fails, with an error nobody behind the counter can act on.
+ *
+ * The Menu screen shows this as a flag on the item, where whoever added
+ * it is standing — which is the only place the answer ("give it a
+ * split") is one click away.
+ */
+export async function listItemsWithoutOwnership(db: Kysely<Database>, atInstant: Date = new Date()): Promise<number[]> {
+  const at = atInstant.toISOString();
+  const owned = await db
+    .selectFrom('item_ownership')
+    .select('item_id')
+    .where('valid_from', '<=', at)
+    .where((eb) => eb.or([eb('valid_to', 'is', null), eb('valid_to', '>', at)]))
+    .distinct()
+    .execute();
+  const ownedIds = new Set(owned.map((r) => r.item_id));
+
+  const items = await db.selectFrom('item').select('id').where('active', '=', 1).orderBy('id', 'asc').execute();
+  return items.filter((item) => !ownedIds.has(item.id)).map((item) => item.id);
+}
 
 export interface OwnershipIntegrityViolation {
   readonly kind: 'item' | 'modifier';
