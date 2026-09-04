@@ -5,6 +5,7 @@ import { ApiError } from '../api/client.js';
 import {
   useAddLine,
   useCategories,
+  useItemDisabledModifiers,
   useItemModifierGroups,
   useItemModifierPrices,
   useMenu,
@@ -254,10 +255,14 @@ function ModifierPicker({
   // server already charges the override; showing the group default
   // instead would put a price on screen that is not the price charged.
   const overrides = useItemModifierPrices(item.id);
+  // Options this item does not offer — a shared size switched off for this
+  // dish — are hidden here, exactly as the server refuses them in addLine.
+  const disabledOptions = useItemDisabledModifiers(item.id);
   const [qty, setQty] = useState(1);
   const [selected, setSelected] = useState<number[] | null>(null);
 
-  const optionsFor = (group: ModifierGroup) => allModifiers.filter((modifier) => modifier.groupId === group.id);
+  const optionsFor = (group: ModifierGroup) =>
+    allModifiers.filter((modifier) => modifier.groupId === group.id && !(disabledOptions.data ?? []).includes(modifier.id));
   const deltaFor = (modifier: Modifier): Paisa =>
     overrides.data?.find((override) => override.modifierId === modifier.id)?.priceDeltaMinor ?? modifier.priceDeltaMinor;
 

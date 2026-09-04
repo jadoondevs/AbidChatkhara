@@ -104,6 +104,80 @@ export async function updateCategory(
   return toCategorySummary(after);
 }
 
+/** What happened when a manager asked for a category to go away. */
+export type CategoryRemoval = 'deleted' | 'retired';
+
+/**
+ * Take a category off the menu — the same delete-or-retire decision as an
+ * item, made one level up.
+ *
+ * A category can only truly be deleted when nothing it holds has to be
+ * kept: none of its items have ever been sold, and no tax rule points at
+ * it. Then the category and every one of its (never-sold) items are
+ * deleted outright — exactly what clearing away a test category should
+ * do.
+ *
+ * If any item has been sold, or a tax rule still applies to it, the
+ * category is retired instead (`active = 0`): it leaves the till and the
+ * Add-item picker but stays in the reports its sold items appear in, and
+ * its items are left exactly as they are. The caller is told which
+ * happened so it can say so.
+ */
+export async function deleteCategory(db: Kysely<Database>, id: number, actor: ActorContext): Promise<CategoryRemoval> {
+  return db.transaction().execute(async (trx) => {
+    const category = await trx.selectFrom('category').selectAll().where('id', '=', id).executeTakeFirst();
+    if (!category) throw new Error(`category ${id} not found`);
+
+    const items = await trx.selectFrom('item').select('id').where('category_id', '=', id).execute();
+    const itemIds = items.map((item) => item.id);
+
+    const anySold =
+      itemIds.length === 0
+        ? false
+        : (await trx.selectFrom('order_line').select('id').where('item_id', 'in', itemIds).limit(1).executeTakeFirst()) !== undefined;
+    const taxed = await trx.selectFrom('tax_rule').select('id').where('applies_to_category_id', '=', id).limit(1).executeTakeFirst();
+
+    if (anySold || taxed) {
+      if (category.active === 0) return 'retired';
+      await trx.updateTable('category').set({ active: 0 }).where('id', '=', id).execute();
+      await recordAudit(trx, {
+        actorId: actor.actorId,
+        terminalId: actor.terminalId,
+        action: 'category.retire',
+        entity: 'category',
+        entityId: id,
+        before: toCategorySummary(category),
+        after: toCategorySummary({ ...category, active: 0 }),
+      });
+      return 'retired';
+    }
+
+    // Audited before the delete: the audit row is what remains.
+    await recordAudit(trx, {
+      actorId: actor.actorId,
+      terminalId: actor.terminalId,
+      action: 'category.delete',
+      entity: 'category',
+      entityId: id,
+      before: toCategorySummary(category),
+    });
+
+    // Every item is never-sold, so each can be fully deleted the same way
+    // removeItem deletes one — clear what only described it, then itself.
+    for (const itemId of itemIds) {
+      await trx.deleteFrom('item_modifier_price').where('item_id', '=', itemId).execute();
+      await trx.deleteFrom('item_modifier_disabled').where('item_id', '=', itemId).execute();
+      await trx.deleteFrom('item_modifier_group').where('item_id', '=', itemId).execute();
+      await trx.deleteFrom('item_availability').where('item_id', '=', itemId).execute();
+      await trx.deleteFrom('item_price').where('item_id', '=', itemId).execute();
+      await trx.deleteFrom('item_ownership').where('item_id', '=', itemId).execute();
+      await trx.deleteFrom('item').where('id', '=', itemId).execute();
+    }
+    await trx.deleteFrom('category').where('id', '=', id).execute();
+    return 'deleted';
+  });
+}
+
 // ---------------------------------------------------------------------
 // Item
 // ---------------------------------------------------------------------
@@ -712,6 +786,105 @@ export async function updateModifier(
   return toModifierSummary(after);
 }
 
+/**
+ * Delete one option of a modifier group.
+ *
+ * Refused once the option has ever been sold: an `order_line_modifier`
+ * points at it, and a sold line is not negotiable — history keeps the
+ * option even after it leaves the menu. The caller is told so it can say
+ * "this has been sold, take it off the items that use it instead" rather
+ * than the option silently sticking around.
+ *
+ * A never-sold option is deleted outright, along with everything that
+ * only described it: its per-item prices, its per-item disables and its
+ * ownership. Exactly the shape `removeItem` uses for an item that was
+ * never sold.
+ */
+export async function deleteModifier(db: Kysely<Database>, id: number, actor: ActorContext): Promise<void> {
+  return db.transaction().execute(async (trx) => {
+    const modifier = await trx.selectFrom('modifier').selectAll().where('id', '=', id).executeTakeFirst();
+    if (!modifier) throw new Error(`modifier ${id} not found`);
+
+    const sold = await trx.selectFrom('order_line_modifier').select('id').where('modifier_id', '=', id).limit(1).executeTakeFirst();
+    if (sold) {
+      throw new Error(`"${modifier.name}" has been sold before and cannot be deleted; disable it on the items that use it instead`);
+    }
+
+    // Audited before the delete: the audit row is what remains.
+    await recordAudit(trx, {
+      actorId: actor.actorId,
+      terminalId: actor.terminalId,
+      action: 'modifier.delete',
+      entity: 'modifier',
+      entityId: id,
+      before: toModifierSummary(modifier),
+    });
+
+    await trx.deleteFrom('item_modifier_price').where('modifier_id', '=', id).execute();
+    await trx.deleteFrom('item_modifier_disabled').where('modifier_id', '=', id).execute();
+    await trx.deleteFrom('modifier_ownership').where('modifier_id', '=', id).execute();
+    await trx.deleteFrom('modifier').where('id', '=', id).execute();
+  });
+}
+
+// ---------------------------------------------------------------------
+// One option of a shared group, switched off for ONE item
+// ---------------------------------------------------------------------
+
+/**
+ * Offer or stop offering one option of a linked group on one item, so a
+ * shared "Half / Full" can be Full-only on a dish that is never sold
+ * half without forking the group. A disabled option stays on the group
+ * and on every other item; the till just does not show it here, and
+ * `addLine` refuses it (see ordering's modifier validation).
+ */
+export async function setItemModifierEnabled(
+  db: Kysely<Database>,
+  itemId: number,
+  modifierId: number,
+  enabled: boolean,
+  actor: ActorContext,
+): Promise<void> {
+  const modifier = await db.selectFrom('modifier').select(['id', 'group_id']).where('id', '=', modifierId).executeTakeFirst();
+  if (!modifier) throw new Error(`modifier ${modifierId} not found`);
+  // Only an option whose group the item actually offers can be toggled —
+  // anything else is a configuration mistake, not a switch.
+  const linked = await db
+    .selectFrom('item_modifier_group')
+    .select('group_id')
+    .where('item_id', '=', itemId)
+    .where('group_id', '=', modifier.group_id)
+    .executeTakeFirst();
+  if (!linked) throw new Error(`modifier ${modifierId} belongs to a group that is not linked to item ${itemId}`);
+
+  if (enabled) {
+    await db.deleteFrom('item_modifier_disabled').where('item_id', '=', itemId).where('modifier_id', '=', modifierId).execute();
+  } else {
+    // Idempotent: disabling an already-disabled option is a no-op, not an error.
+    await db
+      .insertInto('item_modifier_disabled')
+      .values({ item_id: itemId, modifier_id: modifierId })
+      .onConflict((oc) => oc.columns(['item_id', 'modifier_id']).doNothing())
+      .execute();
+  }
+
+  await recordAudit(db, {
+    actorId: actor.actorId,
+    terminalId: actor.terminalId,
+    action: enabled ? 'item.enable_modifier' : 'item.disable_modifier',
+    entity: 'item',
+    entityId: itemId,
+    after: { modifierId, enabled },
+  });
+}
+
+/** The option ids this item does NOT offer — what the picker hides and
+ * the menu screen shows as switched off. */
+export async function listDisabledModifiersForItem(db: Kysely<Database>, itemId: number): Promise<number[]> {
+  const rows = await db.selectFrom('item_modifier_disabled').select('modifier_id').where('item_id', '=', itemId).execute();
+  return rows.map((row) => row.modifier_id);
+}
+
 // ---------------------------------------------------------------------
 // Item <-> modifier group linking
 // ---------------------------------------------------------------------
@@ -843,6 +1016,7 @@ export async function removeItem(db: Kysely<Database>, id: number, actor: ActorC
     // Everything that references the item, then the item. No order line
     // can be among them — that is what `sold` just established.
     await trx.deleteFrom('item_modifier_price').where('item_id', '=', id).execute();
+    await trx.deleteFrom('item_modifier_disabled').where('item_id', '=', id).execute();
     await trx.deleteFrom('item_modifier_group').where('item_id', '=', id).execute();
     await trx.deleteFrom('item_availability').where('item_id', '=', id).execute();
     await trx.deleteFrom('item_price').where('item_id', '=', id).execute();
@@ -898,6 +1072,10 @@ export interface MenuItem {
   readonly active: boolean;
   readonly priceMinor: Paisa | null;
   readonly available: boolean;
+  /** The ids of the modifier groups this item offers — what the Menu
+   * screen filters by, so "show me everything with Half / Full" needs no
+   * per-item round trip. */
+  readonly modifierGroupIds: number[];
 }
 
 export async function listMenu(
@@ -920,6 +1098,15 @@ export async function listMenu(
   if (!opts.includeInactive) query = query.where('item.active', '=', 1);
 
   const rows = await query.orderBy('item.name', 'asc').execute();
+
+  // One extra query for every item's group links, folded in by item id,
+  // rather than a per-item round trip from the screen.
+  const links = await db.selectFrom('item_modifier_group').select(['item_id', 'group_id']).execute();
+  const groupsByItem = new Map<number, number[]>();
+  for (const link of links) {
+    groupsByItem.set(link.item_id, [...(groupsByItem.get(link.item_id) ?? []), link.group_id]);
+  }
+
   return rows.map((row) => ({
     id: row.id,
     categoryId: row.categoryId,
@@ -930,5 +1117,6 @@ export async function listMenu(
     // one), but if it somehow did, default to unavailable rather than
     // silently showing an item nobody has confirmed can be sold.
     available: row.available === 1,
+    modifierGroupIds: groupsByItem.get(row.id) ?? [],
   }));
 }

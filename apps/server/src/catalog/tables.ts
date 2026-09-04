@@ -70,6 +70,13 @@ export interface ItemAvailabilityTable {
   changed_at: string;
 }
 
+/** One option of a shared modifier group, switched off for ONE item —
+ * a row means "this item does not offer this option". See migration 0022. */
+export interface ItemModifierDisabledTable {
+  item_id: number;
+  modifier_id: number;
+}
+
 export interface CatalogTables {
   category: CategoryTable;
   item: ItemTable;
@@ -78,5 +85,6 @@ export interface CatalogTables {
   modifier: ModifierTable;
   item_modifier_group: ItemModifierGroupTable;
   item_modifier_price: ItemModifierPriceTable;
+  item_modifier_disabled: ItemModifierDisabledTable;
   item_availability: ItemAvailabilityTable;
 }

@@ -610,6 +610,28 @@ export function useCreateCategory(): UseMutationResult<Category, Error, { name: 
   return useMutation({ mutationFn: (body) => api.post<Category>('/api/categories', body), onSuccess: invalidate });
 }
 
+/** Rename a category, reorder it, or hide/show it (active). Safe to
+ * rename at any time — items carry their own category id, not its name. */
+export function useUpdateCategory(): UseMutationResult<
+  Category,
+  Error,
+  { id: number; name?: string; sortOrder?: number; active?: boolean }
+> {
+  const invalidate = useInvalidateOnSuccess(['categories', 'menu']);
+  return useMutation({
+    mutationFn: ({ id, ...body }) => api.patch<Category>(`/api/categories/${id}`, body),
+    onSuccess: invalidate,
+  });
+}
+
+/** Take a category off the menu. The server deletes it (with its
+ * never-sold items) or retires it if anything must be kept, and says
+ * which — see `deleteCategory`. */
+export function useDeleteCategory(): UseMutationResult<{ outcome: 'deleted' | 'retired' }, Error, number> {
+  const invalidate = useInvalidateOnSuccess(['categories', 'menu', 'items-without-ownership']);
+  return useMutation({ mutationFn: (id) => api.del<{ outcome: 'deleted' | 'retired' }>(`/api/categories/${id}`), onSuccess: invalidate });
+}
+
 export function useCreateItem(): UseMutationResult<MenuItem, Error, { categoryId: number; name: string }> {
   // A new item is owned by nobody, so it joins the unsellable list the
   // moment it is created — the Menu screen has to hear about that in
@@ -687,6 +709,41 @@ export function useCreateModifier(): UseMutationResult<
 > {
   const invalidate = useInvalidateOnSuccess(['modifiers', 'modifier-groups']);
   return useMutation({ mutationFn: (body) => api.post<Modifier>('/api/modifiers', body), onSuccess: invalidate });
+}
+
+/** Rename an option (its per-item prices are set separately). */
+export function useUpdateModifier(): UseMutationResult<Modifier, Error, { id: number; name?: string; priceDeltaMinor?: Paisa }> {
+  const invalidate = useInvalidateOnSuccess(['modifiers', 'menu']);
+  return useMutation({
+    mutationFn: ({ id, ...body }) => api.patch<Modifier>(`/api/modifiers/${id}`, body),
+    onSuccess: invalidate,
+  });
+}
+
+/** Delete an option from a group. The server refuses one that has been
+ * sold, and the error explains why. */
+export function useDeleteModifier(): UseMutationResult<unknown, Error, number> {
+  const invalidate = useInvalidateOnSuccess(['modifiers', 'menu', 'item-modifier-prices', 'item-disabled-modifiers']);
+  return useMutation({ mutationFn: (id) => api.del(`/api/modifiers/${id}`), onSuccess: invalidate });
+}
+
+/** The option ids one item does NOT offer — a shared size switched off
+ * for this dish. */
+export function useItemDisabledModifiers(itemId: number | null): UseQueryResult<number[]> {
+  return useQuery({
+    queryKey: ['item-disabled-modifiers', itemId],
+    queryFn: () => api.get<number[]>(`/api/items/${itemId}/disabled-modifiers`),
+    enabled: itemId !== null,
+  });
+}
+
+/** Offer or stop offering one option of a linked group on one item. */
+export function useSetItemModifierEnabled(): UseMutationResult<unknown, Error, { itemId: number; modifierId: number; enabled: boolean }> {
+  const invalidate = useInvalidateOnSuccess(['item-disabled-modifiers', 'menu']);
+  return useMutation({
+    mutationFn: ({ itemId, modifierId, enabled }) => api.put(`/api/items/${itemId}/modifiers/${modifierId}/enabled`, { enabled }),
+    onSuccess: invalidate,
+  });
 }
 
 export function useLinkModifierGroup(): UseMutationResult<unknown, Error, { itemId: number; groupId: number }> {

@@ -1,6 +1,6 @@
 import { add, paisa, proportionalAmount, roundToRupee, sub, type Paisa } from '@pos/shared';
 import { sql, type Kysely, type Transaction } from 'kysely';
-import { getItem, getItemModifierPrice, getModifier, getCurrentPrice, listModifierGroupsForItem } from '../catalog/service.js';
+import { getItem, getItemModifierPrice, getModifier, getCurrentPrice, listDisabledModifiersForItem, listModifierGroupsForItem } from '../catalog/service.js';
 import { recordAudit } from '../identity/audit.js';
 import type { Database } from '../platform/db/types.js';
 import { eventBus } from '../platform/events/bus.js';
@@ -752,6 +752,10 @@ async function validateModifierSelection(
 ): Promise<void> {
   const linkedGroups = await listModifierGroupsForItem(db, itemId);
   const linkedGroupIds = new Set(linkedGroups.map((g) => g.id));
+  // Options this item does not offer (a shared group's size switched off
+  // for this dish) are refused here, so a stale screen or a hand-made
+  // request can never sell one the item was told not to carry.
+  const disabled = new Set(await listDisabledModifiersForItem(db, itemId));
 
   const countByGroup = new Map<number, number>();
   for (const modifierId of modifierIds) {
@@ -759,6 +763,9 @@ async function validateModifierSelection(
     if (!modifier) throw new Error(`modifier ${modifierId} not found`);
     if (!linkedGroupIds.has(modifier.groupId)) {
       throw new OrderStateError(`modifier ${modifierId} does not belong to a modifier group linked to item ${itemId}`);
+    }
+    if (disabled.has(modifierId)) {
+      throw new OrderStateError(`"${modifier.name}" is not offered on this item`);
     }
     countByGroup.set(modifier.groupId, (countByGroup.get(modifier.groupId) ?? 0) + 1);
   }
