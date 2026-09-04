@@ -54,6 +54,9 @@ export interface MenuItem {
   active: boolean;
   priceMinor: Paisa | null;
   available: boolean;
+  /** Ids of the modifier groups this item offers — what the Menu screen
+   * filters by. */
+  modifierGroupIds: number[];
 }
 
 /**

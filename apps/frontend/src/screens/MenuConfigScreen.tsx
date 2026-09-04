@@ -8,6 +8,9 @@ import {
   useCreateItem,
   useCreateModifier,
   useCreateModifierGroup,
+  useDeleteCategory,
+  useDeleteModifier,
+  useItemDisabledModifiers,
   useItemModifierGroups,
   useItemModifierPrices,
   useItemsWithoutOwnership,
@@ -17,13 +20,16 @@ import {
   useModifiers,
   useRemoveItem,
   useSetItemAvailability,
+  useSetItemModifierEnabled,
   useSetItemModifierPrice,
   useSetItemPrice,
   useUnlinkModifierGroup,
+  useUpdateCategory,
   useUpdateItem,
+  useUpdateModifier,
   useUpdateModifierGroup,
 } from '../api/hooks.js';
-import type { MenuItem, Modifier, ModifierGroup, ModifierPricingMode } from '../api/types.js';
+import type { Category, MenuItem, Modifier, ModifierGroup, ModifierPricingMode } from '../api/types.js';
 import { ErrorBanner, Loading, Modal, Money, MoneyInput } from '../components/ui.tsx';
 
 /**
@@ -45,6 +51,7 @@ import { ErrorBanner, Loading, Modal, Money, MoneyInput } from '../components/ui
 export function MenuConfigScreen(): JSX.Element {
   const categories = useCategories(true);
   const menu = useMenu();
+  const allGroups = useModifierGroups();
   // An item nobody owns cannot be sold at all — the sale fails at
   // allocation, at the payment screen, with an error a cashier can do
   // nothing about. Flagging it here puts the problem where the person
@@ -63,12 +70,32 @@ export function MenuConfigScreen(): JSX.Element {
   const [editing, setEditing] = useState<MenuItem | null>(null);
   const [removing, setRemoving] = useState<MenuItem | null>(null);
   const [groupsOpen, setGroupsOpen] = useState(false);
-  // What the server did the last time an item was taken off the menu.
-  // Deleting and retiring look the same from the button, so the screen
-  // has to say which one happened.
+  // What the server did the last time an item OR a category was taken off
+  // the menu. Deleting and retiring look the same from the button, so the
+  // screen has to say which one happened.
   const [removalNote, setRemovalNote] = useState<string | null>(null);
 
+  // Find-what-you-want controls over a long menu: a name search, plus
+  // filters by category and by modifier group.
+  const [search, setSearch] = useState('');
+  const [filterCategoryId, setFilterCategoryId] = useState<number | ''>('');
+  const [filterGroupId, setFilterGroupId] = useState<number | ''>('');
+
   const categoryName_ = (id: number) => categories.data?.find((category) => category.id === id)?.name ?? String(id);
+
+  const needle = search.trim().toLowerCase();
+  const filteredItems = (menu.data ?? []).filter((item) => {
+    if (needle && !item.name.toLowerCase().includes(needle)) return false;
+    if (filterCategoryId !== '' && item.categoryId !== filterCategoryId) return false;
+    if (filterGroupId !== '' && !item.modifierGroupIds.includes(filterGroupId)) return false;
+    return true;
+  });
+  const filtering = needle !== '' || filterCategoryId !== '' || filterGroupId !== '';
+  const clearFilters = () => {
+    setSearch('');
+    setFilterCategoryId('');
+    setFilterGroupId('');
+  };
 
   return (
     <div className="col menu-screen">
@@ -121,9 +148,63 @@ export function MenuConfigScreen(): JSX.Element {
         </div>
       </div>
 
+      <CategoriesCard categories={categories.data ?? []} onRemoved={(outcome, name) => setRemovalNote(categoryRemovalNote(outcome, name))} />
+
       <div className="card">
-        <h3 style={{ margin: 0 }}>Items</h3>
+        <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
+          <h3 style={{ margin: 0, flex: 1 }}>Items</h3>
+          <div>
+            <label htmlFor="item-search" className="muted field-hint" style={{ margin: 0 }}>
+              Search
+            </label>
+            <input id="item-search" placeholder="Item name…" value={search} onChange={(event) => setSearch(event.target.value)} />
+          </div>
+          <div>
+            <label htmlFor="filter-category" className="muted field-hint" style={{ margin: 0 }}>
+              Category
+            </label>
+            <select
+              id="filter-category"
+              value={filterCategoryId}
+              onChange={(event) => setFilterCategoryId(event.target.value === '' ? '' : Number(event.target.value))}
+            >
+              <option value="">All categories</option>
+              {categories.data?.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="filter-group" className="muted field-hint" style={{ margin: 0 }}>
+              Modifier
+            </label>
+            <select
+              id="filter-group"
+              value={filterGroupId}
+              onChange={(event) => setFilterGroupId(event.target.value === '' ? '' : Number(event.target.value))}
+            >
+              <option value="">Any modifier</option>
+              {allGroups.data?.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {filtering && (
+            <button className="ghost" onClick={clearFilters}>
+              Clear
+            </button>
+          )}
+        </div>
         {menu.isLoading && <Loading />}
+        {!menu.isLoading && (
+          <p className="muted field-hint" style={{ marginTop: 0 }}>
+            Showing {filteredItems.length} of {menu.data?.length ?? 0} items{filtering ? ' (filtered)' : ''}.
+          </p>
+        )}
         <div className="table-scroll">
           <table>
             <thead>
@@ -141,7 +222,7 @@ export function MenuConfigScreen(): JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {menu.data?.map((item) => (
+              {filteredItems.map((item) => (
                 <tr key={item.id}>
                   <td>
                     <strong>{item.name}</strong>
@@ -178,9 +259,9 @@ export function MenuConfigScreen(): JSX.Element {
                   </td>
                 </tr>
               ))}
-              {menu.data?.length === 0 && (
+              {filteredItems.length === 0 && (
                 <tr>
-                  <td className="muted">No items yet.</td>
+                  <td className="muted">{(menu.data?.length ?? 0) === 0 ? 'No items yet.' : 'No items match these filters.'}</td>
                 </tr>
               )}
             </tbody>
@@ -453,6 +534,10 @@ function ItemGroupCard({
   const setPrice = useSetItemModifierPrice();
   const clearPrice = useClearItemModifierPrice();
   const createModifier = useCreateModifier();
+  const updateModifier = useUpdateModifier();
+  const deleteModifier = useDeleteModifier();
+  const disabledOptions = useItemDisabledModifiers(item.id);
+  const setEnabled = useSetItemModifierEnabled();
 
   // A variant (size) group prices in final selling prices; an add-on
   // group prices in the amount it adds. This is the group's own recorded
@@ -460,8 +545,11 @@ function ItemGroupCard({
   // guess is exactly what charged a Rs 200 size Rs 400.
   const isSize = group.pricingMode === 'variant';
   const [edits, setEdits] = useState<Record<number, Paisa>>({});
+  const [nameEdits, setNameEdits] = useState<Record<number, string>>({});
   const [newName, setNewName] = useState('');
   const [newPrice, setNewPrice] = useState<Paisa>(isSize ? basePriceMinor : paisa(0));
+
+  const isDisabledOption = (modifierId: number) => (disabledOptions.data ?? []).includes(modifierId);
 
   const overrideFor = (modifierId: number) => overrides.data?.find((row) => row.modifierId === modifierId)?.priceDeltaMinor;
   const effectiveDelta = (modifier: Modifier) => overrideFor(modifier.id) ?? modifier.priceDeltaMinor;
@@ -506,16 +594,40 @@ function ItemGroupCard({
       </div>
 
       <div className="col option-prices">
-        <ErrorBanner error={setPrice.error ?? clearPrice.error ?? createModifier.error} />
+        <ErrorBanner
+          error={setPrice.error ?? clearPrice.error ?? createModifier.error ?? updateModifier.error ?? deleteModifier.error ?? setEnabled.error}
+        />
         {modifiers.data?.map((modifier) => {
           const field = edits[modifier.id] ?? fieldOf(modifier);
           const unchanged = field === fieldOf(modifier);
           const hasOverride = overrideFor(modifier.id) !== undefined;
           const invalid = belowBase(field);
+          const nameField = nameEdits[modifier.id] ?? modifier.name;
+          const nameChanged = nameField.trim() !== '' && nameField.trim() !== modifier.name;
+          const disabled = isDisabledOption(modifier.id);
           return (
-            <div key={modifier.id} className="col">
+            <div key={modifier.id} className="col" style={disabled ? { opacity: 0.6 } : undefined}>
               <div className="row option-price-row">
-                <span style={{ flex: 1 }}>{modifier.name}</span>
+                <input
+                  className="option-name-input"
+                  style={{ flex: 1 }}
+                  value={nameField}
+                  aria-label={`Rename ${modifier.name}`}
+                  onChange={(event) => setNameEdits((all) => ({ ...all, [modifier.id]: event.target.value }))}
+                />
+                {nameChanged && (
+                  <button
+                    disabled={updateModifier.isPending}
+                    onClick={() =>
+                      updateModifier.mutate(
+                        { id: modifier.id, name: nameField.trim() },
+                        { onSuccess: () => setNameEdits((all) => Object.fromEntries(Object.entries(all).filter(([k]) => Number(k) !== modifier.id))) },
+                      )
+                    }
+                  >
+                    Rename
+                  </button>
+                )}
                 {!isSize && <span className="muted">+</span>}
                 <MoneyInput valueMinor={field} onChange={(next) => setEdits((all) => ({ ...all, [modifier.id]: next }))} />
                 <button
@@ -535,6 +647,27 @@ function ItemGroupCard({
                     Reset
                   </button>
                 )}
+              </div>
+              <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                {/* Disable hides this option on THIS item only — the shared
+                    group and every other item keep it. Delete removes the
+                    option from the group everywhere; the server refuses one
+                    that has ever been sold. */}
+                <button
+                  className="ghost"
+                  disabled={setEnabled.isPending}
+                  onClick={() => setEnabled.mutate({ itemId: item.id, modifierId: modifier.id, enabled: disabled })}
+                >
+                  {disabled ? 'Disabled here — enable' : 'Disable for this item'}
+                </button>
+                <span style={{ flex: 1 }} />
+                <button
+                  className="ghost danger"
+                  disabled={deleteModifier.isPending}
+                  onClick={() => deleteModifier.mutate(modifier.id)}
+                >
+                  Delete option
+                </button>
               </div>
               {invalid && (
                 <p className="muted field-hint" style={{ marginTop: 0 }}>
@@ -773,6 +906,163 @@ function RemoveItemDialog({
           {removeItem.isPending ? 'Removing…' : 'Remove from menu'}
         </button>
         <button disabled={removeItem.isPending} onClick={onClose}>
+          Keep it
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** The line the Menu screen shows after a category was removed — deleting
+ * and hiding look the same from the button, so it has to say which. */
+function categoryRemovalNote(outcome: 'deleted' | 'retired', name: string): string {
+  return outcome === 'deleted'
+    ? `“${name}” had no sold items, so it and its items have been deleted.`
+    : `“${name}” has sold items (or a tax rule), so it is hidden rather than deleted — off the till, still in the reports.`;
+}
+
+/**
+ * Manage the categories themselves: rename one, hide/show it, or remove
+ * it. This is the counterpart to the item table — the place a manager
+ * clears away the test categories they no longer need.
+ */
+function CategoriesCard({
+  categories,
+  onRemoved,
+}: {
+  categories: Category[];
+  onRemoved: (outcome: 'deleted' | 'retired', name: string) => void;
+}): JSX.Element {
+  const updateCategory = useUpdateCategory();
+  const [removing, setRemoving] = useState<Category | null>(null);
+
+  return (
+    <div className="card">
+      <h3 style={{ margin: 0 }}>Categories</h3>
+      <p className="muted field-hint" style={{ marginTop: 0 }}>
+        Rename a category, hide it from the till, or remove it. A hidden category keeps its items and history; removing one deletes it
+        only if nothing in it has ever been sold.
+      </p>
+      <ErrorBanner error={updateCategory.error} />
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>On the menu</th>
+              <th className="num">Remove</th>
+            </tr>
+          </thead>
+          <tbody>
+            {categories.map((category) => (
+              <CategoryRow
+                key={category.id}
+                category={category}
+                pending={updateCategory.isPending}
+                onRename={(name) => updateCategory.mutate({ id: category.id, name })}
+                onToggleActive={() => updateCategory.mutate({ id: category.id, active: !category.active })}
+                onRemove={() => setRemoving(category)}
+              />
+            ))}
+            {categories.length === 0 && (
+              <tr>
+                <td className="muted">No categories yet.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {removing && (
+        <RemoveCategoryDialog
+          category={removing}
+          onClose={() => setRemoving(null)}
+          onDone={(outcome, name) => {
+            setRemoving(null);
+            onRemoved(outcome, name);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CategoryRow({
+  category,
+  pending,
+  onRename,
+  onToggleActive,
+  onRemove,
+}: {
+  category: Category;
+  pending: boolean;
+  onRename: (name: string) => void;
+  onToggleActive: () => void;
+  onRemove: () => void;
+}): JSX.Element {
+  const [name, setName] = useState(category.name);
+  const renamed = name.trim() !== '' && name.trim() !== category.name;
+
+  return (
+    <tr>
+      <td>
+        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+          <input value={name} onChange={(event) => setName(event.target.value)} style={{ flex: 1, minWidth: 140 }} />
+          <button disabled={!renamed || pending} onClick={() => onRename(name.trim())}>
+            Save
+          </button>
+        </div>
+      </td>
+      <td>
+        {/* Hiding a category takes it off the till and the Add-item
+            picker without touching its items — the counterpart to an
+            item's "Available tonight". */}
+        <button onClick={onToggleActive} disabled={pending}>
+          {category.active ? 'Shown' : 'Hidden'}
+        </button>
+      </td>
+      <td className="num">
+        <button className="ghost" onClick={onRemove}>
+          Remove
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * Removing a whole category. Like removing an item, the server decides
+ * whether that deletes it or just hides it, from whether anything in it
+ * has been sold — the dialog explains both, and the screen says which
+ * happened.
+ */
+function RemoveCategoryDialog({
+  category,
+  onClose,
+  onDone,
+}: {
+  category: Category;
+  onClose: () => void;
+  onDone: (outcome: 'deleted' | 'retired', name: string) => void;
+}): JSX.Element {
+  const deleteCategory = useDeleteCategory();
+
+  return (
+    <Modal title={`Remove ${category.name}?`} onClose={onClose}>
+      <div className="col">
+        <ErrorBanner error={deleteCategory.error} />
+        <p style={{ margin: 0 }}>
+          If nothing in it has ever been sold, the category and its items are deleted outright — what you want for a test category. If
+          any item has been sold, or a tax rule still applies to it, the category is hidden instead: off the till, kept in every report
+          and on every bill that sold it.
+        </p>
+        <button
+          className="danger big"
+          disabled={deleteCategory.isPending}
+          onClick={() => deleteCategory.mutate(category.id, { onSuccess: (result) => onDone(result.outcome, category.name) })}
+        >
+          {deleteCategory.isPending ? 'Removing…' : 'Remove category'}
+        </button>
+        <button disabled={deleteCategory.isPending} onClick={onClose}>
           Keep it
         </button>
       </div>

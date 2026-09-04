@@ -11,9 +11,12 @@ import {
   createItem,
   createModifier,
   createModifierGroup,
+  deleteCategory,
+  deleteModifier,
   getPriceHistory,
   linkModifierGroup,
   listCategories,
+  listDisabledModifiersForItem,
   listItemModifierPrices,
   listItems,
   listMenu,
@@ -22,6 +25,7 @@ import {
   listModifiers,
   removeItem,
   setAvailability,
+  setItemModifierEnabled,
   setItemModifierPrice,
   setItemPrice,
   unlinkModifierGroup,
@@ -84,6 +88,7 @@ const menuItemSchema = z.object({
   active: z.boolean(),
   priceMinor: z.number().int().nullable(),
   available: z.boolean(),
+  modifierGroupIds: z.array(z.number().int()),
 });
 
 export interface CatalogPluginOptions {
@@ -136,6 +141,26 @@ export const catalogRoutes: FastifyPluginAsync<CatalogPluginOptions> = async (fa
     async (request, reply) => {
       const actor = requireRole(request, reply, 'manager');
       return updateCategory(db, request.params.id, request.body, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  /**
+   * Take a category off the menu. Deleted outright (with its never-sold
+   * items) if nothing it holds must be kept; retired if any item was sold
+   * or a tax rule still applies — the server decides and says which.
+   */
+  app.delete(
+    '/api/categories/:id',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        response: { 200: z.object({ outcome: z.enum(['deleted', 'retired']) }) },
+      },
+    },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      const outcome = await deleteCategory(db, request.params.id, { actorId: actor.userId, terminalId: actor.terminalId });
+      return { outcome };
     },
   );
 
@@ -401,6 +426,56 @@ export const catalogRoutes: FastifyPluginAsync<CatalogPluginOptions> = async (fa
     async (request, reply) => {
       const actor = requireRole(request, reply, 'manager');
       return updateModifier(db, request.params.id, request.body, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  /**
+   * Delete one option of a group. Refused once it has been sold — the
+   * service returns the reason, which surfaces to the manager as an error.
+   */
+  app.delete(
+    '/api/modifiers/:id',
+    {
+      schema: { params: z.object({ id: z.coerce.number().int() }) },
+    },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      await deleteModifier(db, request.params.id, { actorId: actor.userId, terminalId: actor.terminalId });
+      return reply.code(204).send();
+    },
+  );
+
+  // ---- which options an item offers (a shared size switched off here) ----
+
+  app.get(
+    '/api/items/:id/disabled-modifiers',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int() }),
+        response: { 200: z.array(z.number().int()) },
+      },
+    },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      return listDisabledModifiersForItem(db, request.params.id);
+    },
+  );
+
+  app.put(
+    '/api/items/:id/modifiers/:modifierId/enabled',
+    {
+      schema: {
+        params: z.object({ id: z.coerce.number().int(), modifierId: z.coerce.number().int() }),
+        body: z.object({ enabled: z.boolean() }),
+      },
+    },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      await setItemModifierEnabled(db, request.params.id, request.params.modifierId, request.body.enabled, {
+        actorId: actor.userId,
+        terminalId: actor.terminalId,
+      });
+      return reply.code(204).send();
     },
   );
 

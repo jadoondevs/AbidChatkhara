@@ -83,7 +83,7 @@ describe('catalog routes', () => {
     const menuRes = await app.inject({ method: 'GET', url: `/api/menu?categoryId=${category.id}`, headers: auth });
     expect(menuRes.statusCode).toBe(200);
     expect(menuRes.json()).toEqual([
-      { id: item.id, categoryId: category.id, name: 'Chicken Karahi', active: true, priceMinor: 85000, available: true },
+      { id: item.id, categoryId: category.id, name: 'Chicken Karahi', active: true, priceMinor: 85000, available: true, modifierGroupIds: [] },
     ]);
   });
 });
