@@ -2120,55 +2120,6 @@ button.link-button:hover {
   width: 100%;
 }
 
-/* The live receipt-printer indicator (PrinterStatus): a coloured dot and
-   a word, driven by the local agent's health poll. */
-.printer-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.printer-status-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--muted, #8a8577);
-  flex: 0 0 auto;
-}
-
-.printer-status-ok {
-  color: var(--success);
-}
-.printer-status-ok .printer-status-dot {
-  background: var(--success);
-}
-
-.printer-status-down {
-  color: var(--danger);
-}
-.printer-status-down .printer-status-dot {
-  background: var(--danger);
-}
-
-.printer-status-checking {
-  color: var(--warn);
-}
-.printer-status-checking .printer-status-dot {
-  background: var(--warn);
-}
-
-/* A short inline caution — the receipt didn't print, but the sale is
-   fine. Not an error banner: it is information beside a retry, not a
-   failure to stop on. */
-.warn-text {
-  color: var(--warn);
-  font-weight: 600;
-  margin: 0;
-}
-
 /* The ticket beside the choices, as the design lays it out: paper on
    the left, what to do about it on the right. */
 .print-decision-layout {

@@ -2,7 +2,6 @@ import { paisa, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  useAgentStatus,
   useBillOrder,
   useBillPreview,
   useOrder,
@@ -13,7 +12,7 @@ import {
 } from '../api/hooks.js';
 import type { OrderDetail, ServiceChargeSettings } from '../api/types.js';
 import { PrintDecision } from '../components/PrintDecision.tsx';
-import { ErrorBanner, Loading, Money, MoneyInput, PrinterStatus } from '../components/ui.tsx';
+import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 import { orderTitle } from './OrderScreen.tsx';
 
 /**
@@ -52,7 +51,6 @@ export function BillPanel({
   const billOrder = useBillOrder();
   const printBill = usePrintBill();
   const voidOrder = useVoidOrder();
-  const printer = useAgentStatus();
 
   const [discountMinor, setDiscountMinor] = useState<Paisa>(paisa(0));
   const [discountReason, setDiscountReason] = useState('');
@@ -61,11 +59,10 @@ export function BillPanel({
   // the cashier decided this one bill carries.
   const [chargeOverride, setChargeOverride] = useState<Paisa | null>(null);
   const [printError, setPrintError] = useState<unknown>(null);
-  // Set when a print did NOT happen: the agent didn't answer, or the
-  // printer refused the ticket. The bill is finalised either way, so the
-  // cashier is asked what to do — retry, carry on, or cancel — never
-  // told the sale failed, and never silently sent to blank Windows paper.
-  const [printFailedFor, setPrintFailedFor] = useState<number | null>(null);
+  // Set once the bill is finalised and the ticket has gone somewhere
+  // other than a thermal printer — the point at which only the cashier
+  // knows whether anything came out.
+  const [decision, setDecision] = useState<{ orderId: number; failed: boolean; html: string | null } | null>(null);
 
   if (order.isLoading) return <Loading />;
   if (order.error) return <ErrorBanner error={order.error} />;
@@ -87,19 +84,23 @@ export function BillPanel({
   const print = (id: number) => {
     setPrintError(null);
     printBill.mutate(id, {
-      // The agent printed it. Nothing to ask — the cashier goes straight
-      // on to taking the money.
-      onSuccess: () => {
-        setPrintFailedFor(null);
-        onPrinted(id);
+      onSuccess: (result) => {
+        // A thermal printer either took the ticket or threw. Nothing to
+        // ask, so the cashier goes straight on to taking the money.
+        if (result.via === 'thermal') {
+          onPrinted(id);
+          return;
+        }
+        setDecision({ orderId: id, failed: false, html: result.html });
       },
       // A dead printer must never block the flow: the bill is already
       // finalised server-side (see docs/decisions/018), so the cashier
-      // is asked what they want to do, not told the sale failed — and it
-      // is never sent to the Windows dialog, which prints blank paper.
+      // is asked what they want to do, not told the sale failed.
       onError: (error) => {
         setPrintError(error);
-        setPrintFailedFor(id);
+        // Nothing was rendered, so there is nothing to show — the
+        // dialog falls back to words.
+        setDecision({ orderId: id, failed: true, html: null });
       },
     });
   };
@@ -172,42 +173,42 @@ export function BillPanel({
 
       <BillTotalsCard order={detail} chargeOverride={serviceChargeAllowed ? chargeOverride : paisa(0)} alreadyBilled={alreadyBilled} />
 
-      <div className="row" style={{ alignItems: 'center' }}>
+      <div className="row">
         <button className="ghost big" onClick={onBackToOrder}>
           Back to order
         </button>
         <span className="spacer" style={{ flex: 1 }} />
-        <PrinterStatus connected={printer.data === true} checking={printer.isLoading} />
         <button className="primary big" disabled={billOrder.isPending || printBill.isPending} onClick={finaliseAndPrint}>
           {billOrder.isPending || printBill.isPending ? 'Printing…' : alreadyBilled ? 'Reprint bill' : 'Print bill'}
         </button>
       </div>
 
-      {printFailedFor !== null && (
+      {decision && (
         <PrintDecision
-          title="The bill didn't print"
+          title={decision.failed ? 'Printing failed' : 'Bill sent to Windows printing'}
           detail={
-            printer.data === false
-              ? 'The receipt printer isn’t connected. Check it is on and plugged in, then retry — the bill is finalised, so you can also take payment and reprint after.'
-              : 'The printer didn’t accept the bill, so nothing came out. The bill is finalised — retry, or take payment and reprint after.'
+            decision.failed
+              ? 'The bill is finalised — only the printer failed. Nothing has been charged yet, and payment can still be taken.'
+              : 'No POS printer is connected, so the bill went to the Windows print dialog. If it did not come out, send it again.'
           }
-          continueLabel="Take payment anyway"
+          continueLabel="Continue without printing"
           cancelLabel="Cancel sale"
+          preview={decision.html}
           busy={printBill.isPending || voidOrder.isPending}
           onContinue={() => {
-            setPrintFailedFor(null);
-            onPrinted(printFailedFor);
+            setDecision(null);
+            onPrinted(decision.orderId);
           }}
-          onRetry={() => print(printFailedFor)}
+          onRetry={() => print(decision.orderId)}
           onCancelSale={() =>
             // Nothing has been paid at this point, so cancelling is the
             // system's ordinary void: the order stays on the record as
             // voided rather than disappearing.
             voidOrder.mutate(
-              { orderId: printFailedFor, reason: 'cancelled at the bill, not printed' },
+              { orderId: decision.orderId, reason: 'cancelled at the bill, not printed' },
               {
                 onSuccess: () => {
-                  setPrintFailedFor(null);
+                  setDecision(null);
                   onCancelled();
                 },
               },

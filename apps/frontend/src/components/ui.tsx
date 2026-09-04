@@ -316,23 +316,3 @@ export function elapsedSince(iso: string): string {
 export function Loading(): JSX.Element {
   return <p className="muted">Loading…</p>;
 }
-
-/**
- * A live connected/disconnected indicator for the till's receipt
- * printer, driven by the local agent's health poll (see api/agent.ts).
- *
- * This is the honest replacement for the old "No POS printer is
- * connected" line: that message was a fixed sentence that appeared
- * whenever a thermal printer wasn't configured, whether or not one was
- * actually reachable. This reads the hardware.
- */
-export function PrinterStatus({ connected, checking }: { connected: boolean; checking: boolean }): JSX.Element {
-  const state = checking ? 'checking' : connected ? 'ok' : 'down';
-  const label = checking ? 'Checking printer…' : connected ? 'Printer connected' : 'Printer not connected';
-  return (
-    <span className={`printer-status printer-status-${state}`} role="status">
-      <span className="printer-status-dot" aria-hidden="true" />
-      {label}
-    </span>
-  );
-}

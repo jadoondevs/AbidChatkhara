@@ -125,12 +125,12 @@ service charge, subtotal through total, and Print bill. It scrolls
 rather than dropping anything.
 
 Printing the bill opens **payment for that same order** — no going back
-to the floor to find it again. If the print does not happen — the agent
-or the printer is not answering — the till says so and offers **Retry
-print**, **Take payment anyway**, or **Cancel sale**: the bill is
-already finalised, so carrying on is always safe, and cancelling voids
-the order before payment and refunds it after. It never silently sends
-the ticket anywhere else.
+to the floor to find it again. If the ticket did not go straight to a
+thermal printer, the till asks what happened first: **Continue without
+printing**, **Retry print**, or **Cancel sale**. A browser cannot tell a
+saved PDF from a cancelled dialog, so the one person who knows is
+asked. Cancelling voids the order before payment and refunds it after;
+continuing is always safe, because the bill is already finalised.
 
 ### The service charge
 
@@ -293,45 +293,51 @@ then blocked until another is added.
 
 ### Printing
 
-Receipts print through a **local ESC/POS agent** on the till (see
-`agent/`), which writes raw bytes to the BIXOLON thermal printer,
-bypassing the Windows driver — the driver renders blank pages on this
-hardware, so it is not used. The browser POSTs the ticket to the agent
-at `http://127.0.0.1:7777`; everything is on localhost and works with no
-network.
+Printer configuration is **optional**. Receipts print by whichever route
+is available:
 
-The bill and the receipt print independently — a bill before payment, a
-receipt after — and the agent queues jobs internally, so the two never
-interfere.
+1. **A configured, reachable POS printer** — the receipt goes straight
+   to it as ESC/POS over raw TCP, with no dialog, exactly as before.
+2. **No printer configured, or the configured one cannot be reached** —
+   the server hands the till the same ticket as HTML and the browser
+   opens the normal Windows print dialog, where **Microsoft Print to
+   PDF** and every installed printer are available.
 
-**The till shows a live "Printer connected / not connected" indicator**
-on the bill and payment screens and in Settings → Printer, read from the
-agent's own health check. It is the real state of the hardware, not a
-guess from configuration.
+A print is never allowed to fail a sale. By the time a receipt is
+printed the payment is already recorded, so a missing printer, an
+unreachable one, or a cancelled print dialog all leave the sale intact
+and Reprint receipt available. Both paths render the same ticket data,
+so the total on a PDF printed from Windows is the total on the thermal
+ticket to the paisa (see `docs/decisions/018`).
 
-**A print that does not happen is shown, never hidden.** If the agent or
-the printer does not answer, the till says the ticket did not print and
-offers a **Retry** — it does not fall back to the browser's own print
-dialog, which on this hardware prints blank paper and hides the failure.
-A print is still never allowed to fail a sale: by the time a receipt
-prints the payment is already recorded, so a dead printer leaves the
-sale intact with Reprint receipt available (see `docs/decisions/018` and
-`docs/decisions/026`).
+Account numbers are masked to their last four digits on a printed
+ticket.
 
-**Account numbers are masked to their last four digits before the ticket
-ever leaves the server** (`****7890`), so a bill sitting on a table never
-shows a full number, and the full number never even reaches the browser.
+**Thermal output is set up for legibility, not left to the printer's
+defaults.** Every ticket selects Font A (12×24, not Font B's thin
+9×17), picks a code page, and sets the print density. Typographic
+characters the POS itself produces (em dashes, curly quotes, ×) are
+transliterated, because a receipt printer decodes one byte at a time
+against a code page and would otherwise print them as noise.
 
-**Print darkness** is set in the agent's own configuration
-(`PRINTER_DENSITY`, see `agent/README.md`), because the agent is what
-emits the ESC/POS bytes. Use **Print test strip** in Settings → Printer
-to check on paper that ordinary text is dark enough and emphasis is
-visibly heavier.
+**If ordinary receipt text prints grey, raise the print darkness**
+under Settings → Printer, then press **Print test strip** and look at
+the paper. The strip prints one block of ordinary text and one
+emphasised block: ordinary text has to be readable, and the emphasised
+block has to be visibly heavier. Darkness is a property of the printer,
+so this is the only lever that fixes ordinary text without emphasising
+every line and flattening the receipt into one weight.
 
-The agent is its own service — run it at boot on the till (Task
-Scheduler, NSSM or pm2), pointed at the printer with a couple of
-environment variables. Full setup and the print contract are in
-`agent/README.md`.
+Some printers ignore the density command. If the strip looks identical
+at every level, set the darkness in the printer's own configuration
+utility and put this setting back to "use the printer's own setting".
+
+**One print job per ticket, so Microsoft Print to PDF asks once.** The
+fallback writes the receipt into an off-screen iframe; that iframe is
+given its content before it is attached, and its load handler latches.
+Attaching it empty first made the browser load `about:blank`, print
+that, then load the receipt and print again — the empty PDF a cashier
+had to save and throw away before saving the real one.
 
 ### Upgrading an existing database
 

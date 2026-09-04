@@ -8,7 +8,6 @@ import { ConcurrentModificationError, OrderStateError } from '../ordering/servic
 import type { Database } from '../platform/db/types.js';
 import { PrintError, type PrinterTarget } from '../platform/printing/client.js';
 import { getSetting, resolvePrinterTarget } from '../settings/service.js';
-import { buildAgentBillPayload, buildAgentReceiptPayload } from './agent-ticket.js';
 import { printBill, printReceipt, printTestTicket, sampleBillTicketData } from './printing.js';
 import { renderBillHtml } from './receipt-html.js';
 import { receiptSettingsSchema, restaurantSettingsSchema, serviceChargeSettingsSchema } from '../settings/schema.js';
@@ -479,66 +478,6 @@ export const billingRoutes: FastifyPluginAsync<BillingPluginOptions> = async (fa
       requireAuth(request, reply);
       const { restaurant, receipt, serviceCharge } = request.body;
       return { html: renderBillHtml(sampleBillTicketData({ restaurant, receipt }, serviceCharge)) };
-    },
-  );
-
-  // ---- the local print agent ----
-  //
-  // The till's browser POSTs these to its own ESC/POS agent at
-  // http://127.0.0.1:7777 (see agent/ and docs/decisions/026). The
-  // server builds the payload rather than the browser so account numbers
-  // are masked here — the full number never reaches the browser a
-  // customer's bill was printed from.
-  const agentItemSchema = z.object({ quantity: z.number().int(), name: z.string(), amount: z.number() });
-  const agentRestaurantSchema = z.object({ name: z.string(), address: z.string(), phone: z.string() });
-  const agentBillSchema = z.object({
-    kind: z.literal('bill'),
-    restaurant: agentRestaurantSchema,
-    orderNumber: z.number().int(),
-    date: z.string(),
-    orderType: z.string(),
-    waiter: z.string().nullable(),
-    items: z.array(agentItemSchema),
-    subtotal: z.number(),
-    discount: z.number(),
-    serviceCharge: z.number().nullable(),
-    tax: z.number().nullable(),
-    total: z.number(),
-    paymentOptions: z.array(z.object({ bank: z.string(), accountName: z.string(), accountNumber: z.string() })),
-  });
-  const agentReceiptSchema = z.object({
-    kind: z.literal('receipt'),
-    restaurant: agentRestaurantSchema,
-    orderNumber: z.number().int(),
-    invoiceNumber: z.number().int(),
-    date: z.string(),
-    orderType: z.string(),
-    waiter: z.string().nullable(),
-    items: z.array(agentItemSchema),
-    subtotal: z.number(),
-    discount: z.number(),
-    serviceCharge: z.number().nullable(),
-    tax: z.number().nullable(),
-    total: z.number(),
-    paymentMethod: z.string(),
-    amountPaid: z.number(),
-  });
-
-  app.get(
-    '/api/orders/:id/bill-ticket',
-    { schema: { params: z.object({ id: z.coerce.number().int() }), response: { 200: agentBillSchema } } },
-    async (request, reply) => {
-      requireAuth(request, reply);
-      return buildAgentBillPayload(db, request.params.id);
-    },
-  );
-
-  app.get(
-    '/api/orders/:id/receipt-ticket',
-    { schema: { params: z.object({ id: z.coerce.number().int() }), response: { 200: agentReceiptSchema } } },
-    async (request, reply) => {
-      requireAuth(request, reply);
-      return buildAgentReceiptPayload(db, request.params.id);
     },
   );
 
