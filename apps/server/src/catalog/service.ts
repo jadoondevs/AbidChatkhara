@@ -3,6 +3,9 @@ import type { Kysely } from 'kysely';
 import { recordAudit } from '../identity/audit.js';
 import type { ActorContext } from '../identity/service.js';
 import type { Database } from '../platform/db/types.js';
+import type { ModifierPricingMode } from './tables.js';
+
+export type { ModifierPricingMode } from './tables.js';
 
 // ---------------------------------------------------------------------
 // Category
@@ -498,6 +501,8 @@ export interface ModifierGroupSummary {
   readonly name: string;
   readonly minSelect: number;
   readonly maxSelect: number;
+  /** How the option prices are read — see ModifierPricingMode / migration 0021. */
+  readonly pricingMode: ModifierPricingMode;
 }
 
 interface ModifierGroupRow {
@@ -505,10 +510,11 @@ interface ModifierGroupRow {
   name: string;
   min_select: number;
   max_select: number;
+  pricing_mode: ModifierPricingMode;
 }
 
 function toModifierGroupSummary(row: ModifierGroupRow): ModifierGroupSummary {
-  return { id: row.id, name: row.name, minSelect: row.min_select, maxSelect: row.max_select };
+  return { id: row.id, name: row.name, minSelect: row.min_select, maxSelect: row.max_select, pricingMode: row.pricing_mode };
 }
 
 function assertValidSelectRange(minSelect: number, maxSelect: number): void {
@@ -520,6 +526,9 @@ export interface CreateModifierGroupInput {
   readonly name: string;
   readonly minSelect: number;
   readonly maxSelect: number;
+  /** Defaults to 'add_on' — the safe reading, where an option's price is
+   * charged on top rather than replacing the line's price. */
+  readonly pricingMode?: ModifierPricingMode | undefined;
 }
 
 export async function createModifierGroup(
@@ -530,7 +539,7 @@ export async function createModifierGroup(
   assertValidSelectRange(input.minSelect, input.maxSelect);
   const row = await db
     .insertInto('modifier_group')
-    .values({ name: input.name, min_select: input.minSelect, max_select: input.maxSelect })
+    .values({ name: input.name, min_select: input.minSelect, max_select: input.maxSelect, pricing_mode: input.pricingMode ?? 'add_on' })
     .returningAll()
     .executeTakeFirstOrThrow();
   const summary = toModifierGroupSummary(row);
@@ -554,6 +563,7 @@ export interface UpdateModifierGroupInput {
   readonly name?: string | undefined;
   readonly minSelect?: number | undefined;
   readonly maxSelect?: number | undefined;
+  readonly pricingMode?: ModifierPricingMode | undefined;
 }
 
 export async function updateModifierGroup(
@@ -573,6 +583,7 @@ export async function updateModifierGroup(
     .updateTable('modifier_group')
     .set({
       ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.pricingMode !== undefined ? { pricing_mode: input.pricingMode } : {}),
       min_select: minSelect,
       max_select: maxSelect,
     })

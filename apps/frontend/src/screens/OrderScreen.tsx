@@ -318,11 +318,12 @@ function ModifierPicker({
         {groups.data?.map((group) => {
           const options = optionsFor(group);
           const required = group.minSelect > 0;
-          // A required, choose-one group is a size, so each option shows
-          // the item's FINAL price at that size (Half Rs 1,100, Full
-          // Rs 2,100) — the price that actually goes on the bill. An
-          // optional group is an add-on, so it shows what it adds.
-          const isSize = group.minSelect === 1 && group.maxSelect === 1;
+          // A variant (size) group shows each option's FINAL price at that
+          // size (Half Rs 1,100, Full Rs 2,100) — the price that actually
+          // goes on the bill. An add-on group shows what it adds. This is
+          // the group's recorded pricing mode (migration 0021), not a
+          // guess from its select counts.
+          const isSize = group.pricingMode === 'variant';
           return (
             <div key={group.id}>
               <label>

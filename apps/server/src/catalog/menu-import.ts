@@ -64,6 +64,11 @@ const menuFileSchema = z.object({
       name: z.string().min(1),
       minSelect: z.number().int().nonnegative(),
       maxSelect: z.number().int().positive(),
+      /** How the option prices are read. A size group (the reason a menu
+       * item carries `sizes`) is a 'variant': each option is the item's
+       * final price at that size. Defaults to 'add_on' — the reading
+       * where the option is charged on top. See migration 0021. */
+      pricingMode: z.enum(['variant', 'add_on']).optional(),
       /** In menu-board order. The FIRST option is the base size: it is
        * the one whose price must equal the item's own price. */
       options: z.array(z.string().min(1)).min(1),
@@ -128,7 +133,7 @@ export interface ItemAddress {
 
 export type MenuImportAction =
   | { readonly kind: 'create-category'; readonly name: string; readonly sortOrder: number }
-  | { readonly kind: 'create-group'; readonly name: string; readonly minSelect: number; readonly maxSelect: number }
+  | { readonly kind: 'create-group'; readonly name: string; readonly minSelect: number; readonly maxSelect: number; readonly pricingMode: 'variant' | 'add_on' }
   | { readonly kind: 'create-option'; readonly group: string; readonly name: string }
   | { readonly kind: 'create-item'; readonly at: ItemAddress }
   | { readonly kind: 'set-price'; readonly at: ItemAddress; readonly fromMinor: Paisa | null; readonly toMinor: Paisa }
@@ -176,7 +181,13 @@ export async function planMenuImport(db: Kysely<Database>, file: MenuFile): Prom
   for (const group of file.modifierGroups) {
     const groupId = groupIdByName.get(group.name);
     if (groupId === undefined) {
-      actions.push({ kind: 'create-group', name: group.name, minSelect: group.minSelect, maxSelect: group.maxSelect });
+      actions.push({
+        kind: 'create-group',
+        name: group.name,
+        minSelect: group.minSelect,
+        maxSelect: group.maxSelect,
+        pricingMode: group.pricingMode ?? 'add_on',
+      });
       for (const option of group.options) actions.push({ kind: 'create-option', group: group.name, name: option });
       continue;
     }
@@ -325,7 +336,11 @@ export async function importMenu(db: Kysely<Database>, file: MenuFile, actor: Ac
         break;
       }
       case 'create-group': {
-        const created = await createModifierGroup(db, { name: action.name, minSelect: action.minSelect, maxSelect: action.maxSelect }, actor);
+        const created = await createModifierGroup(
+          db,
+          { name: action.name, minSelect: action.minSelect, maxSelect: action.maxSelect, pricingMode: action.pricingMode },
+          actor,
+        );
         groupIds.set(created.name, created.id);
         break;
       }

@@ -4,18 +4,21 @@
       "name": "Half / Full",
       "minSelect": 1,
       "maxSelect": 1,
+      "pricingMode": "variant",
       "options": ["Half", "Full"]
     },
     {
       "name": "Small / Large",
       "minSelect": 1,
       "maxSelect": 1,
+      "pricingMode": "variant",
       "options": ["Small", "Large"]
     },
     {
       "name": "Bottle size",
       "minSelect": 1,
       "maxSelect": 1,
+      "pricingMode": "variant",
       "options": ["Half litre", "Litre", "1.5 litre"]
     }
   ],

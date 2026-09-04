@@ -26,6 +26,7 @@ import type {
   MenuItem,
   Modifier,
   ModifierGroup,
+  ModifierPricingMode,
   OrderDetail,
   OrderStatus,
   OrderSearchResult,
@@ -658,10 +659,25 @@ export function useRemoveItem(): UseMutationResult<{ outcome: 'deleted' | 'retir
 export function useCreateModifierGroup(): UseMutationResult<
   ModifierGroup,
   Error,
-  { name: string; minSelect: number; maxSelect: number }
+  { name: string; minSelect: number; maxSelect: number; pricingMode?: ModifierPricingMode }
 > {
   const invalidate = useInvalidateOnSuccess(['modifier-groups']);
   return useMutation({ mutationFn: (body) => api.post<ModifierGroup>('/api/modifier-groups', body), onSuccess: invalidate });
+}
+
+/** Change a group's name, select range, or how its option prices are
+ * read (variant vs add-on) — the last is how a mis-set size group gets
+ * corrected without deleting and re-creating it. */
+export function useUpdateModifierGroup(): UseMutationResult<
+  ModifierGroup,
+  Error,
+  { id: number; name?: string; minSelect?: number; maxSelect?: number; pricingMode?: ModifierPricingMode }
+> {
+  const invalidate = useInvalidateOnSuccess(['modifier-groups', 'item-modifier-groups', 'menu']);
+  return useMutation({
+    mutationFn: ({ id, ...body }) => api.patch<ModifierGroup>(`/api/modifier-groups/${id}`, body),
+    onSuccess: invalidate,
+  });
 }
 
 export function useCreateModifier(): UseMutationResult<
