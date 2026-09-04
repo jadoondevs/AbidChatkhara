@@ -59,10 +59,11 @@ export function BillPanel({
   // the cashier decided this one bill carries.
   const [chargeOverride, setChargeOverride] = useState<Paisa | null>(null);
   const [printError, setPrintError] = useState<unknown>(null);
-  // Set once the bill is finalised and the ticket has gone somewhere
-  // other than a thermal printer — the point at which only the cashier
-  // knows whether anything came out.
-  const [decision, setDecision] = useState<{ orderId: number; failed: boolean; html: string | null } | null>(null);
+  // Set only when a print genuinely failed (the server could not render
+  // it, or the browser refused to print at all) — never merely because
+  // the Windows print dialog was used. The bill is finalised, so this
+  // offers a retry, not a claim that the sale failed.
+  const [printFailedFor, setPrintFailedFor] = useState<number | null>(null);
 
   if (order.isLoading) return <Loading />;
   if (order.error) return <ErrorBanner error={order.error} />;
@@ -84,23 +85,23 @@ export function BillPanel({
   const print = (id: number) => {
     setPrintError(null);
     printBill.mutate(id, {
-      onSuccess: (result) => {
-        // A thermal printer either took the ticket or threw. Nothing to
-        // ask, so the cashier goes straight on to taking the money.
-        if (result.via === 'thermal') {
-          onPrinted(id);
-          return;
-        }
-        setDecision({ orderId: id, failed: false, html: result.html });
+      // Both print paths succeeded: a thermal printer took the ticket,
+      // OR the browser's own print dialog was opened for a Windows
+      // printer (the normal path on this till). Opening that dialog is
+      // NOT a failure — a browser cannot see whether paper came out, so
+      // it must not pretend otherwise — and it is not "no printer". The
+      // cashier goes straight on to taking the money.
+      onSuccess: () => {
+        setPrintFailedFor(null);
+        onPrinted(id);
       },
-      // A dead printer must never block the flow: the bill is already
-      // finalised server-side (see docs/decisions/018), so the cashier
-      // is asked what they want to do, not told the sale failed.
+      // Only a genuine, detectable failure — the server could not render
+      // the ticket, or the browser refused to print at all — lands here.
+      // The bill is finalised either way (docs/decisions/018), so the
+      // cashier is offered a retry, never told the sale failed.
       onError: (error) => {
         setPrintError(error);
-        // Nothing was rendered, so there is nothing to show — the
-        // dialog falls back to words.
-        setDecision({ orderId: id, failed: true, html: null });
+        setPrintFailedFor(id);
       },
     });
   };
@@ -183,32 +184,28 @@ export function BillPanel({
         </button>
       </div>
 
-      {decision && (
+      {printFailedFor !== null && (
         <PrintDecision
-          title={decision.failed ? 'Printing failed' : 'Bill sent to Windows printing'}
-          detail={
-            decision.failed
-              ? 'The bill is finalised — only the printer failed. Nothing has been charged yet, and payment can still be taken.'
-              : 'No POS printer is connected, so the bill went to the Windows print dialog. If it did not come out, send it again.'
-          }
-          continueLabel="Continue without printing"
+          title="The bill didn't print"
+          detail="The bill is finalised — only the print itself failed. Nothing has been charged yet: retry, take payment and print after, or cancel."
+          continueLabel="Take payment anyway"
           cancelLabel="Cancel sale"
-          preview={decision.html}
           busy={printBill.isPending || voidOrder.isPending}
           onContinue={() => {
-            setDecision(null);
-            onPrinted(decision.orderId);
+            const id = printFailedFor;
+            setPrintFailedFor(null);
+            onPrinted(id);
           }}
-          onRetry={() => print(decision.orderId)}
+          onRetry={() => print(printFailedFor)}
           onCancelSale={() =>
             // Nothing has been paid at this point, so cancelling is the
             // system's ordinary void: the order stays on the record as
             // voided rather than disappearing.
             voidOrder.mutate(
-              { orderId: decision.orderId, reason: 'cancelled at the bill, not printed' },
+              { orderId: printFailedFor, reason: 'cancelled at the bill, not printed' },
               {
                 onSuccess: () => {
-                  setDecision(null);
+                  setPrintFailedFor(null);
                   onCancelled();
                 },
               },

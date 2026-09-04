@@ -112,28 +112,46 @@ function page(title: string, body: string): string {
 <style>
   @page { size: ${RECEIPT_WIDTH_MM}mm auto; margin: 4mm; }
   * { box-sizing: border-box; }
+  /*
+   * Thermal darkness lives here, not in the Windows print driver. The
+   * browser rasterises these vector glyphs to the 1-bit bitmap the print
+   * head burns, and thin anti-aliased strokes lose their grey edge pixels
+   * at that threshold — which is why normal POS text came out far fainter
+   * than the device's own (full-density, built-in-font) Windows self
+   * test. Two levers fix that without turning the whole receipt bold:
+   *   - print-color-adjust: exact stops the browser lightening #000 for
+   *     "economy"/colour-managed output, so black stays black.
+   *   - a small text-stroke thickens every glyph outline, so enough
+   *     fully-black interior pixels survive the 1-bit threshold to read
+   *     as dark. Emphasis is still carried by size and font-weight on
+   *     the heading/total classes below; body text stays regular weight.
+   */
   body {
     margin: 0;
     font-family: "Courier New", Courier, monospace;
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1.35;
     color: #000;
     background: #fff;
     width: ${RECEIPT_WIDTH_MM - 8}mm;
+    font-weight: 400;
+    -webkit-text-stroke: 0.3px #000;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   header, footer { text-align: center; }
   header { margin-bottom: 6px; }
   footer { margin-top: 10px; }
-  .name { font-size: 16px; font-weight: 700; }
+  .name { font-size: 17px; font-weight: 700; }
   .title { font-size: 15px; font-weight: 700; margin-top: 6px; letter-spacing: 0.08em; }
-  hr { border: none; border-top: 1px dashed #000; margin: 6px 0; }
+  hr { border: none; border-top: 1px solid #000; margin: 6px 0; }
   .row { display: flex; justify-content: space-between; gap: 8px; }
   .row span:last-child { white-space: nowrap; }
   .item { margin-bottom: 2px; }
-  .modifiers { padding-left: 10px; font-size: 11px; }
+  .modifiers { padding-left: 10px; font-size: 12px; }
   .grand { font-weight: 700; font-size: 14px; margin-top: 2px; }
   .meta div { display: flex; justify-content: space-between; gap: 8px; }
-  .note { font-size: 11px; padding-left: 10px; }
+  .note { font-size: 12px; padding-left: 10px; }
 </style>
 </head>
 <body>
