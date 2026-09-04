@@ -23,11 +23,21 @@ export interface ItemPriceTable {
   valid_to: string | null;
 }
 
+/**
+ * `pricing_mode` (migration 0021) says how each option's price is read:
+ * a 'variant' (size) option IS the line's price and the admin enters the
+ * final selling price; an 'add_on' option is charged ON TOP and the admin
+ * enters the extra. Storage is a delta from the item's base either way —
+ * see the migration and catalog/service.ts.
+ */
+export type ModifierPricingMode = 'variant' | 'add_on';
+
 export interface ModifierGroupTable {
   id: Generated<number>;
   name: string;
   min_select: number;
   max_select: number;
+  pricing_mode: ModifierPricingMode;
 }
 
 export interface ModifierTable {

@@ -287,6 +287,28 @@ describe('catalog/service', () => {
       expect(updated).toMatchObject({ minSelect: 1, maxSelect: 3 });
     });
 
+    it('records how a group is priced, defaulting to add-on, and lets it be changed', async () => {
+      const actor = await setupActor();
+
+      // The safe default: an option's price is charged on top, never
+      // treated as a replacement price.
+      const addOn = await createModifierGroup(ctx.db, { name: 'Extras', minSelect: 0, maxSelect: 3 }, actor);
+      expect(addOn.pricingMode).toBe('add_on');
+
+      // A size is declared explicitly, not guessed from its select counts.
+      const size = await createModifierGroup(
+        ctx.db,
+        { name: 'Half / Full', minSelect: 1, maxSelect: 1, pricingMode: 'variant' },
+        actor,
+      );
+      expect(size.pricingMode).toBe('variant');
+      expect((await listModifierGroups(ctx.db)).find((g) => g.id === size.id)?.pricingMode).toBe('variant');
+
+      // A mis-set group is corrected in place, keeping its identity.
+      const fixed = await updateModifierGroup(ctx.db, addOn.id, { pricingMode: 'variant', minSelect: 1, maxSelect: 1 }, actor);
+      expect(fixed).toMatchObject({ id: addOn.id, pricingMode: 'variant', minSelect: 1, maxSelect: 1 });
+    });
+
     it('creates a modifier under a group, with a Paisa price delta', async () => {
       const actor = await setupActor();
       const group = await createModifierGroup(ctx.db, { name: 'Add-ons', minSelect: 0, maxSelect: 3 }, actor);

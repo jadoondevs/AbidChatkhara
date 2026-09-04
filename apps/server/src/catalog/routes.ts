@@ -53,11 +53,14 @@ const itemPriceSchema = z.object({
   validTo: z.string().nullable(),
 });
 
+const pricingModeSchema = z.enum(['variant', 'add_on']);
+
 const modifierGroupSchema = z.object({
   id: z.number().int(),
   name: z.string(),
   minSelect: z.number().int(),
   maxSelect: z.number().int(),
+  pricingMode: pricingModeSchema,
 });
 
 const modifierSchema = z.object({
@@ -319,7 +322,12 @@ export const catalogRoutes: FastifyPluginAsync<CatalogPluginOptions> = async (fa
     '/api/modifier-groups',
     {
       schema: {
-        body: z.object({ name: z.string().min(1), minSelect: z.number().int().min(0), maxSelect: z.number().int().min(0) }),
+        body: z.object({
+          name: z.string().min(1),
+          minSelect: z.number().int().min(0),
+          maxSelect: z.number().int().min(0),
+          pricingMode: pricingModeSchema.optional(),
+        }),
         response: { 201: modifierGroupSchema },
       },
     },
@@ -335,7 +343,12 @@ export const catalogRoutes: FastifyPluginAsync<CatalogPluginOptions> = async (fa
     {
       schema: {
         params: z.object({ id: z.coerce.number().int() }),
-        body: z.object({ name: z.string().min(1).optional(), minSelect: z.number().int().min(0).optional(), maxSelect: z.number().int().min(0).optional() }),
+        body: z.object({
+          name: z.string().min(1).optional(),
+          minSelect: z.number().int().min(0).optional(),
+          maxSelect: z.number().int().min(0).optional(),
+          pricingMode: pricingModeSchema.optional(),
+        }),
         response: { 200: modifierGroupSchema },
       },
     },

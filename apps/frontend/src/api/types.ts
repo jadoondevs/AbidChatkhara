@@ -56,11 +56,23 @@ export interface MenuItem {
   available: boolean;
 }
 
+/**
+ * `pricingMode` decides how an option's price is read (migration 0021):
+ *  - 'variant' (a size): the option IS the line's price. The admin enters
+ *    the final selling price, and the picker shows that final price.
+ *  - 'add_on': the option is charged on top. The admin enters the extra,
+ *    and the picker shows it as +Rs.
+ * It is set explicitly, never guessed from the select counts — guessing
+ * was what charged a Rs 200 size Rs 400.
+ */
+export type ModifierPricingMode = 'variant' | 'add_on';
+
 export interface ModifierGroup {
   id: number;
   name: string;
   minSelect: number;
   maxSelect: number;
+  pricingMode: ModifierPricingMode;
 }
 
 /**
