@@ -415,9 +415,13 @@ export async function searchOrders(db: Kysely<Database>, opts: OrderSearchOption
 export interface FloorOrder extends OrderSummary {
   readonly paidMinor: Paisa;
   readonly balanceMinor: Paisa;
-  /** Item lines on the order, voided ones included. Zero is what makes
-   * an order deletable rather than voidable — see `deleteEmptyOrder`. */
+  /** Item lines on the order, voided ones included. */
   readonly lineCount: number;
+  /** Item lines that still count — voided (removed) ones excluded. An
+   * order with none of these is empty even when a mis-tapped line was
+   * added and taken off again, so this, not `lineCount`, is what decides
+   * whether it can be cleared away — see `deleteEmptyOrder`. */
+  readonly liveLineCount: number;
 }
 
 export interface FloorBoard {
@@ -457,16 +461,26 @@ export async function getFloorBoard(db: Kysely<Database>, opts: FloorBoardOption
   const paidByOrder = await paidTotals(db, orderIds);
 
   // One grouped count for the whole board, so the floor can offer to
-  // delete an order that never became one without a query per row.
+  // delete an order that never became one without a query per row. Both
+  // the total and the live (non-voided) count, so a mis-tapped line that
+  // was added and removed does not make an empty order look occupied.
   const lineCounts = new Map<number, number>();
+  const liveLineCounts = new Map<number, number>();
   if (orderIds.length > 0) {
     const counted = await db
       .selectFrom('order_line')
-      .select(({ fn }) => ['order_id as orderId', fn.count<number>('id').as('lines')])
+      .select(({ fn }) => [
+        'order_id as orderId',
+        fn.count<number>('id').as('lines'),
+        fn.count<number>('id').filterWhere('voided', '=', 0).as('liveLines'),
+      ])
       .where('order_id', 'in', orderIds)
       .groupBy('order_id')
       .execute();
-    for (const row of counted) lineCounts.set(row.orderId, Number(row.lines));
+    for (const row of counted) {
+      lineCounts.set(row.orderId, Number(row.lines));
+      liveLineCounts.set(row.orderId, Number(row.liveLines));
+    }
   }
 
   const decorate = (row: OrderRow): FloorOrder => {
@@ -476,6 +490,7 @@ export async function getFloorBoard(db: Kysely<Database>, opts: FloorBoardOption
       paidMinor,
       balanceMinor: sub(row.total_minor, paidMinor),
       lineCount: lineCounts.get(row.id) ?? 0,
+      liveLineCount: liveLineCounts.get(row.id) ?? 0,
     };
   };
 
@@ -1155,10 +1170,34 @@ export async function deleteEmptyOrder(db: Kysely<Database>, orderId: number, ac
       );
     }
 
-    const lines = await trx.selectFrom('order_line').select('id').where('order_id', '=', orderId).execute();
-    if (lines.length > 0) {
+    // Never billed. Once a bill has been printed the order is part of the
+    // record even if every line was later voided — that one is voided,
+    // not deleted, so the pro-forma it produced still traces to something.
+    if (order.first_billed_at !== null) {
       throw new OrderStateError(
-        `order ${orderId} has ${lines.length} item line(s) — remove them first, or void the order if it needs to stay on the record`,
+        `order ${orderId} has been billed before — void it rather than deleting it, so its history stays on the record`,
+      );
+    }
+
+    // "Empty" means nothing LIVE on it. A line the cashier added and then
+    // removed is a voided CORRECTION (removeLine keeps it as one), so a
+    // mis-tapped order reads as having lines when it holds nothing — and
+    // that is exactly the empty order this deletes, cleaning its voided
+    // corrections away with it so a typo leaves no trace (decisions/021).
+    const lines = await trx.selectFrom('order_line').select(['id', 'voided', 'void_kind']).where('order_id', '=', orderId).execute();
+    const liveLines = lines.filter((line) => line.voided === 0);
+    if (liveLines.length > 0) {
+      throw new OrderStateError(
+        `order ${orderId} has ${liveLines.length} item line(s) on it — remove them first, or void the order if it needs to stay on the record`,
+      );
+    }
+    // A deliberate void (a line sent back with a reason) is a record, not
+    // a mis-tap: an order carrying one is voided, never deleted. Only
+    // corrections — lines added and taken off before anything was billed —
+    // are safe to erase.
+    if (lines.some((line) => line.void_kind === 'void')) {
+      throw new OrderStateError(
+        `order ${orderId} has a voided line on the record — void the order rather than deleting it`,
       );
     }
 
@@ -1167,8 +1206,8 @@ export async function deleteEmptyOrder(db: Kysely<Database>, orderId: number, ac
       throw new OrderStateError(`order ${orderId} has money recorded against it and cannot be deleted`);
     }
 
-    // Belt and braces: an order with no lines should have no figures
-    // either, and if it somehow does, that is not something to delete.
+    // Belt and braces: an empty order should have no figures either, and
+    // if it somehow does, that is not something to delete.
     if (order.subtotal_minor !== 0 || order.total_minor !== 0 || order.order_discount_minor !== 0 || order.service_charge_minor !== 0) {
       throw new OrderStateError(`order ${orderId} carries financial figures and cannot be deleted`);
     }
@@ -1184,6 +1223,15 @@ export async function deleteEmptyOrder(db: Kysely<Database>, orderId: number, ac
       before: toOrderSummary(order),
     });
 
+    // Clear away the voided lines and their snapshots, then the order. A
+    // never-billed order was never allocated, so there is nothing in
+    // line_allocation to unwind; the delete stays inside the order.
+    const lineIds = lines.map((line) => line.id);
+    if (lineIds.length > 0) {
+      await trx.deleteFrom('line_allocation').where('order_line_id', 'in', lineIds).execute();
+      await trx.deleteFrom('order_line_modifier').where('order_line_id', 'in', lineIds).execute();
+      await trx.deleteFrom('order_line').where('order_id', '=', orderId).execute();
+    }
     await trx.deleteFrom('order').where('id', '=', orderId).execute();
   });
 }

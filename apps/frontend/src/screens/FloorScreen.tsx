@@ -157,8 +157,11 @@ function OrderList({
           <div key={order.id} className="order-row-wrap">
             {/* The delete affordance sits OUTSIDE the row button: a
                 nested button is not clickable, and a stray tap on a
-                real order's row must never remove anything. */}
-            {onDelete && order.lineCount === 0 && (
+                real order's row must never remove anything. An order with
+                no LIVE items is empty even if a line was added and taken
+                off again (that leaves a voided line, not an item), and a
+                never-billed empty order can be deleted outright. */}
+            {onDelete && order.liveLineCount === 0 && order.firstBilledAt === null && (
               <button
                 className="ghost order-row-delete"
                 title="Delete this empty order"

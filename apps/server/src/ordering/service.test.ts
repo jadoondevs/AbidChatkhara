@@ -1054,6 +1054,21 @@ describe('ordering/service', () => {
       expect(await getOrder(ctx.db, order.id)).not.toBeNull();
     });
 
+    it('deletes an order whose only line was added and then removed (a mis-tap)', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      const detail = await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+      // "Remove" before billing soft-voids the line as a correction — the
+      // order now holds nothing, so it is a typo that should leave no
+      // trace, blocking neither the floor nor the shift close.
+      await removeLine(ctx.db, order.id, detail.lines[0]!.id, orderActor);
+
+      await deleteEmptyOrder(ctx.db, order.id, orderActor);
+      expect(await getOrder(ctx.db, order.id)).toBeNull();
+      // The voided correction line went with it.
+      expect(await ctx.db.selectFrom('order_line').select('id').where('order_id', '=', order.id).execute()).toHaveLength(0);
+    });
+
     it('refuses an order whose only line was voided — that is still a record', async () => {
       const { item, orderActor } = await setupMenu();
       const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);

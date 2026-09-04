@@ -100,6 +100,7 @@ const orderDetailSchema = orderSummarySchema.extend({
 
 const floorOrderSchema = orderSummarySchema.extend({
   lineCount: z.number().int(),
+  liveLineCount: z.number().int(),
   paidMinor: z.number().int(),
   balanceMinor: z.number().int(),
 });
