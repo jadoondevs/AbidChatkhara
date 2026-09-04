@@ -162,9 +162,12 @@ export interface OrderSummary {
 }
 
 export interface FloorOrder extends OrderSummary {
-  /** Item lines, voided ones included. Zero means the order never
-   * became one and can be deleted rather than voided. */
+  /** Item lines, voided ones included. */
   lineCount: number;
+  /** Lines that still count — voided (removed) ones excluded. Zero means
+   * the order holds nothing (even after a line was added and removed) and
+   * can be cleared away. */
+  liveLineCount: number;
   paidMinor: Paisa;
   balanceMinor: Paisa;
 }
@@ -464,8 +467,13 @@ export interface BlockingOrder {
   orderType: string;
   status: string;
   tableLabel: string | null;
-  /** Zero means it can be deleted rather than worked through. */
   lineCount: number;
+  /** Lines that still count — voided (removed) ones excluded. Zero means
+   * the order holds nothing and can be cleared rather than worked through. */
+  liveLineCount: number;
+  /** Null when nothing has ever been printed for it — an empty one is then
+   * deletable outright. */
+  firstBilledAt: string | null;
 }
 
 export interface ZReport {

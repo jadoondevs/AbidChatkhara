@@ -36,6 +36,8 @@ const blockingOrderSchema = z.object({
   status: z.string(),
   tableLabel: z.string().nullable(),
   lineCount: z.number().int(),
+  liveLineCount: z.number().int(),
+  firstBilledAt: z.string().nullable(),
 });
 
 const zReportSchema = z.object({

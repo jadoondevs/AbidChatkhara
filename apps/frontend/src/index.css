@@ -832,6 +832,28 @@ tbody tr:hover {
   }
 }
 
+/* The order screen is a fixed-height two-pane: neither the page nor the
+   split grows, so the bill panel on the right stays in view. Each pane
+   scrolls on its own — min-height:0 is what lets a grid child shrink
+   below its content and become a scroll container at all. */
+.order-screen {
+  min-height: 0;
+}
+
+.order-screen > .col {
+  min-height: 0;
+}
+
+/* The category tabs and the order header stay fixed; only the item grid
+   under them scrolls, so a long menu never pushes the tabs off-screen. */
+.order-screen .item-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  padding-bottom: 4px;
+}
+
 /* ---------------------------------------------------------------------
    Money
    --------------------------------------------------------------------- */
@@ -1182,13 +1204,22 @@ tbody tr:hover {
    Order screen
    --------------------------------------------------------------------- */
 
+/* The bill panel is a fixed-height column: its header and its
+   totals/"Go to bill" footer stay put, and only the line list between
+   them scrolls. Before this the whole panel scrolled, so a few lines
+   pushed "Go to bill" below the fold and the cashier had to scroll to
+   reach the one button that matters. */
 .running-bill {
   height: 100%;
-  overflow: auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .bill-lines {
   gap: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* Two rows per line rather than one: an item name, a quantity stepper,

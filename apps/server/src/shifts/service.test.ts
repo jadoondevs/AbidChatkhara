@@ -345,6 +345,27 @@ describe('shifts/service', () => {
       expect(closed.closedAt).not.toBeNull();
     });
 
+    it('an order emptied by removing a mis-tapped line reads as clearable and unblocks the close', async () => {
+      const { actor, item } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(1_000_00) }, actor);
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      const detail = await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
+      await removeLine(ctx.db, order.id, detail.lines[0]!.id, actor);
+
+      // It still has a (voided) line, so lineCount is 1 — but nothing
+      // live, so the till can offer to delete it rather than saying
+      // "finish or void it".
+      const blockers = await getBlockingOrders(ctx.db, shift.id);
+      expect(blockers[0]?.lineCount).toBe(1);
+      expect(blockers[0]?.liveLineCount).toBe(0);
+      expect(blockers[0]?.firstBilledAt).toBeNull();
+
+      await deleteEmptyOrder(ctx.db, order.id, actor);
+      expect(await getBlockingOrders(ctx.db, shift.id)).toEqual([]);
+      const closed = await closeShift(ctx.db, shift.id, { countedCashMinor: paisa(1_000_00) }, actor);
+      expect(closed.closedAt).not.toBeNull();
+    });
+
     it('keeps blocking while an order with items is still open', async () => {
       const { actor, item } = await setupBase();
       const shift = await openShift(ctx.db, { openingCashMinor: paisa(1_000_00) }, actor);

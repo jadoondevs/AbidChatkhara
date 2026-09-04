@@ -28,10 +28,15 @@ export interface BlockingOrderSummary {
   readonly orderType: OrderType;
   readonly status: OrderStatus;
   readonly tableLabel: string | null;
-  /** Zero means the order never became one: the close is being held up
-   * by a mis-tap, and the till can offer to delete it rather than
-   * leaving the manager to hunt for it on the floor. */
   readonly lineCount: number;
+  /** Lines that still count — voided (removed) ones excluded. Zero means
+   * the order holds nothing, even if a line was added and taken off
+   * again, so the close is being held up by a mis-tap the till can offer
+   * to delete rather than leaving the manager to hunt for it. */
+  readonly liveLineCount: number;
+  /** Null means nothing has ever been printed for it, so an empty one can
+   * be deleted outright rather than voided. */
+  readonly firstBilledAt: string | null;
 }
 
 /** Carries the list of what's blocking a close — the spec's "refuse to
@@ -146,7 +151,9 @@ export async function getBlockingOrders(db: Kysely<Database> | Transaction<Datab
       'order.order_type as orderType',
       'order.status as status',
       'order.table_label as tableLabel',
+      'order.first_billed_at as firstBilledAt',
       fn.count<number>('order_line.id').as('lineCount'),
+      fn.count<number>('order_line.id').filterWhere('order_line.voided', '=', 0).as('liveLineCount'),
     ])
     .where('order.shift_id', '=', shiftId)
     .where('order.status', 'in', ['open', 'billed'])
@@ -158,7 +165,9 @@ export async function getBlockingOrders(db: Kysely<Database> | Transaction<Datab
     orderType: r.orderType,
     status: r.status,
     tableLabel: r.tableLabel,
+    firstBilledAt: r.firstBilledAt,
     lineCount: Number(r.lineCount),
+    liveLineCount: Number(r.liveLineCount),
   }));
 }
 

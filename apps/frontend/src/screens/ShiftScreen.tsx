@@ -132,11 +132,15 @@ export function ShiftScreen(): JSX.Element {
                   <td>{order.orderType.replace('_', ' ')}</td>
                   <td>{order.status}</td>
                   <td className="num">
-                    {/* An order with nothing on it is holding the day
-                        open for no reason. Clearing it here saves the
-                        manager hunting for it on the floor at
-                        midnight. */}
-                    {order.lineCount === 0 ? (
+                    {/* An order with nothing LIVE on it is holding the
+                        day open for no reason — including one where a
+                        line was added and then removed, which leaves a
+                        voided line behind but no items. Clearing it here
+                        saves the manager hunting for it on the floor at
+                        midnight. Only ever a delete for one that was
+                        never billed; a billed-then-emptied order stays on
+                        the record and is voided from its own screen. */}
+                    {order.liveLineCount === 0 && order.firstBilledAt === null ? (
                       <button
                         className="ghost"
                         disabled={deleteOrder.isPending}
