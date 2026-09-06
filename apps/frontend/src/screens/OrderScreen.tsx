@@ -19,6 +19,7 @@ import {
   useVoidLine,
 } from '../api/hooks.js';
 import type { MenuItem, Modifier, ModifierGroup, OrderDetail, OrderLine } from '../api/types.js';
+import { ReopenOrderButton, VoidOrderButton } from '../components/OrderActions.tsx';
 import { ErrorBanner, Loading, ManagerApproval, Modal, Money, QtyInput } from '../components/ui.tsx';
 import { BillPanel } from './BillScreen.tsx';
 
@@ -115,7 +116,7 @@ export function OrderScreen(): JSX.Element {
         )}
       </div>
 
-      <RunningBill order={detail} onBill={() => setBilling(true)} />
+      <RunningBill order={detail} onBill={() => setBilling(true)} onVoided={() => navigate('/')} />
 
       {billing && (
         <Modal title="" wide onClose={() => setBilling(false)}>
@@ -397,7 +398,7 @@ function ModifierPicker({
   );
 }
 
-function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void }): JSX.Element {
+function RunningBill({ order, onBill, onVoided }: { order: OrderDetail; onBill: () => void; onVoided: () => void }): JSX.Element {
   const setLineQty = useSetLineQty();
   const removeLine = useRemoveLine();
   const voidLine = useVoidLine();
@@ -516,6 +517,18 @@ function RunningBill({ order, onBill }: { order: OrderDetail; onBill: () => void
         <button className="primary big" style={{ width: '100%', marginTop: 12 }} disabled={live.length === 0} onClick={onBill}>
           Go to bill
         </button>
+      </div>
+
+      {/* Order-level actions live below the bill, apart from the per-line
+          controls above. Reopen only appears once a bill has been printed
+          — that is the step the server's "reopen it first" refusal asks
+          for. Void is the honest way to cancel an order that should not
+          exist: it leaves the floor and stays on the record as voided,
+          never a silent delete. Both are manager-only on the server. */}
+      <div className="row order-actions">
+        {printed && <ReopenOrderButton orderId={order.id} />}
+        <span style={{ flex: 1 }} />
+        <VoidOrderButton orderId={order.id} onVoided={onVoided} />
       </div>
 
       {voiding && (

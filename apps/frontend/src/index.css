@@ -1279,6 +1279,13 @@ tbody tr:hover {
   border-top: 2px solid var(--divider);
 }
 
+/* Order-level actions (reopen / void) sit under the bill, set apart from
+   the per-line controls and the "Go to bill" call to action above. */
+.order-actions {
+  margin-top: 10px;
+  align-items: center;
+}
+
 /* A quantity that can be typed, not only stepped. */
 .qty-input {
   display: flex;
