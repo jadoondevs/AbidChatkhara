@@ -13,6 +13,7 @@ import {
   useSettleConsumption,
 } from '../api/hooks.js';
 import type { OrderDetail, PaymentOption, SettlementType } from '../api/types.js';
+import { VoidOrderButton } from '../components/OrderActions.tsx';
 import { PrintDecision } from '../components/PrintDecision.tsx';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 import { orderTitle } from './OrderScreen.tsx';
@@ -400,6 +401,13 @@ function CustomerPayment({ orderId }: { orderId: number }): JSX.Element {
           <button className="rail-secondary" onClick={() => navigate('/')}>
             Back to floor
           </button>
+          {/* A bill taken here by mistake shouldn't force the cashier back
+              to the order screen to cancel it. Nothing has been paid at
+              this point, so voiding is the honest exit: the order leaves
+              the floor and stays on the record as voided. Once a payment
+              lands the server refuses this (it's a refund then), so it is
+              only offered while nothing has been collected. */}
+          {detail.paidMinor === 0 && <VoidOrderButton orderId={orderId} onVoided={() => navigate('/')} label="Cancel this order" />}
         </div>
       </aside>
     </div>
