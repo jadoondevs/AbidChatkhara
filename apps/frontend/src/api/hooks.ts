@@ -44,6 +44,8 @@ import type {
   SettleConsumptionResult,
   SettlementType,
   Shift,
+  ShiftReport,
+  ShiftReportListEntry,
   TaxRule,
   User,
   VoidOrDiscountEntry,
@@ -524,6 +526,24 @@ export function usePayoutSheet(shiftId: number | null): UseQueryResult<WaiterPay
   return useQuery({
     queryKey: ['payout-sheet', shiftId],
     queryFn: () => api.get<WaiterPayoutLine[]>(`/api/shifts/${shiftId}/payout-sheet`),
+    enabled: shiftId !== null,
+  });
+}
+
+/** Every shift, newest first, for the Shift Reports list. */
+export function useShiftReportList(): UseQueryResult<ShiftReportListEntry[]> {
+  return useQuery({
+    queryKey: ['shift-report-list'],
+    queryFn: () => api.get<ShiftReportListEntry[]>('/api/shifts/report-list'),
+  });
+}
+
+/** The complete report for one shift — its Z-report plus item sales and
+ * partner share. */
+export function useShiftReport(shiftId: number | null): UseQueryResult<ShiftReport> {
+  return useQuery({
+    queryKey: ['shift-report', shiftId],
+    queryFn: () => api.get<ShiftReport>(`/api/shifts/${shiftId}/report`),
     enabled: shiftId !== null,
   });
 }

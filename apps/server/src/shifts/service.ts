@@ -4,6 +4,7 @@ import { recordAudit } from '../identity/audit.js';
 import type { OrderStatus, OrderType } from '../ordering/tables.js';
 import type { Database } from '../platform/db/types.js';
 import { eventBus } from '../platform/events/bus.js';
+import { itemMixReport } from '../reporting/service.js';
 
 declare module '../platform/events/types.js' {
   interface DomainEventMap {
@@ -414,5 +415,222 @@ export async function getZReport(db: Kysely<Database>, shiftId: number): Promise
     countedCashMinor: shift.countedCashMinor,
     varianceMinor: shift.varianceMinor,
     paymentMethodBreakdown,
+  };
+}
+
+// ---------------------------------------------------------------------
+// Shift reports (Reports → Shift Reports)
+// ---------------------------------------------------------------------
+
+/**
+ * A shift's business date: the LOCAL calendar day it was OPENED on.
+ *
+ * This is the crux of the whole feature. A shift opened at 4pm on the
+ * 11th and closed at 4am on the 12th is entirely the 11th's shift, and
+ * every order rung up under it — including the ones taken at 1am and 3am
+ * on the 12th — belongs to the 11th. Nothing here needs to reason about
+ * midnight, because an order is tagged with `shift_id` when it opens
+ * (ordering/createOrder) and that never changes; this function only
+ * turns the shift's opening instant into the day label to file it under.
+ *
+ * LOCAL, not UTC — the same local-day convention reporting's hourly
+ * buckets already use — because in Pakistan an evening straddles UTC
+ * midnight and a UTC date would mislabel it.
+ */
+export function businessDateOf(openedAtIso: string): string {
+  const date = new Date(openedAtIso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+async function userNamesByIds(db: Kysely<Database>, ids: readonly (number | null)[]): Promise<Map<number, string>> {
+  const unique = [...new Set(ids.filter((id): id is number => id !== null))];
+  if (unique.length === 0) return new Map();
+  const rows = await db.selectFrom('user').select(['id', 'name']).where('id', 'in', unique).execute();
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+
+export interface ShiftReportListEntry {
+  readonly shift: ShiftSummary;
+  readonly businessDate: string;
+  readonly status: 'open' | 'closed';
+  readonly openedByName: string | null;
+  readonly closedByName: string | null;
+  /** Cash + non-cash actually collected against this shift's orders — the
+   * headline figure the list shows next to each closed shift. */
+  readonly totalCollectedMinor: Paisa;
+  /** Customer bills closed under this shift. */
+  readonly orderCount: number;
+}
+
+/**
+ * Every shift, newest first, with just enough to draw the Shift Reports
+ * list: which day it belongs to, whether it's open, who ran it, and its
+ * headline takings. The two rollups (money collected, bills closed) are
+ * one grouped query each rather than a per-shift loop.
+ */
+export async function listShiftReports(db: Kysely<Database>): Promise<ShiftReportListEntry[]> {
+  const shifts = await listShifts(db);
+  if (shifts.length === 0) return [];
+
+  const collectedRows = await db
+    .selectFrom('payment')
+    .innerJoin('order', 'order.id', 'payment.order_id')
+    .select(({ fn }) => ['order.shift_id as shiftId', fn.sum<number>('payment.amount_minor').as('collected')])
+    .where('order.shift_id', 'is not', null)
+    .groupBy('order.shift_id')
+    .execute();
+  const collectedByShift = new Map<number, Paisa>(collectedRows.map((r) => [Number(r.shiftId), paisa(Number(r.collected ?? 0))]));
+
+  const countRows = await db
+    .selectFrom('order')
+    .select(({ fn }) => ['shift_id as shiftId', fn.count<number>('id').as('n')])
+    .where('shift_id', 'is not', null)
+    .where('channel', '=', 'customer')
+    .where('status', '=', 'closed')
+    .groupBy('shift_id')
+    .execute();
+  const countByShift = new Map<number, number>(countRows.map((r) => [Number(r.shiftId), Number(r.n)]));
+
+  const names = await userNamesByIds(db, shifts.flatMap((s) => [s.openedBy, s.closedBy]));
+
+  return shifts.map((shift) => ({
+    shift,
+    businessDate: businessDateOf(shift.openedAt),
+    status: shift.closedAt === null ? ('open' as const) : ('closed' as const),
+    openedByName: names.get(shift.openedBy) ?? null,
+    closedByName: shift.closedBy !== null ? (names.get(shift.closedBy) ?? null) : null,
+    totalCollectedMinor: collectedByShift.get(shift.id) ?? paisa(0),
+    orderCount: countByShift.get(shift.id) ?? 0,
+  }));
+}
+
+/** One item (in one sold size) on a shift's item-sales table. A lean
+ * projection of the item-mix report — the shift report doesn't show
+ * per-item ownership, that's what the partner-share section is for. */
+export interface ShiftItemSalesLine {
+  readonly itemId: number;
+  readonly itemName: string;
+  readonly variantName: string;
+  readonly categoryName: string | null;
+  readonly qty: number;
+  readonly netSalesMinor: Paisa;
+}
+
+export interface ShiftPartnerShareLine {
+  readonly partnerId: number;
+  readonly partnerName: string;
+  readonly amountMinor: Paisa;
+}
+
+/**
+ * What each partner earned this shift, from the frozen `line_allocation`
+ * rows the allocation engine already wrote at bill time — never a fresh
+ * re-allocation. Reversal rows (a refund) carry a negative amount, so
+ * summing every row nets a refunded sale back out, exactly as the
+ * per-partner statement does. Scoped by `order.shift_id` and closed
+ * orders only, the same as the item table above.
+ */
+async function shiftPartnerShare(db: Kysely<Database>, shiftId: number): Promise<ShiftPartnerShareLine[]> {
+  const rows = await db
+    .selectFrom('line_allocation')
+    .innerJoin('order_line', 'order_line.id', 'line_allocation.order_line_id')
+    .innerJoin('order', 'order.id', 'order_line.order_id')
+    .innerJoin('partner', 'partner.id', 'line_allocation.partner_id')
+    .select(['line_allocation.partner_id as partnerId', 'partner.name as partnerName', 'line_allocation.amount_minor as amountMinor'])
+    .where('order.shift_id', '=', shiftId)
+    .where('order.status', '=', 'closed')
+    .execute();
+
+  const byPartner = new Map<number, { name: string; amounts: Paisa[] }>();
+  for (const row of rows) {
+    const entry = byPartner.get(row.partnerId) ?? { name: row.partnerName, amounts: [] };
+    entry.amounts.push(row.amountMinor);
+    byPartner.set(row.partnerId, entry);
+  }
+  return [...byPartner.entries()]
+    .map(([partnerId, { name, amounts }]) => ({ partnerId, partnerName: name, amountMinor: sum(amounts) }))
+    .sort((a, b) => a.partnerName.localeCompare(b.partnerName));
+}
+
+/**
+ * The complete end-of-shift report behind Reports → Shift Reports: the
+ * full Z-report a shift already produces, plus everything an owner would
+ * otherwise have to open other reports for — every item sold this shift,
+ * the partner share, the order count and the business date it is all
+ * filed under. Nothing is recomputed that another function already owns:
+ * the sales/cash/payment figures ARE the Z-report, and the item table is
+ * the item-mix report scoped to this shift.
+ */
+export interface ShiftReport {
+  readonly shift: ShiftSummary;
+  readonly businessDate: string;
+  readonly status: 'open' | 'closed';
+  readonly openedByName: string | null;
+  readonly closedByName: string | null;
+  /** Customer bills closed under this shift — the denominator for the
+   * average bill (which the screen divides for display only). */
+  readonly orderCount: number;
+  /** Cash + non-cash actually collected. Includes tax and service
+   * charge, so it is deliberately larger than net customer sales. */
+  readonly totalCollectedMinor: Paisa;
+  readonly zReport: ZReport;
+  readonly itemSales: ShiftItemSalesLine[];
+  readonly itemSalesQtyTotal: number;
+  /** Sum of the item table's net sales — equals the Z-report's customer
+   * sales, because both are net of the same prorated discounts and
+   * exclude service charge, which is not revenue. */
+  readonly itemSalesTotalMinor: Paisa;
+  readonly partnerShare: ShiftPartnerShareLine[];
+  readonly partnerShareTotalMinor: Paisa;
+}
+
+export async function getShiftReport(db: Kysely<Database>, shiftId: number): Promise<ShiftReport> {
+  // getZReport throws if the shift doesn't exist, so this is also the
+  // existence check — and it is the single source of the sales, cash and
+  // payment figures, never a second calculation of them.
+  const zReport = await getZReport(db, shiftId);
+  const shift = zReport.shift;
+
+  const names = await userNamesByIds(db, [shift.openedBy, shift.closedBy]);
+
+  const orderCountRow = await db
+    .selectFrom('order')
+    .select(({ fn }) => [fn.count<number>('id').as('n')])
+    .where('shift_id', '=', shiftId)
+    .where('channel', '=', 'customer')
+    .where('status', '=', 'closed')
+    .executeTakeFirst();
+  const orderCount = Number(orderCountRow?.n ?? 0);
+
+  // Revenue items only (customer channel): the total then reconciles to
+  // net customer sales rather than to combined sales — staff/owner meals
+  // are consumption and live in their own report.
+  const itemMix = await itemMixReport(db, { shiftId, customerChannelOnly: true });
+  const itemSales: ShiftItemSalesLine[] = itemMix.map((line) => ({
+    itemId: line.itemId,
+    itemName: line.itemName,
+    variantName: line.variantName,
+    categoryName: line.categoryName,
+    qty: line.qty,
+    netSalesMinor: line.netSalesMinor,
+  }));
+
+  const partnerShare = await shiftPartnerShare(db, shiftId);
+
+  return {
+    shift,
+    businessDate: businessDateOf(shift.openedAt),
+    status: shift.closedAt === null ? 'open' : 'closed',
+    openedByName: names.get(shift.openedBy) ?? null,
+    closedByName: shift.closedBy !== null ? (names.get(shift.closedBy) ?? null) : null,
+    orderCount,
+    totalCollectedMinor: add(zReport.cashPaymentsMinor, zReport.nonCashPaymentsMinor),
+    zReport,
+    itemSales,
+    itemSalesQtyTotal: itemSales.reduce((total, line) => total + line.qty, 0),
+    itemSalesTotalMinor: sum(itemSales.map((line) => line.netSalesMinor)),
+    partnerShare,
+    partnerShareTotalMinor: sum(partnerShare.map((line) => line.amountMinor)),
   };
 }

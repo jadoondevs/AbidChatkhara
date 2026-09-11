@@ -505,6 +505,52 @@ export interface WaiterPayoutLine {
   totalMinor: Paisa;
 }
 
+/** One row in the Shift Reports list: a shift filed under the local day
+ * it was opened on, with its headline takings. */
+export interface ShiftReportListEntry {
+  shift: Shift;
+  businessDate: string;
+  status: 'open' | 'closed';
+  openedByName: string | null;
+  closedByName: string | null;
+  totalCollectedMinor: Paisa;
+  orderCount: number;
+}
+
+export interface ShiftItemSalesLine {
+  itemId: number;
+  itemName: string;
+  variantName: string;
+  categoryName: string | null;
+  qty: number;
+  netSalesMinor: Paisa;
+}
+
+export interface ShiftPartnerShareLine {
+  partnerId: number;
+  partnerName: string;
+  amountMinor: Paisa;
+}
+
+/** The complete per-shift report behind Reports → Shift Reports: the
+ * shift's own Z-report plus item sales, partner share and the headline
+ * figures, all filed under one business date. */
+export interface ShiftReport {
+  shift: Shift;
+  businessDate: string;
+  status: 'open' | 'closed';
+  openedByName: string | null;
+  closedByName: string | null;
+  orderCount: number;
+  totalCollectedMinor: Paisa;
+  zReport: ZReport;
+  itemSales: ShiftItemSalesLine[];
+  itemSalesQtyTotal: number;
+  itemSalesTotalMinor: Paisa;
+  partnerShare: ShiftPartnerShareLine[];
+  partnerShareTotalMinor: Paisa;
+}
+
 export interface DailySalesReport {
   grossSalesMinor: Paisa;
   discountsMinor: Paisa;

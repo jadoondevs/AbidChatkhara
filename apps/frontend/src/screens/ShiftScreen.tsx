@@ -242,7 +242,7 @@ export function ShiftScreen(): JSX.Element {
  * close computes it, so what this screen shows before closing is what
  * the close will record.
  */
-function ZReportCard({ zReport, loading }: { zReport: ZReport | undefined; loading: boolean }): JSX.Element {
+export function ZReportCard({ zReport, loading }: { zReport: ZReport | undefined; loading: boolean }): JSX.Element {
   if (loading) return <Loading />;
   if (!zReport) return <div className="card" />;
 
