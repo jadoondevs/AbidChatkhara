@@ -343,6 +343,21 @@ export interface ItemMixLine {
 }
 
 /**
+ * Item mix can be scoped two ways. The default is a date range over
+ * `order.closed_at`, as every other report here is. A shift report
+ * instead scopes by `order.shift_id`, which is the whole point of a
+ * shift living across midnight: the sale is tagged with the shift it was
+ * rung up under, never with the calendar day, so `shiftId` here follows
+ * the order's own foreign key and ignores the range entirely.
+ * `customerChannelOnly` drops staff/owner meals so the total reconciles
+ * to customer revenue rather than to combined sales.
+ */
+export interface ItemMixOptions extends DateRangeOptions {
+  readonly shiftId?: number | undefined;
+  readonly customerChannelOnly?: boolean | undefined;
+}
+
+/**
  * Spec: "quantity and value per item, with owning partners and their
  * shares shown" — but a size is not an item, so an item sold Half and
  * Full is two rows, not one aggregate. The split is by the SOLD
@@ -361,15 +376,23 @@ export interface ItemMixLine {
  * `share_bp_snapshot`. It is a property of the base item, so every
  * variant of an item shows the same owners.
  */
-export async function itemMixReport(db: Kysely<Database>, opts: DateRangeOptions = {}): Promise<ItemMixLine[]> {
+export async function itemMixReport(db: Kysely<Database>, opts: ItemMixOptions = {}): Promise<ItemMixLine[]> {
   let query = db
     .selectFrom('order_line')
     .innerJoin('order', 'order.id', 'order_line.order_id')
     .select(['order_line.id as lineId', 'order_line.item_id as itemId', 'order_line.qty as qty', 'order_line.net_sales_minor as netSalesMinor'])
     .where('order.status', '=', 'closed')
     .where('order_line.voided', '=', 0);
-  if (opts.fromInclusive) query = query.where('order.closed_at', '>=', opts.fromInclusive);
-  if (opts.toExclusive) query = query.where('order.closed_at', '<', opts.toExclusive);
+  // A shift scope follows the order's own shift_id and ignores the date
+  // range — that is exactly how an after-midnight sale stays on the
+  // shift it was rung up under. Otherwise the usual closed_at range.
+  if (opts.shiftId !== undefined) {
+    query = query.where('order.shift_id', '=', opts.shiftId);
+  } else {
+    if (opts.fromInclusive) query = query.where('order.closed_at', '>=', opts.fromInclusive);
+    if (opts.toExclusive) query = query.where('order.closed_at', '<', opts.toExclusive);
+  }
+  if (opts.customerChannelOnly) query = query.where('order.channel', '=', 'customer');
   const rows = await query.execute();
 
   // The sold configuration of each line, from the frozen snapshot — the

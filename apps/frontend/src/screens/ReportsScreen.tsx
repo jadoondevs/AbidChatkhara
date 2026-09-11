@@ -8,19 +8,25 @@ import {
   usePartnerStatement,
   usePartners,
   useServiceChargeReport,
+  useShiftReport,
+  useShiftReportList,
   useVoidAndDiscountReport,
   type DateRange,
 } from '../api/hooks.js';
-import type { DailySalesReport, ItemMixLine } from '../api/types.js';
+import type { DailySalesReport, ItemMixLine, ShiftReportListEntry } from '../api/types.js';
 import { ErrorBanner, Loading, Money } from '../components/ui.tsx';
+import { ZReportCard } from './ShiftScreen.tsx';
 
-type ReportKey = 'dashboard' | 'daily-sales' | 'partner-statement' | 'item-mix' | 'consumption' | 'service-charge' | 'void-discount';
+type ReportKey = 'dashboard' | 'daily-sales' | 'shift-reports' | 'partner-statement' | 'item-mix' | 'consumption' | 'service-charge' | 'void-discount';
 
 const REPORTS: { key: ReportKey; label: string; path: string }[] = [
   // The dashboard composes two reports that already exist rather than
   // being one of its own, so its CSV is the daily-sales export.
   { key: 'dashboard', label: 'Dashboard', path: '/api/reports/daily-sales' },
   { key: 'daily-sales', label: 'Daily sales', path: '/api/reports/daily-sales' },
+  // Scoped by shift, not by the date range every other report shares —
+  // it brings its own shift picker instead.
+  { key: 'shift-reports', label: 'Shift reports', path: '' },
   { key: 'partner-statement', label: 'Partner statement', path: '/api/reports/partners' },
   { key: 'item-mix', label: 'Item mix', path: '/api/reports/item-mix' },
   { key: 'consumption', label: 'Consumption', path: '/api/reports/consumption' },
@@ -69,11 +75,15 @@ export function ReportsScreen(): JSX.Element {
 
   const report = REPORTS.find((candidate) => candidate.key === active);
   const csvHref =
-    active === 'partner-statement'
-      ? partnerId === ''
-        ? null
-        : `/api/reports/partners/${partnerId}/statement${query({ ...range, format: 'csv' })}`
-      : `${report?.path ?? ''}${query({ ...range, format: 'csv' })}`;
+    active === 'shift-reports'
+      ? // Shift reports carry their own picker and no shared date range —
+        // the CSV path here would be meaningless, so there is none.
+        null
+      : active === 'partner-statement'
+        ? partnerId === ''
+          ? null
+          : `/api/reports/partners/${partnerId}/statement${query({ ...range, format: 'csv' })}`
+        : `${report?.path ?? ''}${query({ ...range, format: 'csv' })}`;
 
   return (
     <div className="col">
@@ -90,6 +100,9 @@ export function ReportsScreen(): JSX.Element {
         ))}
       </div>
 
+      {/* The shared date-range filter drives every report EXCEPT shift
+          reports, which are scoped by shift and bring their own picker. */}
+      {active !== 'shift-reports' && (
       <div className="card col report-filter">
         <div className="row" style={{ flexWrap: 'wrap' }}>
           <div className="tabs">
@@ -153,9 +166,11 @@ export function ReportsScreen(): JSX.Element {
           )}
         </div>
       </div>
+      )}
 
       {active === 'dashboard' && <Dashboard range={range} />}
       {active === 'daily-sales' && <DailySales range={range} />}
+      {active === 'shift-reports' && <ShiftReports />}
       {active === 'partner-statement' && <PartnerStatementView partnerId={partnerId === '' ? null : partnerId} range={range} />}
       {active === 'item-mix' && <ItemMix range={range} />}
       {active === 'consumption' && <Consumption range={range} />}
@@ -783,6 +798,330 @@ function VoidsAndDiscounts({ range }: { range: DateRange }): JSX.Element {
         </tbody>
       </table>
     </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Shift reports
+// ---------------------------------------------------------------------
+
+/** A shift's business date as "Sep 9, 2026". Parsed as a LOCAL day — the
+ * server already gave us the local calendar day it was opened on, so we
+ * must not let `new Date('2026-09-09')` reinterpret it as UTC midnight. */
+function formatBusinessDate(businessDate: string): string {
+  const [y, m, d] = businessDate.split('-').map(Number);
+  return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function dayLabel(businessDate: string): string {
+  if (businessDate === localDay(new Date())) return 'Today';
+  if (businessDate === daysAgo(1)) return 'Yesterday';
+  return formatBusinessDate(businessDate);
+}
+
+/**
+ * Shift reports: a list of every shift on the left, the complete report
+ * for the selected one on the right. Shifts are the unit a restaurant
+ * actually thinks in — one trading night, opened before midnight and
+ * closed after — so this is scoped by shift, not by the calendar date
+ * range the other tabs share. The newest shift (the open one, if there
+ * is one) is selected by default.
+ */
+function ShiftReports(): JSX.Element {
+  const list = useShiftReportList();
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  if (list.isLoading) return <Loading />;
+  if (list.error) return <ErrorBanner error={list.error} />;
+  const entries = list.data ?? [];
+  if (entries.length === 0) return <p className="muted">No shifts yet. Open a shift to start recording sales.</p>;
+
+  const activeId = selectedId ?? entries[0]?.shift.id ?? null;
+
+  return (
+    <div className="shift-reports-layout">
+      <div className="col shift-list">
+        {entries.map((entry) => (
+          <ShiftListRow key={entry.shift.id} entry={entry} active={entry.shift.id === activeId} onSelect={() => setSelectedId(entry.shift.id)} />
+        ))}
+      </div>
+      <div className="col shift-report-detail">
+        <ShiftReportView shiftId={activeId} />
+      </div>
+    </div>
+  );
+}
+
+function ShiftListRow({ entry, active, onSelect }: { entry: ShiftReportListEntry; active: boolean; onSelect: () => void }): JSX.Element {
+  return (
+    <button className={`shift-list-row${active ? ' active' : ''}`} onClick={onSelect}>
+      <span className="shift-list-day">{dayLabel(entry.businessDate)}</span>
+      <span className="muted shift-list-date">
+        {formatBusinessDate(entry.businessDate)} · #{entry.shift.id}
+      </span>
+      <span className="shift-list-foot">
+        {entry.status === 'open' ? (
+          <span className="pill part-paid">OPEN</span>
+        ) : (
+          <>
+            <span className="pill">CLOSED</span>
+            <Money minor={entry.totalCollectedMinor} />
+          </>
+        )}
+      </span>
+    </button>
+  );
+}
+
+function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
+  const report = useShiftReport(shiftId);
+  if (shiftId === null) return <p className="muted">Pick a shift.</p>;
+  if (report.isLoading) return <Loading />;
+  if (report.error) return <ErrorBanner error={report.error} />;
+  const data = report.data;
+  if (!data) return <p className="muted">No data.</p>;
+
+  const z = data.zReport;
+
+  return (
+    <div className="col">
+      {/* Header (requirement 3) */}
+      <div className="card col">
+        <div className="row" style={{ alignItems: 'baseline' }}>
+          <h2 style={{ margin: 0, flex: 1 }}>
+            Shift #{data.shift.id} <span className="muted">· {formatBusinessDate(data.businessDate)}</span>
+          </h2>
+          {data.status === 'open' ? <span className="pill part-paid">OPEN</span> : <span className="pill">CLOSED</span>}
+        </div>
+        <div className="detail-grid">
+          <ShiftField label="Business date" value={formatBusinessDate(data.businessDate)} />
+          <ShiftField label="Opened" value={`${new Date(data.shift.openedAt).toLocaleString()}${data.openedByName ? ` · ${data.openedByName}` : ''}`} />
+          <ShiftField
+            label="Closed"
+            value={data.shift.closedAt === null ? 'Still open' : `${new Date(data.shift.closedAt).toLocaleString()}${data.closedByName ? ` · ${data.closedByName}` : ''}`}
+          />
+        </div>
+      </div>
+
+      {/* Summary (requirement 4) */}
+      <StatCards
+        cards={[
+          { label: 'Net customer sales', value: <Money minor={z.customerSalesMinor} />, note: 'revenue, excl. service charge' },
+          { label: 'Orders', value: data.orderCount, note: data.orderCount === 1 ? 'customer bill' : 'customer bills' },
+          {
+            label: 'Average bill',
+            value: data.orderCount > 0 ? <Money minor={divideBy(data.totalCollectedMinor, data.orderCount)} /> : '—',
+            note: 'total collected ÷ bills',
+          },
+          { label: 'Service charge', value: <Money minor={z.serviceChargeCollectedMinor} />, note: 'held for waiters, not revenue' },
+        ]}
+      />
+
+      <div className="card">
+        <h3 style={{ margin: 0 }}>Summary</h3>
+        <div className="total-line grand">
+          <span>Net customer sales (revenue)</span>
+          <Money minor={z.customerSalesMinor} />
+        </div>
+        {/* Kept out of the revenue figure on purpose (docs/decisions/008):
+            service charge is money held for the waiters, so it is its own
+            line, never added into sales. */}
+        <div className="total-line">
+          <span>Service charge (NOT revenue — held for waiters)</span>
+          <Money minor={z.serviceChargeCollectedMinor} />
+        </div>
+        <div className="total-line">
+          <span>Tax collected</span>
+          <Money minor={z.taxCollectedMinor} />
+        </div>
+        <div className="total-line grand">
+          <span>Total collected</span>
+          <Money minor={data.totalCollectedMinor} />
+        </div>
+        <div className="total-line">
+          <span>… cash</span>
+          <Money minor={z.cashPaymentsMinor} />
+        </div>
+        <div className="total-line">
+          <span>… other methods</span>
+          <Money minor={z.nonCashPaymentsMinor} />
+        </div>
+      </div>
+
+      {/* Item sales (requirement 5) — every item, not a top-N */}
+      <div className="card">
+        <h3 style={{ margin: 0 }}>Item sales</h3>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Every item sold this shift. Service charge is not included — these are item sales only.
+        </p>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th className="num">#</th>
+                <th>Item</th>
+                <th>Category</th>
+                <th className="num">Qty</th>
+                <th className="num">Net sales</th>
+                <th className="num">% of sales</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.itemSales.map((line, index) => (
+                <tr key={`${line.itemId}-${line.variantName}`}>
+                  <td className="num muted">{index + 1}</td>
+                  <td>{line.variantName}</td>
+                  <td className="muted">{line.categoryName ?? '—'}</td>
+                  <td className="num">{line.qty}</td>
+                  <td className="num">
+                    <Money minor={line.netSalesMinor} />
+                  </td>
+                  <td className="num muted">{sharePercent(line.netSalesMinor, data.itemSalesTotalMinor)}</td>
+                </tr>
+              ))}
+              {data.itemSales.length === 0 && (
+                <tr>
+                  <td className="muted" colSpan={6}>
+                    Nothing sold this shift yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+            {data.itemSales.length > 0 && (
+              <tfoot>
+                <tr className="grand">
+                  <td />
+                  <td>
+                    <strong>TOTAL</strong>
+                  </td>
+                  <td />
+                  <td className="num">
+                    <strong>{data.itemSalesQtyTotal}</strong>
+                  </td>
+                  <td className="num">
+                    <strong>
+                      <Money minor={data.itemSalesTotalMinor} />
+                    </strong>
+                  </td>
+                  <td />
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+
+      {/* Payment breakdown (requirement 6) */}
+      <div className="card">
+        <h3 style={{ margin: 0 }}>Payment breakdown</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th className="num">Amount</th>
+              <th className="num">%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {z.paymentMethodBreakdown.map((line) => (
+              <tr key={line.paymentMethodId}>
+                <td>{line.paymentMethodName}</td>
+                <td className="num">
+                  <Money minor={line.totalMinor} />
+                </td>
+                <td className="num muted">{sharePercent(line.totalMinor, data.totalCollectedMinor)}</td>
+              </tr>
+            ))}
+            {z.paymentMethodBreakdown.length === 0 && (
+              <tr>
+                <td className="muted" colSpan={3}>
+                  No payments taken this shift.
+                </td>
+              </tr>
+            )}
+          </tbody>
+          {z.paymentMethodBreakdown.length > 0 && (
+            <tfoot>
+              <tr className="grand">
+                <td>
+                  <strong>TOTAL</strong>
+                </td>
+                <td className="num">
+                  <strong>
+                    <Money minor={data.totalCollectedMinor} />
+                  </strong>
+                </td>
+                <td />
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+
+      {/* Partner share (requirement 7) */}
+      <div className="card">
+        <h3 style={{ margin: 0 }}>Partner share</h3>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Sales credited to each partner from the items they own, for this shift.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Partner</th>
+              <th className="num">Share</th>
+              <th className="num">%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.partnerShare.map((line) => (
+              <tr key={line.partnerId}>
+                <td>{line.partnerName}</td>
+                <td className="num">
+                  <Money minor={line.amountMinor} />
+                </td>
+                <td className="num muted">{sharePercent(line.amountMinor, data.partnerShareTotalMinor)}</td>
+              </tr>
+            ))}
+            {data.partnerShare.length === 0 && (
+              <tr>
+                <td className="muted" colSpan={3}>
+                  No partner-owned items sold this shift.
+                </td>
+              </tr>
+            )}
+          </tbody>
+          {data.partnerShare.length > 0 && (
+            <tfoot>
+              <tr className="grand">
+                <td>
+                  <strong>TOTAL PARTNER SHARE</strong>
+                </td>
+                <td className="num">
+                  <strong>
+                    <Money minor={data.partnerShareTotalMinor} />
+                  </strong>
+                </td>
+                <td />
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+
+      {/* The full Z-report accounting chain + drawer reconciliation
+          (requirement 8), reusing the very same card the operational
+          Shift screen shows — not a second copy of it. */}
+      <ZReportCard zReport={z} loading={false} />
+    </div>
+  );
+}
+
+function ShiftField({ label, value }: { label: string; value: string }): JSX.Element {
+  return (
+    <div className="detail-field">
+      <span className="muted">{label}</span>
+      <span>{value}</span>
     </div>
   );
 }

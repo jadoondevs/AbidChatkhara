@@ -11,7 +11,9 @@ import {
   getBlockingOrders,
   getOpenShift,
   getShift,
+  getShiftReport,
   getZReport,
+  listShiftReports,
   listShifts,
   openShift,
   ShiftCloseBlockedError,
@@ -64,6 +66,47 @@ const zReportSchema = z.object({
 });
 
 const payoutLineSchema = z.object({ waiterId: z.number().int(), waiterName: z.string(), totalMinor: z.number().int() });
+
+const shiftItemSalesLineSchema = z.object({
+  itemId: z.number().int(),
+  itemName: z.string(),
+  variantName: z.string(),
+  categoryName: z.string().nullable(),
+  qty: z.number().int(),
+  netSalesMinor: z.number().int(),
+});
+
+const shiftPartnerShareLineSchema = z.object({
+  partnerId: z.number().int(),
+  partnerName: z.string(),
+  amountMinor: z.number().int(),
+});
+
+const shiftReportListEntrySchema = z.object({
+  shift: shiftSchema,
+  businessDate: z.string(),
+  status: z.enum(['open', 'closed']),
+  openedByName: z.string().nullable(),
+  closedByName: z.string().nullable(),
+  totalCollectedMinor: z.number().int(),
+  orderCount: z.number().int(),
+});
+
+const shiftReportSchema = z.object({
+  shift: shiftSchema,
+  businessDate: z.string(),
+  status: z.enum(['open', 'closed']),
+  openedByName: z.string().nullable(),
+  closedByName: z.string().nullable(),
+  orderCount: z.number().int(),
+  totalCollectedMinor: z.number().int(),
+  zReport: zReportSchema,
+  itemSales: z.array(shiftItemSalesLineSchema),
+  itemSalesQtyTotal: z.number().int(),
+  itemSalesTotalMinor: z.number().int(),
+  partnerShare: z.array(shiftPartnerShareLineSchema),
+  partnerShareTotalMinor: z.number().int(),
+});
 
 export interface ShiftsPluginOptions {
   db: Kysely<Database>;
@@ -166,6 +209,27 @@ export const shiftsRoutes: FastifyPluginAsync<ShiftsPluginOptions> = async (fast
     async (request, reply) => {
       requireAuth(request, reply);
       return getZReport(db, request.params.id);
+    },
+  );
+
+  /**
+   * Reports → Shift Reports. Financial/audit surface, so manager+, the
+   * same gate the reporting routes use — unlike the operational
+   * open/z-report reads above, which any signed-in user needs at the
+   * till. `report-list` is a static segment, so find-my-way matches it
+   * ahead of `/:id` and there is no collision.
+   */
+  app.get('/api/shifts/report-list', { schema: { response: { 200: z.array(shiftReportListEntrySchema) } } }, async (request, reply) => {
+    requireRole(request, reply, 'manager');
+    return listShiftReports(db);
+  });
+
+  app.get(
+    '/api/shifts/:id/report',
+    { schema: { params: z.object({ id: z.coerce.number().int() }), response: { 200: shiftReportSchema } } },
+    async (request, reply) => {
+      requireRole(request, reply, 'manager');
+      return getShiftReport(db, request.params.id);
     },
   );
 

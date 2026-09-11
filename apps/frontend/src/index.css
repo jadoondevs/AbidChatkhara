@@ -1955,6 +1955,73 @@ tbody tr:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------------------------------------------------------------
+   Reports → Shift reports: the shift list beside the selected
+   shift's full report. Stacks to one column on a narrow screen,
+   the same breakpoint the order-detail grid uses.
+   --------------------------------------------------------------- */
+.shift-reports-layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 260px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.shift-list {
+  gap: 8px;
+}
+
+.shift-list-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  text-align: left;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.shift-list-row.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.shift-list-day {
+  font-family: var(--font-heading);
+  font-weight: 700;
+}
+
+.shift-list-date {
+  font-size: 13px;
+}
+
+.shift-list-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.shift-report-detail .detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .shift-reports-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .shift-report-detail .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Modifiers and void notes hang under the item they belong to rather
    than taking a row of their own — the eye should read one line per
    thing that was ordered. */
