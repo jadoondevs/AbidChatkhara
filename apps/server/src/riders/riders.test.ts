@@ -67,10 +67,9 @@ describe('riders', () => {
       await expect(createOrder(ctx.db, { orderType: 'delivery', riderId: 9999 }, actor)).rejects.toThrow();
     });
 
-    it('a delivery order needs no rider', async () => {
+    it('requires a rider on a delivery order — as a dine-in requires a waiter', async () => {
       const { actor } = await setup();
-      const order = await createOrder(ctx.db, { orderType: 'delivery' }, actor);
-      expect(order.riderId).toBeNull();
+      await expect(createOrder(ctx.db, { orderType: 'delivery' }, actor)).rejects.toThrow(OrderStateError);
     });
   });
 });

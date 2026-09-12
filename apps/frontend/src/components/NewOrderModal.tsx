@@ -61,10 +61,10 @@ export function NewOrderModal({ onClose, onCreated }: { onClose: () => void; onC
 
   const dineIn = orderType === 'dine_in';
   const delivery = orderType === 'delivery';
-  // The waiter is still required for dine-in: service charge and the
-  // payout sheet are attributed to a person, and there is nobody to
-  // attribute them to without one.
-  const canCreate = !dineIn || waiterId !== '';
+  // A dine-in needs a waiter and a delivery needs a rider: each order is
+  // attributed to the person who ran it, and the payout sheets are keyed
+  // to them. Neither can be started without that person.
+  const canCreate = (!dineIn || waiterId !== '') && (!delivery || riderId !== '');
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -156,15 +156,14 @@ export function NewOrderModal({ onClose, onCreated }: { onClose: () => void; onC
             </div>
           )}
 
-          {/* The rider is who the order — and any delivery charge — is
-              owed to. Optional here; billing only requires one once a
-              delivery charge is added, the same way the waiter is only
-              needed for a service charge. */}
+          {/* The rider carries the order and is who any delivery charge is
+              owed to — required on every delivery, the same way a waiter is
+              required on every dine-in. */}
           {delivery && (
             <div>
-              <label htmlFor="rider">Rider (optional)</label>
+              <label htmlFor="rider">Rider</label>
               <select id="rider" value={riderId} onChange={(event) => setRiderId(event.target.value === '' ? '' : Number(event.target.value))}>
-                <option value="">No rider yet…</option>
+                <option value="">Select a rider…</option>
                 {riders.map((rider) => (
                   <option key={rider.id} value={rider.id}>
                     {rider.name}

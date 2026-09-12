@@ -92,13 +92,12 @@ describe('delivery/delivery-charge', () => {
     expect(report.riderPayoutTotalMinor).toBe(100_00);
   });
 
-  it('refuses a delivery charge with no rider to owe it to', async () => {
-    const { actor, item } = await setup();
+  it('refuses a delivery order with no rider — the charge would have nobody to be owed to', async () => {
+    const { actor } = await setup();
     await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
-
-    const order = await createOrder(ctx.db, { orderType: 'delivery' }, actor); // no rider
-    await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, actor);
-    await expect(billOrder(ctx.db, order.id, { deliveryChargeMinor: paisa(100_00) }, actor)).rejects.toThrow(OrderStateError);
+    // A rider is required on every delivery order, so a delivery charge
+    // always has someone to be owed to.
+    await expect(createOrder(ctx.db, { orderType: 'delivery' }, actor)).rejects.toThrow(OrderStateError);
   });
 
   it('refuses a delivery charge on a non-delivery order', async () => {

@@ -576,6 +576,12 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
   if (input.orderType === 'dine_in' && !input.waiterId) {
     throw new OrderStateError('dine_in orders require a waiter');
   }
+  // A delivery order is attributed to a rider the same way a dine-in is
+  // attributed to a waiter — every one, whether or not it carries a
+  // delivery charge.
+  if (input.orderType === 'delivery' && !input.riderId) {
+    throw new OrderStateError('delivery orders require a rider');
+  }
   if (input.waiterId !== undefined) {
     const waiter = await db.selectFrom('user').select('id').where('id', '=', input.waiterId).executeTakeFirst();
     if (!waiter) throw new Error(`user ${input.waiterId} not found`);

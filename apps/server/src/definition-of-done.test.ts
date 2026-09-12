@@ -7,6 +7,7 @@ import { addLine, billOrder, createOrder, setDiscount, voidLine } from './orderi
 import { createTestDb, enableServiceCharge } from './platform/db/test-helpers.js';
 import type { PrinterTarget } from './platform/printing/client.js';
 import { allocationReconciliation, dailySalesReport, partnerStatement } from './reporting/service.js';
+import { createRider } from './riders/service.js';
 import { seed, type SeedResult } from './seed.js';
 import { closeShift, getZReport, openShift } from './shifts/service.js';
 
@@ -133,7 +134,8 @@ describe('definition of done — a full day, offline', () => {
     expect(takeawaySettled.invoiceNo).toBe(2);
 
     // ---- 3. delivery, later refunded in full ----
-    const delivery = await createOrder(ctx.db, { orderType: 'delivery' }, cashier);
+    const rider = await createRider(ctx.db, 'Rider', manager);
+    const delivery = await createOrder(ctx.db, { orderType: 'delivery', riderId: rider.id }, cashier);
     await addLine(ctx.db, delivery.id, { itemId: kebab, qty: 2 }, cashier); // Rs 1,900, shared 50/50
     const deliveryBilled = await billOrder(ctx.db, delivery.id, {}, cashier);
     await recordPayment(ctx.db, delivery.id, { paymentMethodId: cash, amountMinor: deliveryBilled.totalMinor }, cashier);

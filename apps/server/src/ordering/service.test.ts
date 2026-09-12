@@ -15,6 +15,7 @@ import { createPaymentMethod, recordPayment } from '../billing/service.js';
 import { createPerson } from '../consumption/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createUser } from '../identity/service.js';
+import { createRider } from '../riders/service.js';
 import { createTestDb, enableServiceCharge } from '../platform/db/test-helpers.js';
 import { eventBus } from '../platform/events/bus.js';
 import {
@@ -71,7 +72,10 @@ describe('ordering/service', () => {
     // Several tests here bill with a hand-entered service charge,
     // which a disabled charge refuses (see computeServiceCharge).
     await enableServiceCharge(ctx.db, catalogActor);
-    return { admin, server, item, itemWithModifiers, group, mild, extraHot, orderActor };
+    // A rider for the delivery-order tests — every delivery order needs
+    // one, the same way every dine-in needs a waiter.
+    const rider = await createRider(ctx.db, 'Rider', catalogActor);
+    return { admin, server, item, itemWithModifiers, group, mild, extraHot, orderActor, rider };
   }
 
   describe('createOrder', () => {
@@ -105,9 +109,9 @@ describe('ordering/service', () => {
     });
 
     it('opens takeaway and delivery orders with no table', async () => {
-      const { orderActor } = await setupMenu();
+      const { orderActor, rider } = await setupMenu();
       const takeaway = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
-      const delivery = await createOrder(ctx.db, { orderType: 'delivery' }, orderActor);
+      const delivery = await createOrder(ctx.db, { orderType: 'delivery', riderId: rider.id }, orderActor);
       expect(takeaway.tableLabel).toBeNull();
       expect(delivery.tableLabel).toBeNull();
     });
@@ -913,10 +917,10 @@ describe('ordering/service', () => {
    */
   describe('customer details and line notes', () => {
     it('records the customer at order creation', async () => {
-      const { orderActor } = await setupMenu();
+      const { orderActor, rider } = await setupMenu();
       const order = await createOrder(
         ctx.db,
-        { orderType: 'delivery', customerName: 'A. Customer', customerPhone: '0300-0000000' },
+        { orderType: 'delivery', riderId: rider.id, customerName: 'A. Customer', customerPhone: '0300-0000000' },
         orderActor,
       );
       expect(order.customerName).toBe('A. Customer');
@@ -931,8 +935,8 @@ describe('ordering/service', () => {
     });
 
     it('adds the customer to an order already taken, one field at a time', async () => {
-      const { orderActor } = await setupMenu();
-      const order = await createOrder(ctx.db, { orderType: 'delivery' }, orderActor);
+      const { orderActor, rider } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'delivery', riderId: rider.id }, orderActor);
 
       const named = await setOrderCustomer(ctx.db, order.id, { customerName: 'A. Customer' }, orderActor);
       expect(named.customerName).toBe('A. Customer');
@@ -944,8 +948,8 @@ describe('ordering/service', () => {
     });
 
     it('clears a field given an empty string', async () => {
-      const { orderActor } = await setupMenu();
-      const order = await createOrder(ctx.db, { orderType: 'delivery', customerName: 'Wrong Person' }, orderActor);
+      const { orderActor, rider } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'delivery', riderId: rider.id, customerName: 'Wrong Person' }, orderActor);
       const cleared = await setOrderCustomer(ctx.db, order.id, { customerName: '' }, orderActor);
       expect(cleared.customerName).toBeNull();
     });
