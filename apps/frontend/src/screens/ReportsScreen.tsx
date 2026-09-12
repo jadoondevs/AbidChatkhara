@@ -418,6 +418,12 @@ function DailySales({ range }: { range: DateRange }): JSX.Element {
           <span>Service charge (owed to waiters)</span>
           <Money minor={data.serviceChargeMinor} />
         </div>
+        {data.deliveryChargeMinor > 0 && (
+          <div className="total-line">
+            <span>Delivery charge (owed to riders)</span>
+            <Money minor={data.deliveryChargeMinor} />
+          </div>
+        )}
         <div className="total-line">
           <span>Rounding adjustments</span>
           <Money minor={data.roundingAdjustmentMinor} />
@@ -461,6 +467,24 @@ function DailySales({ range }: { range: DateRange }): JSX.Element {
             )}
           </tbody>
         </table>
+
+        {data.deliveryChargeByRider.length > 0 && (
+          <>
+            <h3>Delivery charge per rider</h3>
+            <table>
+              <tbody>
+                {data.deliveryChargeByRider.map((line) => (
+                  <tr key={line.riderId}>
+                    <td>{line.riderName}</td>
+                    <td className="num">
+                      <Money minor={line.totalMinor} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
       </div>
     </div>
     </div>
@@ -1003,6 +1027,12 @@ function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
           <span>Service charge (NOT revenue — held for waiters)</span>
           <Money minor={z.serviceChargeCollectedMinor} />
         </div>
+        {z.deliveryChargeCollectedMinor > 0 && (
+          <div className="total-line">
+            <span>Delivery charge (NOT revenue — held for riders)</span>
+            <Money minor={z.deliveryChargeCollectedMinor} />
+          </div>
+        )}
         <div className="total-line">
           <span>Tax collected</span>
           <Money minor={z.taxCollectedMinor} />
@@ -1233,6 +1263,48 @@ function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
           )}
         </table>
       </div>
+
+      {/* Rider payout — what each rider is owed this shift from delivery
+          charges. Shown only when there were any, the delivery twin of
+          the waiter service-charge payout. */}
+      {data.riderPayout.length > 0 && (
+        <div className="card">
+          <h3 style={{ margin: 0 }}>Rider payout (delivery charges)</h3>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Money held <strong>for the riders</strong>, not revenue. Hand it over with the shift.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Rider</th>
+                <th className="num">Owed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.riderPayout.map((line) => (
+                <tr key={line.riderId}>
+                  <td>{line.riderName}</td>
+                  <td className="num">
+                    <Money minor={line.totalMinor} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="grand">
+                <td>
+                  <strong>TOTAL</strong>
+                </td>
+                <td className="num">
+                  <strong>
+                    <Money minor={data.riderPayoutTotalMinor} />
+                  </strong>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
 
       {/* The full Z-report accounting chain + drawer reconciliation
           (requirement 8), reusing the very same card the operational

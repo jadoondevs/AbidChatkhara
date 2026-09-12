@@ -1,6 +1,7 @@
 import { add, paisa, prorate, sub, sum, type Paisa } from '@pos/shared';
 import type { Kysely } from 'kysely';
 import { listConsumptionRecords, type ConsumptionRecordSummary } from '../consumption/service.js';
+import { riderPayoutTotals, type RiderPayoutLine } from '../delivery/service.js';
 import { waiterPayoutTotals, type WaiterPayoutLine } from '../gratuity/service.js';
 import { getActiveItemOwnership } from '../partners/service.js';
 import type { Database } from '../platform/db/types.js';
@@ -54,6 +55,11 @@ export interface DailySalesReport {
    * broken down by who is owed it. */
   readonly serviceChargeMinor: Paisa;
   readonly serviceChargeByWaiter: readonly WaiterPayoutLine[];
+  /** Delivery charge collected across the period — money held for the
+   * riders, never revenue, the delivery twin of serviceChargeMinor.
+   * `deliveryChargeByRider` is the same money split by who is owed it. */
+  readonly deliveryChargeMinor: Paisa;
+  readonly deliveryChargeByRider: readonly RiderPayoutLine[];
   readonly roundingAdjustmentMinor: Paisa;
   /** What customers actually paid: net sales + tax + service charge +
    * rounding. The figure the payment breakdown below adds up to. */
@@ -97,6 +103,7 @@ export async function dailySalesReport(db: Kysely<Database>, opts: DateRangeOpti
       'net_sales_minor',
       'tax_minor',
       'service_charge_minor',
+      'delivery_charge_minor',
       'rounding_adjustment_minor',
       'total_minor',
     ])
@@ -114,6 +121,7 @@ export async function dailySalesReport(db: Kysely<Database>, opts: DateRangeOpti
   const customerOrders = orders.filter((o) => o.channel === 'customer');
 
   const serviceChargeByWaiter = await waiterPayoutTotals(db, { fromInclusive: opts.fromInclusive, toExclusive: opts.toExclusive });
+  const deliveryChargeByRider = await riderPayoutTotals(db, { fromInclusive: opts.fromInclusive, toExclusive: opts.toExclusive });
   const paymentMethodBreakdown = await paymentMethodBreakdownForOrders(
     db,
     orders.map((o) => o.id),
@@ -131,6 +139,8 @@ export async function dailySalesReport(db: Kysely<Database>, opts: DateRangeOpti
     // waiter has since been removed.
     serviceChargeMinor: sum(orders.map((o) => o.service_charge_minor)),
     serviceChargeByWaiter,
+    deliveryChargeMinor: sum(orders.map((o) => o.delivery_charge_minor)),
+    deliveryChargeByRider,
     roundingAdjustmentMinor,
     totalCollectedMinor: sum(orders.map((o) => o.total_minor)),
     paymentMethodBreakdown,

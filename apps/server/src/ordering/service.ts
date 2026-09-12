@@ -101,6 +101,8 @@ export interface OrderSummary {
   readonly serviceChargeMinor: Paisa;
   /** The rate that produced it, or null — see migration 0016. */
   readonly serviceChargeRateBp: number | null;
+  /** A flat delivery fee owed to the rider — see migration 0024. */
+  readonly deliveryChargeMinor: Paisa;
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
   readonly version: number;
@@ -132,6 +134,7 @@ interface OrderRow {
   tax_minor: Paisa;
   service_charge_minor: Paisa;
   service_charge_rate_bp: number | null;
+  delivery_charge_minor: Paisa;
   rounding_adjustment_minor: Paisa;
   total_minor: Paisa;
   version: number;
@@ -164,6 +167,7 @@ function toOrderSummary(row: OrderRow): OrderSummary {
     taxMinor: row.tax_minor,
     serviceChargeMinor: row.service_charge_minor,
     serviceChargeRateBp: row.service_charge_rate_bp,
+    deliveryChargeMinor: row.delivery_charge_minor,
     roundingAdjustmentMinor: row.rounding_adjustment_minor,
     totalMinor: row.total_minor,
     version: row.version,
@@ -645,6 +649,7 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
       tax_minor: paisa(0),
       service_charge_minor: paisa(0),
       service_charge_rate_bp: null,
+      delivery_charge_minor: paisa(0),
       rounding_adjustment_minor: paisa(0),
       total_minor: paisa(0),
       version: 0,
@@ -1416,6 +1421,10 @@ export async function setDiscount(db: Kysely<Database>, orderId: number, input: 
 
 export interface BillOrderInput {
   readonly serviceChargeMinor?: Paisa | undefined;
+  /** A flat delivery fee, owed to the rider, on a delivery order.
+   * Optional; when omitted the order keeps whatever it already carries
+   * (unlike service charge, there is no rate to recompute from). */
+  readonly deliveryChargeMinor?: Paisa | undefined;
 }
 
 export interface BillTotals {
@@ -1430,6 +1439,7 @@ export interface BillTotals {
    * manager to work out which rate was in force that day. */
   readonly serviceChargeRateBp: number | null;
   readonly serviceChargeName: string;
+  readonly deliveryChargeMinor: Paisa;
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
 }
@@ -1505,16 +1515,41 @@ export async function computeServiceCharge(
  * the screen would be a second answer, and the whole point of showing a
  * total before printing is that it is the total that gets printed.
  */
+/**
+ * The delivery charge this bill carries: a flat amount a cashier adds to
+ * a delivery order, owed to the rider. There is NO configured rate —
+ * unlike service charge — so an omitted override keeps whatever the order
+ * already has, rather than recomputing from a rule. Two rules survive,
+ * the delivery twins of service charge's: a negative fee is not a fee,
+ * and a fee with no rider has nobody to be paid out to.
+ */
+function resolveDeliveryCharge(
+  order: Pick<OrderRow, 'order_type' | 'rider_id' | 'delivery_charge_minor'>,
+  override: Paisa | undefined,
+): Paisa {
+  const amount = override ?? order.delivery_charge_minor;
+  if (amount < 0) throw new OrderStateError('delivery charge cannot be negative');
+  if (amount > 0) {
+    if (order.order_type !== 'delivery') throw new OrderStateError('a delivery charge applies only to a delivery order');
+    if (order.rider_id === null) throw new OrderStateError('delivery charge requires a rider; this order has none');
+  }
+  return amount;
+}
+
 async function computeBillTotals(
   trx: Kysely<Database> | Transaction<Database>,
   order: OrderRow,
   serviceChargeOverride: Paisa | undefined,
+  deliveryChargeOverride: Paisa | undefined,
   at: Date,
 ): Promise<BillTotals> {
   const serviceCharge = await computeServiceCharge(trx, order, serviceChargeOverride);
+  const deliveryChargeMinor = resolveDeliveryCharge(order, deliveryChargeOverride);
 
   const { taxMinor } = await computeTaxForOrder(trx, order.id, order.order_type, at);
-  const preRound = add(add(order.net_sales_minor, taxMinor), serviceCharge.amountMinor);
+  // Both charges sit after tax and neither is revenue — they are added to
+  // what the customer pays, then the whole thing is rounded to the rupee.
+  const preRound = add(add(add(order.net_sales_minor, taxMinor), serviceCharge.amountMinor), deliveryChargeMinor);
   const { total, adjustment } = roundToRupee(preRound);
 
   return {
@@ -1525,6 +1560,7 @@ async function computeBillTotals(
     serviceChargeMinor: serviceCharge.amountMinor,
     serviceChargeRateBp: serviceCharge.rateBp,
     serviceChargeName: serviceCharge.displayName,
+    deliveryChargeMinor,
     roundingAdjustmentMinor: adjustment,
     totalMinor: total,
   };
@@ -1542,10 +1578,11 @@ export async function previewBillTotals(
   db: Kysely<Database>,
   orderId: number,
   serviceChargeOverride?: Paisa,
+  deliveryChargeOverride?: Paisa,
 ): Promise<BillTotals> {
   const order = await db.selectFrom('order').selectAll().where('id', '=', orderId).executeTakeFirst();
   if (!order) throw new Error(`order ${orderId} not found`);
-  return computeBillTotals(db, order, serviceChargeOverride, new Date());
+  return computeBillTotals(db, order, serviceChargeOverride, deliveryChargeOverride, new Date());
 }
 
 /**
@@ -1573,7 +1610,7 @@ export async function billOrder(db: Kysely<Database>, orderId: number, input: Bi
     }
 
     const now = new Date();
-    const totals = await computeBillTotals(trx, order, input.serviceChargeMinor, now);
+    const totals = await computeBillTotals(trx, order, input.serviceChargeMinor, input.deliveryChargeMinor, now);
 
     const updated = await versionedUpdate(trx, orderId, order.version, {
       status: 'billed',
@@ -1584,6 +1621,7 @@ export async function billOrder(db: Kysely<Database>, orderId: number, input: Bi
       tax_minor: totals.taxMinor,
       service_charge_minor: totals.serviceChargeMinor,
       service_charge_rate_bp: totals.serviceChargeRateBp,
+      delivery_charge_minor: totals.deliveryChargeMinor,
       rounding_adjustment_minor: totals.roundingAdjustmentMinor,
       total_minor: totals.totalMinor,
     });

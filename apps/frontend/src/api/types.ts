@@ -157,6 +157,8 @@ export interface OrderSummary {
   serviceChargeMinor: Paisa;
   /** The configured rate that produced it, or null when none did. */
   serviceChargeRateBp: number | null;
+  /** A flat delivery fee owed to the rider — see migration 0024. */
+  deliveryChargeMinor: Paisa;
   roundingAdjustmentMinor: Paisa;
   totalMinor: Paisa;
   version: number;
@@ -197,6 +199,7 @@ export interface BillTotals {
   serviceChargeMinor: Paisa;
   serviceChargeRateBp: number | null;
   serviceChargeName: string;
+  deliveryChargeMinor: Paisa;
   roundingAdjustmentMinor: Paisa;
   totalMinor: Paisa;
 }
@@ -495,6 +498,7 @@ export interface ZReport {
   voidedSalesMinor: Paisa;
   taxCollectedMinor: Paisa;
   serviceChargeCollectedMinor: Paisa;
+  deliveryChargeCollectedMinor: Paisa;
   roundingAdjustmentMinor: Paisa;
   openingFloatMinor: Paisa;
   cashPaymentsMinor: Paisa;
@@ -510,6 +514,12 @@ export interface ZReport {
 export interface WaiterPayoutLine {
   waiterId: number;
   waiterName: string;
+  totalMinor: Paisa;
+}
+
+export interface RiderPayoutLine {
+  riderId: number;
+  riderName: string;
   totalMinor: Paisa;
 }
 
@@ -564,6 +574,8 @@ export interface ShiftReport {
   itemSalesTotalMinor: Paisa;
   partnerShare: ShiftPartnerShareLine[];
   partnerShareTotalMinor: Paisa;
+  riderPayout: RiderPayoutLine[];
+  riderPayoutTotalMinor: Paisa;
 }
 
 export interface DailySalesReport {
@@ -576,6 +588,8 @@ export interface DailySalesReport {
   combinedSalesMinor: Paisa;
   taxCollectedMinor: Paisa;
   serviceChargeByWaiter: WaiterPayoutLine[];
+  deliveryChargeMinor: Paisa;
+  deliveryChargeByRider: RiderPayoutLine[];
   roundingAdjustmentMinor: Paisa;
   paymentMethodBreakdown: { paymentMethodId: number; paymentMethodName: string; totalMinor: Paisa }[];
   /** Customer bills closed in the range. Staff and owner meals are

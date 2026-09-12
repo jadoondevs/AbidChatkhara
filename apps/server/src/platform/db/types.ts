@@ -1,6 +1,7 @@
 import type { BillingTables } from '../../billing/tables.js';
 import type { CatalogTables } from '../../catalog/tables.js';
 import type { ConsumptionTables } from '../../consumption/tables.js';
+import type { DeliveryTables } from '../../delivery/tables.js';
 import type { GratuityTables } from '../../gratuity/tables.js';
 import type { IdentityTables } from '../../identity/tables.js';
 import type { OrderingTables } from '../../ordering/tables.js';
@@ -27,6 +28,7 @@ export interface Database
     RidersTables,
     BillingTables,
     GratuityTables,
+    DeliveryTables,
     ConsumptionTables,
     TaxTables,
     ShiftsTables,

@@ -53,6 +53,7 @@ const zReportSchema = z.object({
   voidedSalesMinor: z.number().int(),
   taxCollectedMinor: z.number().int(),
   serviceChargeCollectedMinor: z.number().int(),
+  deliveryChargeCollectedMinor: z.number().int(),
   roundingAdjustmentMinor: z.number().int(),
   openingFloatMinor: z.number().int(),
   cashPaymentsMinor: z.number().int(),
@@ -113,6 +114,8 @@ const shiftReportSchema = z.object({
   itemSalesTotalMinor: z.number().int(),
   partnerShare: z.array(shiftPartnerShareLineSchema),
   partnerShareTotalMinor: z.number().int(),
+  riderPayout: z.array(z.object({ riderId: z.number().int(), riderName: z.string(), totalMinor: z.number().int() })),
+  riderPayoutTotalMinor: z.number().int(),
 });
 
 export interface ShiftsPluginOptions {

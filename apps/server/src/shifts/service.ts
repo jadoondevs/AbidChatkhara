@@ -4,6 +4,7 @@ import { recordAudit } from '../identity/audit.js';
 import type { OrderStatus, OrderType } from '../ordering/tables.js';
 import type { Database } from '../platform/db/types.js';
 import { eventBus } from '../platform/events/bus.js';
+import { riderPayoutTotals, type RiderPayoutLine } from '../delivery/service.js';
 import { itemMixReport } from '../reporting/service.js';
 
 declare module '../platform/events/types.js' {
@@ -274,6 +275,9 @@ export interface ZReport {
    * money held for waiters, never revenue (docs/decisions/008); shown
    * here as cash held, not earned, per the spec. */
   readonly serviceChargeCollectedMinor: Paisa;
+  /** Delivery charge collected this shift — money held for the riders,
+   * never revenue, the delivery twin of serviceChargeCollectedMinor. */
+  readonly deliveryChargeCollectedMinor: Paisa;
   readonly roundingAdjustmentMinor: Paisa;
   /** The cash drawer, spelled out: what it started with, what came in,
    * what was counted, and the difference. `changeGivenMinor` is shown
@@ -358,6 +362,10 @@ export async function getZReport(db: Kysely<Database>, shiftId: number): Promise
   const serviceChargeRows = await db.selectFrom('service_charge_entry').select('amount_minor').where('shift_id', '=', shiftId).execute();
   const serviceChargeCollectedMinor = sum(serviceChargeRows.map((r) => r.amount_minor));
 
+  // The delivery-charge twin: money held for riders, never revenue.
+  const deliveryChargeRows = await db.selectFrom('delivery_charge_entry').select('amount_minor').where('shift_id', '=', shiftId).execute();
+  const deliveryChargeCollectedMinor = sum(deliveryChargeRows.map((r) => r.amount_minor));
+
   const paymentRows = await db
     .selectFrom('payment')
     .innerJoin('payment_method', 'payment_method.id', 'payment.payment_method_id')
@@ -405,6 +413,7 @@ export async function getZReport(db: Kysely<Database>, shiftId: number): Promise
     voidedSalesMinor,
     taxCollectedMinor,
     serviceChargeCollectedMinor,
+    deliveryChargeCollectedMinor,
     roundingAdjustmentMinor,
     openingFloatMinor: shift.openingCashMinor,
     cashPaymentsMinor,
@@ -612,6 +621,10 @@ export interface ShiftReport {
   readonly itemSalesTotalMinor: Paisa;
   readonly partnerShare: ShiftPartnerShareLine[];
   readonly partnerShareTotalMinor: Paisa;
+  /** What each rider is owed this shift from delivery charges — the
+   * delivery twin of the waiter service-charge payout. */
+  readonly riderPayout: RiderPayoutLine[];
+  readonly riderPayoutTotalMinor: Paisa;
 }
 
 export async function getShiftReport(db: Kysely<Database>, shiftId: number): Promise<ShiftReport> {
@@ -646,6 +659,7 @@ export async function getShiftReport(db: Kysely<Database>, shiftId: number): Pro
   }));
 
   const partnerShare = await shiftPartnerShare(db, shiftId);
+  const riderPayout = await riderPayoutTotals(db, { shiftId });
 
   return {
     shift,
@@ -662,5 +676,7 @@ export async function getShiftReport(db: Kysely<Database>, shiftId: number): Pro
     itemSalesTotalMinor: sum(itemSales.map((line) => line.netSalesMinor)),
     partnerShare,
     partnerShareTotalMinor: sum(partnerShare.map((line) => line.amountMinor)),
+    riderPayout,
+    riderPayoutTotalMinor: sum(riderPayout.map((line) => line.totalMinor)),
   };
 }

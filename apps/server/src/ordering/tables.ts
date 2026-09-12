@@ -42,6 +42,9 @@ export interface OrderTable {
   /** The configured rate that produced `service_charge_minor`, or null
    * when none did — see migration 0016. */
   service_charge_rate_bp: number | null;
+  /** A flat delivery fee, owed to the rider, on a delivery order — the
+   * delivery twin of service_charge_minor (migration 0024). */
+  delivery_charge_minor: Paisa;
   rounding_adjustment_minor: Paisa;
   total_minor: Paisa;
   version: number;

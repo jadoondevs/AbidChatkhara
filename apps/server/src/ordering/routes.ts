@@ -88,6 +88,7 @@ const orderSummarySchema = z.object({
   taxMinor: z.number().int(),
   serviceChargeMinor: z.number().int(),
   serviceChargeRateBp: z.number().int().nullable(),
+  deliveryChargeMinor: z.number().int(),
   roundingAdjustmentMinor: z.number().int(),
   totalMinor: z.number().int(),
   version: z.number().int(),
@@ -128,6 +129,7 @@ const billTotalsSchema = z.object({
   serviceChargeMinor: z.number().int(),
   serviceChargeRateBp: z.number().int().nullable(),
   serviceChargeName: z.string(),
+  deliveryChargeMinor: z.number().int(),
   roundingAdjustmentMinor: z.number().int(),
   totalMinor: z.number().int(),
 });
@@ -314,7 +316,7 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
     {
       schema: {
         params: z.object({ id: z.coerce.number().int() }),
-        body: z.object({ serviceChargeMinor: paisaSchema.optional() }).optional(),
+        body: z.object({ serviceChargeMinor: paisaSchema.optional(), deliveryChargeMinor: paisaSchema.optional() }).optional(),
         response: { 200: orderDetailSchema },
       },
     },
@@ -402,14 +404,23 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
         // No override given means "what would the configured rule
         // charge?" — which is what the bill screen asks before a
         // cashier touches anything.
-        querystring: z.object({ serviceChargeMinor: z.coerce.number().int().optional() }),
+        querystring: z.object({
+          serviceChargeMinor: z.coerce.number().int().optional(),
+          deliveryChargeMinor: z.coerce.number().int().optional(),
+        }),
         response: { 200: billTotalsSchema },
       },
     },
     async (request, reply) => {
       requireAuth(request, reply);
-      const override = request.query.serviceChargeMinor;
-      return previewBillTotals(db, request.params.id, override === undefined ? undefined : paisa(override));
+      const scOverride = request.query.serviceChargeMinor;
+      const dcOverride = request.query.deliveryChargeMinor;
+      return previewBillTotals(
+        db,
+        request.params.id,
+        scOverride === undefined ? undefined : paisa(scOverride),
+        dcOverride === undefined ? undefined : paisa(dcOverride),
+      );
     },
   );
 
