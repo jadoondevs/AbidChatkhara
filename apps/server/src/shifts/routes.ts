@@ -53,6 +53,7 @@ const zReportSchema = z.object({
   voidedSalesMinor: z.number().int(),
   taxCollectedMinor: z.number().int(),
   serviceChargeCollectedMinor: z.number().int(),
+  deliveryChargeCollectedMinor: z.number().int(),
   roundingAdjustmentMinor: z.number().int(),
   openingFloatMinor: z.number().int(),
   cashPaymentsMinor: z.number().int(),
@@ -82,6 +83,12 @@ const shiftPartnerShareLineSchema = z.object({
   amountMinor: z.number().int(),
 });
 
+const shiftCategorySalesLineSchema = z.object({
+  categoryName: z.string(),
+  qty: z.number().int(),
+  netSalesMinor: z.number().int(),
+});
+
 const shiftReportListEntrySchema = z.object({
   shift: shiftSchema,
   businessDate: z.string(),
@@ -102,10 +109,13 @@ const shiftReportSchema = z.object({
   totalCollectedMinor: z.number().int(),
   zReport: zReportSchema,
   itemSales: z.array(shiftItemSalesLineSchema),
+  categorySales: z.array(shiftCategorySalesLineSchema),
   itemSalesQtyTotal: z.number().int(),
   itemSalesTotalMinor: z.number().int(),
   partnerShare: z.array(shiftPartnerShareLineSchema),
   partnerShareTotalMinor: z.number().int(),
+  riderPayout: z.array(z.object({ riderId: z.number().int(), riderName: z.string(), totalMinor: z.number().int() })),
+  riderPayoutTotalMinor: z.number().int(),
 });
 
 export interface ShiftsPluginOptions {

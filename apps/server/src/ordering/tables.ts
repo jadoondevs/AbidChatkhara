@@ -18,6 +18,10 @@ export interface OrderTable {
   customer_name: string | null;
   customer_phone: string | null;
   waiter_id: number | null;
+  /** Which delivery rider is carrying this order, and whom a delivery
+   * charge is owed to — the delivery twin of waiter_id. Null unless it's
+   * a delivery with a rider assigned (migration 0023). */
+  rider_id: number | null;
   beneficiary_person_id: number | null;
   shift_id: number | null;
   opened_at: string;
@@ -38,6 +42,9 @@ export interface OrderTable {
   /** The configured rate that produced `service_charge_minor`, or null
    * when none did — see migration 0016. */
   service_charge_rate_bp: number | null;
+  /** A flat delivery fee, owed to the rider, on a delivery order — the
+   * delivery twin of service_charge_minor (migration 0024). */
+  delivery_charge_minor: Paisa;
   rounding_adjustment_minor: Paisa;
   total_minor: Paisa;
   version: number;

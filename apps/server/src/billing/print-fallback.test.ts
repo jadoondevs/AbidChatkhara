@@ -3,6 +3,7 @@ import { paisa } from '@pos/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createCategory, createItem, renameItem, setItemPrice } from '../catalog/service.js';
 import { createUser } from '../identity/service.js';
+import { createRider } from '../riders/service.js';
 import { addLine, billOrder, createOrder, setOrderCustomer } from '../ordering/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createTestDb } from '../platform/db/test-helpers.js';
@@ -278,7 +279,8 @@ describe('printing — direct printer, and the Windows fallback', () => {
 
     it('carries the customer through to the order record', async () => {
       const { actor } = await setupClosedOrder();
-      const order = await createOrder(ctx.db, { orderType: 'delivery', customerName: 'A. Customer' }, actor);
+      const rider = await createRider(ctx.db, 'Rider', actor);
+      const order = await createOrder(ctx.db, { orderType: 'delivery', riderId: rider.id, customerName: 'A. Customer' }, actor);
       const updated = await setOrderCustomer(ctx.db, order.id, { customerPhone: '0300-0000000' }, actor);
       expect(updated.customerName).toBe('A. Customer');
       expect(updated.customerPhone).toBe('0300-0000000');

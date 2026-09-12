@@ -483,6 +483,12 @@ function BillPreview({ detail }: { detail: OrderDetail }): JSX.Element {
           <Money minor={detail.serviceChargeMinor} />
         </div>
       )}
+      {detail.deliveryChargeMinor > 0 && (
+        <div className="total-line muted">
+          <span>Delivery charge</span>
+          <Money minor={detail.deliveryChargeMinor} />
+        </div>
+      )}
       {/* Totals are worked out when the bill is finalised, so an order
           that has not been billed has none — and the server refuses to
           take money for it. Printing "Total Rs 0.00" under a real

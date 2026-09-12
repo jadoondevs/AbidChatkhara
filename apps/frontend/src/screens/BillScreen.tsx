@@ -58,6 +58,10 @@ export function BillPanel({
   // the only one that records the rate on the order. A number is what
   // the cashier decided this one bill carries.
   const [chargeOverride, setChargeOverride] = useState<Paisa | null>(null);
+  // A delivery fee owed to the rider. null means "none set" — there is no
+  // configured rate for it, unlike service charge, so it stays zero until
+  // a cashier types one.
+  const [deliveryOverride, setDeliveryOverride] = useState<Paisa | null>(null);
   const [printError, setPrintError] = useState<unknown>(null);
   // Set only when a print genuinely failed (the server could not render
   // it, or the browser refused to print at all) — never merely because
@@ -116,7 +120,11 @@ export function BillPanel({
     // number this screen typed, and the order would no longer record
     // which rate produced it.
     billOrder.mutate(
-      { orderId, ...(chargeOverride === null ? {} : { serviceChargeMinor: chargeOverride }) },
+      {
+        orderId,
+        ...(chargeOverride === null ? {} : { serviceChargeMinor: chargeOverride }),
+        ...(deliveryOverride === null ? {} : { deliveryChargeMinor: deliveryOverride }),
+      },
       { onSuccess: (billed) => print(billed.id) },
     );
   };
@@ -172,7 +180,19 @@ export function BillPanel({
         />
       )}
 
-      <BillTotalsCard order={detail} chargeOverride={serviceChargeAllowed ? chargeOverride : paisa(0)} alreadyBilled={alreadyBilled} />
+      {/* Delivery charge is a delivery-order thing only, and owed to the
+          rider — so it shows on a delivery bill, beside the service
+          charge on a dine-in one. */}
+      {!alreadyBilled && detail.orderType === 'delivery' && (
+        <DeliveryChargeCard order={detail} amount={deliveryOverride} onAmount={setDeliveryOverride} />
+      )}
+
+      <BillTotalsCard
+        order={detail}
+        chargeOverride={serviceChargeAllowed ? chargeOverride : paisa(0)}
+        deliveryOverride={deliveryOverride}
+        alreadyBilled={alreadyBilled}
+      />
 
       <div className="row">
         <button className="ghost big" onClick={onBackToOrder}>
@@ -334,6 +354,57 @@ function ServiceChargeAmount({
 }
 
 /**
+ * The delivery charge on this bill, in rupees — the delivery twin of the
+ * service charge, owed to the rider. Simpler than service charge: there
+ * is no configured rate, so it is a plain optional amount that stays zero
+ * until a cashier types one. The server refuses a charge with no rider to
+ * pay it out to, so this says so rather than offering a field that would
+ * be rejected.
+ */
+function DeliveryChargeCard({
+  order,
+  amount,
+  onAmount,
+}: {
+  order: OrderDetail;
+  amount: Paisa | null;
+  onAmount: (value: Paisa | null) => void;
+}): JSX.Element {
+  const noRider = order.riderId === null;
+
+  return (
+    <div className="card col">
+      <div className="row">
+        <h3 style={{ margin: 0, flex: 1 }}>Delivery charge</h3>
+        {amount !== null && amount > 0 && <span className="pill warn">Set by hand</span>}
+      </div>
+
+      {noRider ? (
+        <p className="muted">
+          This delivery has no rider, so a delivery charge can’t be attributed. Assign a rider to the order first (on the order
+          screen, or when you start it).
+        </p>
+      ) : (
+        <>
+          <div style={{ maxWidth: 240 }}>
+            <label htmlFor="delivery-charge">Amount (optional)</label>
+            <MoneyInput id="delivery-charge" valueMinor={amount ?? paisa(0)} onChange={(value) => onAmount(value)} />
+          </div>
+          <p className="muted field-hint" style={{ margin: 0 }}>
+            Held for the rider, never revenue. Leave it at zero for no delivery fee.
+          </p>
+          {amount !== null && amount > 0 && (
+            <div className="row">
+              <button onClick={() => onAmount(paisa(0))}>No delivery charge</button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
  * The bill's figures, including the rounding adjustment and the actual
  * total — before anything is printed.
  *
@@ -348,13 +419,15 @@ function ServiceChargeAmount({
 function BillTotalsCard({
   order,
   chargeOverride,
+  deliveryOverride,
   alreadyBilled,
 }: {
   order: OrderDetail;
   chargeOverride: Paisa | null;
+  deliveryOverride: Paisa | null;
   alreadyBilled: boolean;
 }): JSX.Element {
-  const preview = useBillPreview(alreadyBilled ? null : order.id, chargeOverride ?? undefined);
+  const preview = useBillPreview(alreadyBilled ? null : order.id, chargeOverride ?? undefined, deliveryOverride ?? undefined);
 
   // Once billed, the stored figures ARE the answer — no prediction
   // needed, and none should be shown in their place.
@@ -367,6 +440,7 @@ function BillTotalsCard({
         serviceChargeMinor: order.serviceChargeMinor,
         serviceChargeRateBp: order.serviceChargeRateBp,
         serviceChargeName: 'Service charge',
+        deliveryChargeMinor: order.deliveryChargeMinor,
         roundingAdjustmentMinor: order.roundingAdjustmentMinor,
         totalMinor: order.totalMinor,
       }
@@ -401,6 +475,12 @@ function BillTotalsCard({
         </span>
         <Money minor={totals?.serviceChargeMinor} />
       </div>
+      {(totals?.deliveryChargeMinor ?? 0) > 0 && (
+        <div className="total-line">
+          <span>Delivery charge</span>
+          <Money minor={totals?.deliveryChargeMinor} />
+        </div>
+      )}
       <div className="total-line">
         <span>Rounding</span>
         <Money minor={totals?.roundingAdjustmentMinor} />

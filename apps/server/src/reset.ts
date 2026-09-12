@@ -33,6 +33,7 @@ const TRANSACTIONAL_TABLES = [
   'line_allocation',
   'payment',
   'service_charge_entry',
+  'delivery_charge_entry',
   'consumption_record',
   'order_line_modifier',
   'order_line',

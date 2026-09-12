@@ -5,6 +5,7 @@ import { computeMealCharge } from '../consumption/policy.js';
 import { recordAudit } from '../identity/audit.js';
 import type { ActorContext } from '../identity/service.js';
 import { closeOrderInTransaction, OrderStateError, type OrderSummary } from '../ordering/service.js';
+import { recordDeliveryChargeEntryInTransaction, reverseDeliveryChargeEntriesInTransaction } from '../delivery/service.js';
 import { recordServiceChargeEntryInTransaction, reverseServiceChargeEntriesInTransaction } from '../gratuity/service.js';
 import { allocateOrderInTransaction, reverseLineAllocationsInTransaction, reverseOrderAllocationsInTransaction } from '../partners/service.js';
 import type { Database } from '../platform/db/types.js';
@@ -724,6 +725,7 @@ export async function recordPayment(
       customerName: order.customer_name,
       customerPhone: order.customer_phone,
       waiterId: order.waiter_id,
+      riderId: order.rider_id,
       beneficiaryPersonId: order.beneficiary_person_id,
       shiftId: order.shift_id,
       openedAt: order.opened_at,
@@ -740,6 +742,7 @@ export async function recordPayment(
       taxMinor: order.tax_minor,
       serviceChargeMinor: order.service_charge_minor,
       serviceChargeRateBp: order.service_charge_rate_bp,
+      deliveryChargeMinor: order.delivery_charge_minor,
       roundingAdjustmentMinor: order.rounding_adjustment_minor,
       totalMinor: order.total_minor,
       version: order.version,
@@ -750,6 +753,7 @@ export async function recordPayment(
       invoiceNo = await allocateInvoiceNumber(trx);
       await allocateOrderInTransaction(trx, orderId, new Date(now), actor);
       await recordServiceChargeEntryInTransaction(trx, orderId, actor);
+      await recordDeliveryChargeEntryInTransaction(trx, orderId, actor);
       closedOrder = await closeOrderInTransaction(trx, orderId, {
         invoiceNo,
         closedBy: actor.actorId,
@@ -947,6 +951,9 @@ export async function refundOrder(db: Kysely<Database>, orderId: number, input: 
     // came back.
     if (isFullOrderRefund) {
       await reverseServiceChargeEntriesInTransaction(trx, orderId, actor);
+      // A delivery charge is owed to the rider the same way — a full
+      // refund reverses it so the rider's payout nets back out.
+      await reverseDeliveryChargeEntriesInTransaction(trx, orderId, actor);
     }
 
     const amountToRefund = paisa(-sum(reversals.map((r) => r.amountMinor))); // reversal amounts are negative; refund is positive

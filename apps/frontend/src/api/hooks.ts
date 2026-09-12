@@ -41,6 +41,7 @@ import type {
   PersonKind,
   MealPolicy,
   RecordPaymentResult,
+  Rider,
   SettleConsumptionResult,
   SettlementType,
   Shift,
@@ -182,14 +183,19 @@ export function useOrderHistory(orderId: number | null): UseQueryResult<OrderHis
 /** What this order WILL total if billed with the given service charge —
  * computed by the same server code that will do the billing, so the
  * figure on screen is the figure that prints. */
-export function useBillPreview(orderId: number | null, serviceChargeMinor?: Paisa): UseQueryResult<BillTotals> {
+export function useBillPreview(orderId: number | null, serviceChargeMinor?: Paisa, deliveryChargeMinor?: Paisa): UseQueryResult<BillTotals> {
   return useQuery({
-    queryKey: ['bill-preview', orderId, serviceChargeMinor ?? null],
+    queryKey: ['bill-preview', orderId, serviceChargeMinor ?? null, deliveryChargeMinor ?? null],
     queryFn: () =>
       // No override means "what would the configured rule charge?",
       // which is what the bill screen asks before a cashier touches
       // anything.
-      api.get<BillTotals>(`/api/orders/${orderId}/bill-preview${query(serviceChargeMinor === undefined ? {} : { serviceChargeMinor })}`),
+      api.get<BillTotals>(
+        `/api/orders/${orderId}/bill-preview${query({
+          ...(serviceChargeMinor === undefined ? {} : { serviceChargeMinor }),
+          ...(deliveryChargeMinor === undefined ? {} : { deliveryChargeMinor }),
+        })}`,
+      ),
     enabled: orderId !== null,
   });
 }
@@ -222,6 +228,7 @@ export interface CreateOrderVars {
   customerName?: string;
   customerPhone?: string;
   waiterId?: number;
+  riderId?: number;
   beneficiaryPersonId?: number;
 }
 
@@ -270,9 +277,12 @@ export function useSetDiscount(): UseMutationResult<OrderDetail, Error, { orderI
   return useOrderMutation(({ orderId, ...body }) => api.patch<OrderDetail>(`/api/orders/${orderId}/discount`, body));
 }
 
-export function useBillOrder(): UseMutationResult<OrderDetail, Error, { orderId: number; serviceChargeMinor?: Paisa }> {
-  return useOrderMutation(({ orderId, serviceChargeMinor }) =>
-    api.post<OrderDetail>(`/api/orders/${orderId}/bill`, serviceChargeMinor === undefined ? {} : { serviceChargeMinor }),
+export function useBillOrder(): UseMutationResult<OrderDetail, Error, { orderId: number; serviceChargeMinor?: Paisa; deliveryChargeMinor?: Paisa }> {
+  return useOrderMutation(({ orderId, serviceChargeMinor, deliveryChargeMinor }) =>
+    api.post<OrderDetail>(`/api/orders/${orderId}/bill`, {
+      ...(serviceChargeMinor === undefined ? {} : { serviceChargeMinor }),
+      ...(deliveryChargeMinor === undefined ? {} : { deliveryChargeMinor }),
+    }),
   );
 }
 
@@ -433,6 +443,32 @@ export function usePartners(includeInactive = false): UseQueryResult<Partner[]> 
     queryKey: ['partners', includeInactive],
     queryFn: () => api.get<Partner[]>(`/api/partners${query({ includeInactive })}`),
   });
+}
+
+// ---------------------------------------------------------------------
+// Delivery riders
+// ---------------------------------------------------------------------
+
+export function useRiders(includeInactive = false): UseQueryResult<Rider[]> {
+  return useQuery({
+    queryKey: ['riders', includeInactive],
+    queryFn: () => api.get<Rider[]>(`/api/riders${query({ includeInactive })}`),
+  });
+}
+
+export function useCreateRider(): UseMutationResult<Rider, Error, { name: string }> {
+  const invalidate = useInvalidateOnSuccess(['riders']);
+  return useMutation({ mutationFn: ({ name }) => api.post<Rider>('/api/riders', { name }), onSuccess: invalidate });
+}
+
+export function useRenameRider(): UseMutationResult<Rider, Error, { id: number; name: string }> {
+  const invalidate = useInvalidateOnSuccess(['riders']);
+  return useMutation({ mutationFn: ({ id, name }) => api.patch<Rider>(`/api/riders/${id}`, { name }), onSuccess: invalidate });
+}
+
+export function useSetRiderActive(): UseMutationResult<Rider, Error, { id: number; active: boolean }> {
+  const invalidate = useInvalidateOnSuccess(['riders']);
+  return useMutation({ mutationFn: ({ id, active }) => api.patch<Rider>(`/api/riders/${id}/active`, { active }), onSuccess: invalidate });
 }
 
 export function useItemOwnership(itemId: number | null): UseQueryResult<OwnershipShare[]> {

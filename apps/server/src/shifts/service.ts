@@ -4,6 +4,7 @@ import { recordAudit } from '../identity/audit.js';
 import type { OrderStatus, OrderType } from '../ordering/tables.js';
 import type { Database } from '../platform/db/types.js';
 import { eventBus } from '../platform/events/bus.js';
+import { riderPayoutTotals, type RiderPayoutLine } from '../delivery/service.js';
 import { itemMixReport } from '../reporting/service.js';
 
 declare module '../platform/events/types.js' {
@@ -274,6 +275,9 @@ export interface ZReport {
    * money held for waiters, never revenue (docs/decisions/008); shown
    * here as cash held, not earned, per the spec. */
   readonly serviceChargeCollectedMinor: Paisa;
+  /** Delivery charge collected this shift — money held for the riders,
+   * never revenue, the delivery twin of serviceChargeCollectedMinor. */
+  readonly deliveryChargeCollectedMinor: Paisa;
   readonly roundingAdjustmentMinor: Paisa;
   /** The cash drawer, spelled out: what it started with, what came in,
    * what was counted, and the difference. `changeGivenMinor` is shown
@@ -358,6 +362,10 @@ export async function getZReport(db: Kysely<Database>, shiftId: number): Promise
   const serviceChargeRows = await db.selectFrom('service_charge_entry').select('amount_minor').where('shift_id', '=', shiftId).execute();
   const serviceChargeCollectedMinor = sum(serviceChargeRows.map((r) => r.amount_minor));
 
+  // The delivery-charge twin: money held for riders, never revenue.
+  const deliveryChargeRows = await db.selectFrom('delivery_charge_entry').select('amount_minor').where('shift_id', '=', shiftId).execute();
+  const deliveryChargeCollectedMinor = sum(deliveryChargeRows.map((r) => r.amount_minor));
+
   const paymentRows = await db
     .selectFrom('payment')
     .innerJoin('payment_method', 'payment_method.id', 'payment.payment_method_id')
@@ -405,6 +413,7 @@ export async function getZReport(db: Kysely<Database>, shiftId: number): Promise
     voidedSalesMinor,
     taxCollectedMinor,
     serviceChargeCollectedMinor,
+    deliveryChargeCollectedMinor,
     roundingAdjustmentMinor,
     openingFloatMinor: shift.openingCashMinor,
     cashPaymentsMinor,
@@ -523,6 +532,32 @@ export interface ShiftPartnerShareLine {
   readonly amountMinor: Paisa;
 }
 
+/** One menu category's takings this shift — how many portions across all
+ * its items, and their net sales. A roll-up of the item-sales rows by
+ * their category, so its total is the same customer revenue. */
+export interface ShiftCategorySalesLine {
+  readonly categoryName: string;
+  readonly qty: number;
+  readonly netSalesMinor: Paisa;
+}
+
+/** Roll item-sales rows up by menu category, biggest earner first. An
+ * item whose category was deleted falls under "Uncategorised" rather than
+ * being dropped from the totals. */
+function categorySalesFrom(itemSales: readonly ShiftItemSalesLine[]): ShiftCategorySalesLine[] {
+  const byCategory = new Map<string, { qty: number; amounts: Paisa[] }>();
+  for (const line of itemSales) {
+    const key = line.categoryName ?? 'Uncategorised';
+    const entry = byCategory.get(key) ?? { qty: 0, amounts: [] };
+    entry.qty += line.qty;
+    entry.amounts.push(line.netSalesMinor);
+    byCategory.set(key, entry);
+  }
+  return [...byCategory.entries()]
+    .map(([categoryName, { qty, amounts }]) => ({ categoryName, qty, netSalesMinor: sum(amounts) }))
+    .sort((a, b) => b.netSalesMinor - a.netSalesMinor || a.categoryName.localeCompare(b.categoryName));
+}
+
 /**
  * What each partner earned this shift, from the frozen `line_allocation`
  * rows the allocation engine already wrote at bill time — never a fresh
@@ -576,6 +611,9 @@ export interface ShiftReport {
   readonly totalCollectedMinor: Paisa;
   readonly zReport: ZReport;
   readonly itemSales: ShiftItemSalesLine[];
+  /** The same item sales, rolled up by menu category. Totals match
+   * itemSalesQtyTotal / itemSalesTotalMinor. */
+  readonly categorySales: ShiftCategorySalesLine[];
   readonly itemSalesQtyTotal: number;
   /** Sum of the item table's net sales — equals the Z-report's customer
    * sales, because both are net of the same prorated discounts and
@@ -583,6 +621,10 @@ export interface ShiftReport {
   readonly itemSalesTotalMinor: Paisa;
   readonly partnerShare: ShiftPartnerShareLine[];
   readonly partnerShareTotalMinor: Paisa;
+  /** What each rider is owed this shift from delivery charges — the
+   * delivery twin of the waiter service-charge payout. */
+  readonly riderPayout: RiderPayoutLine[];
+  readonly riderPayoutTotalMinor: Paisa;
 }
 
 export async function getShiftReport(db: Kysely<Database>, shiftId: number): Promise<ShiftReport> {
@@ -617,6 +659,7 @@ export async function getShiftReport(db: Kysely<Database>, shiftId: number): Pro
   }));
 
   const partnerShare = await shiftPartnerShare(db, shiftId);
+  const riderPayout = await riderPayoutTotals(db, { shiftId });
 
   return {
     shift,
@@ -628,9 +671,12 @@ export async function getShiftReport(db: Kysely<Database>, shiftId: number): Pro
     totalCollectedMinor: add(zReport.cashPaymentsMinor, zReport.nonCashPaymentsMinor),
     zReport,
     itemSales,
+    categorySales: categorySalesFrom(itemSales),
     itemSalesQtyTotal: itemSales.reduce((total, line) => total + line.qty, 0),
     itemSalesTotalMinor: sum(itemSales.map((line) => line.netSalesMinor)),
     partnerShare,
     partnerShareTotalMinor: sum(partnerShare.map((line) => line.amountMinor)),
+    riderPayout,
+    riderPayoutTotalMinor: sum(riderPayout.map((line) => line.totalMinor)),
   };
 }

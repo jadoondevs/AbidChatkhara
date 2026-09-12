@@ -66,6 +66,9 @@ export interface BillTicketData {
   /** What the customer reads for the charge, rate included — worked out
    * from the rate stored on THIS order, never from today's setting. */
   readonly serviceChargeLabel: string;
+  /** A flat delivery fee owed to the rider (0 or absent on non-delivery
+   * orders). Shown on the ticket only when it is positive. */
+  readonly deliveryChargeMinor?: Paisa;
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
   readonly printedAt: string;
@@ -143,6 +146,7 @@ export function renderBillTicket(data: BillTicketData, printFormat: TicketFormat
   }
   if (data.taxMinor > 0) b.line(twoColumn('Tax', format(data.taxMinor)));
   if (data.serviceChargeMinor > 0) b.line(twoColumn(data.serviceChargeLabel, format(data.serviceChargeMinor)));
+  if ((data.deliveryChargeMinor ?? 0) > 0) b.line(twoColumn('Delivery charge', format(data.deliveryChargeMinor as Paisa)));
   if (data.roundingAdjustmentMinor !== 0) b.line(twoColumn('Rounding', format(data.roundingAdjustmentMinor)));
   b.rule();
   b.bold(true).line(twoColumn('TOTAL', format(data.totalMinor))).bold(false);
@@ -185,6 +189,9 @@ export interface ReceiptTicketData {
   readonly taxMinor: Paisa;
   readonly serviceChargeMinor: Paisa;
   readonly serviceChargeLabel: string;
+  /** A flat delivery fee owed to the rider (0 or absent on non-delivery
+   * orders). Shown on the ticket only when it is positive. */
+  readonly deliveryChargeMinor?: Paisa;
   readonly roundingAdjustmentMinor: Paisa;
   readonly totalMinor: Paisa;
   readonly payments: readonly PaymentLine[];
@@ -222,6 +229,7 @@ export function renderReceiptTicket(data: ReceiptTicketData, printFormat: Ticket
   if (data.discountMinor > 0) b.line(twoColumn('Discount', `-${format(data.discountMinor)}`));
   if (data.taxMinor > 0) b.line(twoColumn('Tax', format(data.taxMinor)));
   if (data.serviceChargeMinor > 0) b.line(twoColumn(data.serviceChargeLabel, format(data.serviceChargeMinor)));
+  if ((data.deliveryChargeMinor ?? 0) > 0) b.line(twoColumn('Delivery charge', format(data.deliveryChargeMinor as Paisa)));
   if (data.roundingAdjustmentMinor !== 0) b.line(twoColumn('Rounding', format(data.roundingAdjustmentMinor)));
   b.rule();
   b.bold(true).line(twoColumn('TOTAL', format(data.totalMinor))).bold(false);
@@ -354,6 +362,7 @@ export async function buildBillTicketData(db: Kysely<Database>, orderId: number)
     taxMinor: order.tax_minor,
     serviceChargeMinor: order.service_charge_minor,
     serviceChargeLabel: serviceChargeLabel(config.serviceCharge, order.service_charge_rate_bp),
+    deliveryChargeMinor: order.delivery_charge_minor,
     roundingAdjustmentMinor: order.rounding_adjustment_minor,
     totalMinor: order.total_minor,
     printedAt: order.billed_at ?? new Date().toISOString(),
@@ -421,6 +430,7 @@ export async function buildReceiptTicketData(db: Kysely<Database>, orderId: numb
     taxMinor: order.tax_minor,
     serviceChargeMinor: order.service_charge_minor,
     serviceChargeLabel: serviceChargeLabel(config.serviceCharge, order.service_charge_rate_bp),
+    deliveryChargeMinor: order.delivery_charge_minor,
     roundingAdjustmentMinor: order.rounding_adjustment_minor,
     totalMinor: order.total_minor,
     payments: paymentRows.map((p) => ({
