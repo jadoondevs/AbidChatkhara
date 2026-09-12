@@ -18,6 +18,10 @@ export interface OrderTable {
   customer_name: string | null;
   customer_phone: string | null;
   waiter_id: number | null;
+  /** Which delivery rider is carrying this order, and whom a delivery
+   * charge is owed to — the delivery twin of waiter_id. Null unless it's
+   * a delivery with a rider assigned (migration 0023). */
+  rider_id: number | null;
   beneficiary_person_id: number | null;
   shift_id: number | null;
   opened_at: string;

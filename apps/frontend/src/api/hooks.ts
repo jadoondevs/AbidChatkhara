@@ -41,6 +41,7 @@ import type {
   PersonKind,
   MealPolicy,
   RecordPaymentResult,
+  Rider,
   SettleConsumptionResult,
   SettlementType,
   Shift,
@@ -222,6 +223,7 @@ export interface CreateOrderVars {
   customerName?: string;
   customerPhone?: string;
   waiterId?: number;
+  riderId?: number;
   beneficiaryPersonId?: number;
 }
 
@@ -433,6 +435,32 @@ export function usePartners(includeInactive = false): UseQueryResult<Partner[]> 
     queryKey: ['partners', includeInactive],
     queryFn: () => api.get<Partner[]>(`/api/partners${query({ includeInactive })}`),
   });
+}
+
+// ---------------------------------------------------------------------
+// Delivery riders
+// ---------------------------------------------------------------------
+
+export function useRiders(includeInactive = false): UseQueryResult<Rider[]> {
+  return useQuery({
+    queryKey: ['riders', includeInactive],
+    queryFn: () => api.get<Rider[]>(`/api/riders${query({ includeInactive })}`),
+  });
+}
+
+export function useCreateRider(): UseMutationResult<Rider, Error, { name: string }> {
+  const invalidate = useInvalidateOnSuccess(['riders']);
+  return useMutation({ mutationFn: ({ name }) => api.post<Rider>('/api/riders', { name }), onSuccess: invalidate });
+}
+
+export function useRenameRider(): UseMutationResult<Rider, Error, { id: number; name: string }> {
+  const invalidate = useInvalidateOnSuccess(['riders']);
+  return useMutation({ mutationFn: ({ id, name }) => api.patch<Rider>(`/api/riders/${id}`, { name }), onSuccess: invalidate });
+}
+
+export function useSetRiderActive(): UseMutationResult<Rider, Error, { id: number; active: boolean }> {
+  const invalidate = useInvalidateOnSuccess(['riders']);
+  return useMutation({ mutationFn: ({ id, active }) => api.patch<Rider>(`/api/riders/${id}/active`, { active }), onSuccess: invalidate });
 }
 
 export function useItemOwnership(itemId: number | null): UseQueryResult<OwnershipShare[]> {

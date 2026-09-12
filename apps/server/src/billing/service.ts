@@ -724,6 +724,7 @@ export async function recordPayment(
       customerName: order.customer_name,
       customerPhone: order.customer_phone,
       waiterId: order.waiter_id,
+      riderId: order.rider_id,
       beneficiaryPersonId: order.beneficiary_person_id,
       shiftId: order.shift_id,
       openedAt: order.opened_at,

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useCreateOrder, useRoster } from '../api/hooks.js';
+import { useCreateOrder, useRiders, useRoster } from '../api/hooks.js';
 import type { OrderType } from '../api/types.js';
 import { ErrorBanner, Modal } from './ui.tsx';
 
@@ -24,11 +24,13 @@ const ORDER_TYPES: { value: OrderType; label: string }[] = [
 export function NewOrderModal({ onClose, onCreated }: { onClose: () => void; onCreated: (orderId: number) => void }): JSX.Element {
   const createOrder = useCreateOrder();
   const roster = useRoster();
+  const ridersQuery = useRiders();
 
   const [orderType, setOrderType] = useState<OrderType>('dine_in');
   const [tableLabel, setTableLabel] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
+  const [riderId, setRiderId] = useState<number | ''>('');
   // Left empty by default — never pre-filled with whoever is signed in.
   // The person taking the order at the till is usually not the waiter
   // serving the table, so defaulting to the logged-in user (an admin,
@@ -49,7 +51,16 @@ export function NewOrderModal({ onClose, onCreated }: { onClose: () => void; onC
     if (waiterId === '' && waiters.length === 1) setWaiterId(waiters[0]!.id);
   }, [waiters, waiterId]);
 
+  // The rider picker is the delivery twin of the waiter picker: it lists
+  // the riders on the books, and auto-selects the only one when there is
+  // just one, so a single-rider shop never picks a name.
+  const riders = ridersQuery.data ?? [];
+  useEffect(() => {
+    if (riderId === '' && riders.length === 1) setRiderId(riders[0]!.id);
+  }, [riders, riderId]);
+
   const dineIn = orderType === 'dine_in';
+  const delivery = orderType === 'delivery';
   // The waiter is still required for dine-in: service charge and the
   // payout sheet are attributed to a person, and there is nobody to
   // attribute them to without one.
@@ -65,6 +76,7 @@ export function NewOrderModal({ onClose, onCreated }: { onClose: () => void; onC
         ...(customerName.trim() ? { customerName: customerName.trim() } : {}),
         ...(customerPhone.trim() ? { customerPhone: customerPhone.trim() } : {}),
         ...(dineIn && waiterId !== '' ? { waiterId: Number(waiterId) } : {}),
+        ...(delivery && riderId !== '' ? { riderId: Number(riderId) } : {}),
       },
       { onSuccess: (order) => onCreated(order.id) },
     );
@@ -140,6 +152,27 @@ export function NewOrderModal({ onClose, onCreated }: { onClose: () => void; onC
               {roster.isError && <p className="muted">Couldn’t load the staff list. Check the connection and try again.</p>}
               {!roster.isLoading && !roster.isError && waiters.length === 0 && (
                 <p className="muted">No waiters yet — add a staff member with the “server” role under Settings.</p>
+              )}
+            </div>
+          )}
+
+          {/* The rider is who the order — and any delivery charge — is
+              owed to. Optional here; billing only requires one once a
+              delivery charge is added, the same way the waiter is only
+              needed for a service charge. */}
+          {delivery && (
+            <div>
+              <label htmlFor="rider">Rider (optional)</label>
+              <select id="rider" value={riderId} onChange={(event) => setRiderId(event.target.value === '' ? '' : Number(event.target.value))}>
+                <option value="">No rider yet…</option>
+                {riders.map((rider) => (
+                  <option key={rider.id} value={rider.id}>
+                    {rider.name}
+                  </option>
+                ))}
+              </select>
+              {!ridersQuery.isLoading && !ridersQuery.isError && riders.length === 0 && (
+                <p className="muted">No riders yet — add them under Riders.</p>
               )}
             </div>
           )}

@@ -139,6 +139,7 @@ export interface OrderSummary {
   customerName: string | null;
   customerPhone: string | null;
   waiterId: number | null;
+  riderId: number | null;
   beneficiaryPersonId: number | null;
   shiftId: number | null;
   openedAt: string;
@@ -422,6 +423,13 @@ export interface Partner {
   active: boolean;
   joinedAt: string;
   leftAt: string | null;
+}
+
+export interface Rider {
+  id: number;
+  name: string;
+  active: boolean;
+  createdAt: string;
 }
 
 export interface OwnershipShare {

@@ -81,6 +81,7 @@ export interface OrderSummary {
   readonly customerName: string | null;
   readonly customerPhone: string | null;
   readonly waiterId: number | null;
+  readonly riderId: number | null;
   readonly beneficiaryPersonId: number | null;
   readonly shiftId: number | null;
   readonly openedAt: string;
@@ -114,6 +115,7 @@ interface OrderRow {
   customer_name: string | null;
   customer_phone: string | null;
   waiter_id: number | null;
+  rider_id: number | null;
   beneficiary_person_id: number | null;
   shift_id: number | null;
   opened_at: string;
@@ -145,6 +147,7 @@ function toOrderSummary(row: OrderRow): OrderSummary {
     customerName: row.customer_name,
     customerPhone: row.customer_phone,
     waiterId: row.waiter_id,
+    riderId: row.rider_id,
     beneficiaryPersonId: row.beneficiary_person_id,
     shiftId: row.shift_id,
     openedAt: row.opened_at,
@@ -545,6 +548,11 @@ export interface CreateOrderInput {
   readonly customerName?: string | undefined;
   readonly customerPhone?: string | undefined;
   readonly waiterId?: number | undefined;
+  /** The delivery rider carrying this order. Optional at creation — a
+   * rider is only strictly required once a delivery charge is added
+   * (billing enforces that), the same way a waiter is required once a
+   * service charge is. */
+  readonly riderId?: number | undefined;
   readonly beneficiaryPersonId?: number | undefined;
 }
 
@@ -567,6 +575,13 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
   if (input.waiterId !== undefined) {
     const waiter = await db.selectFrom('user').select('id').where('id', '=', input.waiterId).executeTakeFirst();
     if (!waiter) throw new Error(`user ${input.waiterId} not found`);
+  }
+  // A rider only makes sense on a delivery order — attributing one to a
+  // dine-in or takeaway would be a mistake the till should catch.
+  if (input.riderId !== undefined) {
+    if (input.orderType !== 'delivery') throw new OrderStateError('a rider can only be assigned to a delivery order');
+    const rider = await db.selectFrom('rider').select('id').where('id', '=', input.riderId).executeTakeFirst();
+    if (!rider) throw new Error(`rider ${input.riderId} not found`);
   }
 
   const channel = input.channel ?? 'customer';
@@ -613,6 +628,7 @@ export async function createOrder(db: Kysely<Database>, input: CreateOrderInput,
       customer_name: input.customerName?.trim() ? input.customerName.trim() : null,
       customer_phone: input.customerPhone?.trim() ? input.customerPhone.trim() : null,
       waiter_id: input.waiterId ?? null,
+      rider_id: input.riderId ?? null,
       beneficiary_person_id: input.beneficiaryPersonId ?? null,
       shift_id: openShift?.id ?? null,
       opened_at: now,

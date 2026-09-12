@@ -13,6 +13,7 @@ import { OrdersScreen } from './screens/OrdersScreen.tsx';
 import { PartnerConfigScreen } from './screens/PartnerConfigScreen.tsx';
 import { PaymentScreen } from './screens/PaymentScreen.tsx';
 import { PeopleConfigScreen } from './screens/PeopleConfigScreen.tsx';
+import { RidersConfigScreen } from './screens/RidersConfigScreen.tsx';
 import { ReportsScreen } from './screens/ReportsScreen.tsx';
 import { SettingsScreen } from './screens/SettingsScreen.tsx';
 import { ShiftScreen } from './screens/ShiftScreen.tsx';
@@ -61,6 +62,7 @@ const MANAGEMENT = [
   { to: '/config/menu', label: 'Menu', minimum: 'manager' },
   { to: '/config/partners', label: 'Partners', minimum: 'manager' },
   { to: '/config/people', label: 'People', minimum: 'manager' },
+  { to: '/config/riders', label: 'Riders', minimum: 'manager' },
   { to: '/settings', label: 'Settings', minimum: 'admin' },
 ] as const;
 
@@ -176,6 +178,14 @@ export function App(): JSX.Element {
             element={
               <RoleGate minimum="manager">
                 <PeopleConfigScreen />
+              </RoleGate>
+            }
+          />
+          <Route
+            path="/config/riders"
+            element={
+              <RoleGate minimum="manager">
+                <RidersConfigScreen />
               </RoleGate>
             }
           />
