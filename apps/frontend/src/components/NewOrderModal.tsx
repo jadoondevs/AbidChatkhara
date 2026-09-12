@@ -1,7 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useCreateOrder, useRoster } from '../api/hooks.js';
 import type { OrderType } from '../api/types.js';
-import { useAuth } from '../auth/AuthContext.tsx';
 import { ErrorBanner, Modal } from './ui.tsx';
 
 const ORDER_TYPES: { value: OrderType; label: string }[] = [
@@ -25,13 +24,30 @@ const ORDER_TYPES: { value: OrderType; label: string }[] = [
 export function NewOrderModal({ onClose, onCreated }: { onClose: () => void; onCreated: (orderId: number) => void }): JSX.Element {
   const createOrder = useCreateOrder();
   const roster = useRoster();
-  const { session } = useAuth();
 
   const [orderType, setOrderType] = useState<OrderType>('dine_in');
   const [tableLabel, setTableLabel] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [waiterId, setWaiterId] = useState<number | ''>(session?.userId ?? '');
+  // Left empty by default — never pre-filled with whoever is signed in.
+  // The person taking the order at the till is usually not the waiter
+  // serving the table, so defaulting to the logged-in user (an admin,
+  // most nights) just meant re-picking every time.
+  const [waiterId, setWaiterId] = useState<number | ''>('');
+
+  // Only actual waiters belong in the picker — the roster carries every
+  // active user (cashiers, the admin), and attributing a table to the
+  // admin who happened to be logged in is exactly the bug this avoids.
+  // "Waiter" is the `server` role in this system.
+  const waiters = (roster.data ?? []).filter((user) => user.role === 'server');
+
+  // With a single waiter there is no choice to make, so make it for them:
+  // the dialog opens with that waiter already selected. Only fills an
+  // empty field, so it never fights a deliberate pick when there are
+  // several.
+  useEffect(() => {
+    if (waiterId === '' && waiters.length === 1) setWaiterId(waiters[0]!.id);
+  }, [waiters, waiterId]);
 
   const dineIn = orderType === 'dine_in';
   // The waiter is still required for dine-in: service charge and the
@@ -115,13 +131,16 @@ export function NewOrderModal({ onClose, onCreated }: { onClose: () => void; onC
               <label htmlFor="waiter">Waiter</label>
               <select id="waiter" value={waiterId} onChange={(event) => setWaiterId(event.target.value === '' ? '' : Number(event.target.value))}>
                 <option value="">Select a waiter…</option>
-                {roster.data?.map((user) => (
+                {waiters.map((user) => (
                   <option key={user.id} value={user.id}>
                     {user.name}
                   </option>
                 ))}
               </select>
               {roster.isError && <p className="muted">Couldn’t load the staff list. Check the connection and try again.</p>}
+              {!roster.isLoading && !roster.isError && waiters.length === 0 && (
+                <p className="muted">No waiters yet — add a staff member with the “server” role under Settings.</p>
+              )}
             </div>
           )}
 
