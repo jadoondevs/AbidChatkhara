@@ -82,6 +82,12 @@ const shiftPartnerShareLineSchema = z.object({
   amountMinor: z.number().int(),
 });
 
+const shiftCategorySalesLineSchema = z.object({
+  categoryName: z.string(),
+  qty: z.number().int(),
+  netSalesMinor: z.number().int(),
+});
+
 const shiftReportListEntrySchema = z.object({
   shift: shiftSchema,
   businessDate: z.string(),
@@ -102,6 +108,7 @@ const shiftReportSchema = z.object({
   totalCollectedMinor: z.number().int(),
   zReport: zReportSchema,
   itemSales: z.array(shiftItemSalesLineSchema),
+  categorySales: z.array(shiftCategorySalesLineSchema),
   itemSalesQtyTotal: z.number().int(),
   itemSalesTotalMinor: z.number().int(),
   partnerShare: z.array(shiftPartnerShareLineSchema),

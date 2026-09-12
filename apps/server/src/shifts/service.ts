@@ -523,6 +523,32 @@ export interface ShiftPartnerShareLine {
   readonly amountMinor: Paisa;
 }
 
+/** One menu category's takings this shift — how many portions across all
+ * its items, and their net sales. A roll-up of the item-sales rows by
+ * their category, so its total is the same customer revenue. */
+export interface ShiftCategorySalesLine {
+  readonly categoryName: string;
+  readonly qty: number;
+  readonly netSalesMinor: Paisa;
+}
+
+/** Roll item-sales rows up by menu category, biggest earner first. An
+ * item whose category was deleted falls under "Uncategorised" rather than
+ * being dropped from the totals. */
+function categorySalesFrom(itemSales: readonly ShiftItemSalesLine[]): ShiftCategorySalesLine[] {
+  const byCategory = new Map<string, { qty: number; amounts: Paisa[] }>();
+  for (const line of itemSales) {
+    const key = line.categoryName ?? 'Uncategorised';
+    const entry = byCategory.get(key) ?? { qty: 0, amounts: [] };
+    entry.qty += line.qty;
+    entry.amounts.push(line.netSalesMinor);
+    byCategory.set(key, entry);
+  }
+  return [...byCategory.entries()]
+    .map(([categoryName, { qty, amounts }]) => ({ categoryName, qty, netSalesMinor: sum(amounts) }))
+    .sort((a, b) => b.netSalesMinor - a.netSalesMinor || a.categoryName.localeCompare(b.categoryName));
+}
+
 /**
  * What each partner earned this shift, from the frozen `line_allocation`
  * rows the allocation engine already wrote at bill time — never a fresh
@@ -576,6 +602,9 @@ export interface ShiftReport {
   readonly totalCollectedMinor: Paisa;
   readonly zReport: ZReport;
   readonly itemSales: ShiftItemSalesLine[];
+  /** The same item sales, rolled up by menu category. Totals match
+   * itemSalesQtyTotal / itemSalesTotalMinor. */
+  readonly categorySales: ShiftCategorySalesLine[];
   readonly itemSalesQtyTotal: number;
   /** Sum of the item table's net sales — equals the Z-report's customer
    * sales, because both are net of the same prorated discounts and
@@ -628,6 +657,7 @@ export async function getShiftReport(db: Kysely<Database>, shiftId: number): Pro
     totalCollectedMinor: add(zReport.cashPaymentsMinor, zReport.nonCashPaymentsMinor),
     zReport,
     itemSales,
+    categorySales: categorySalesFrom(itemSales),
     itemSalesQtyTotal: itemSales.reduce((total, line) => total + line.qty, 0),
     itemSalesTotalMinor: sum(itemSales.map((line) => line.netSalesMinor)),
     partnerShare,

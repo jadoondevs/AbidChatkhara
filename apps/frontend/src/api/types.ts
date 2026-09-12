@@ -532,6 +532,12 @@ export interface ShiftPartnerShareLine {
   amountMinor: Paisa;
 }
 
+export interface ShiftCategorySalesLine {
+  categoryName: string;
+  qty: number;
+  netSalesMinor: Paisa;
+}
+
 /** The complete per-shift report behind Reports → Shift Reports: the
  * shift's own Z-report plus item sales, partner share and the headline
  * figures, all filed under one business date. */
@@ -545,6 +551,7 @@ export interface ShiftReport {
   totalCollectedMinor: Paisa;
   zReport: ZReport;
   itemSales: ShiftItemSalesLine[];
+  categorySales: ShiftCategorySalesLine[];
   itemSalesQtyTotal: number;
   itemSalesTotalMinor: Paisa;
   partnerShare: ShiftPartnerShareLine[];

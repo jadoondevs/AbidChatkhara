@@ -340,6 +340,23 @@ function sharePercent(amountMinor: Paisa, totalMinor: Paisa): string {
   return `${Math.round(ratio(amountMinor, totalMinor) * 100)}%`;
 }
 
+/** Roll item-mix rows up by menu category — quantity and net sales per
+ * section — from rows already fetched, biggest earner first. An item
+ * whose category was removed falls under "Uncategorised". */
+function categoryRollup(lines: readonly ItemMixLine[]): { categoryName: string; qty: number; netSalesMinor: Paisa }[] {
+  const byCategory = new Map<string, { qty: number; amounts: Paisa[] }>();
+  for (const line of lines) {
+    const key = line.categoryName ?? 'Uncategorised';
+    const entry = byCategory.get(key) ?? { qty: 0, amounts: [] };
+    entry.qty += line.qty;
+    entry.amounts.push(line.netSalesMinor);
+    byCategory.set(key, entry);
+  }
+  return [...byCategory.entries()]
+    .map(([categoryName, { qty, amounts }]) => ({ categoryName, qty, netSalesMinor: sum(amounts) }))
+    .sort((a, b) => b.netSalesMinor - a.netSalesMinor || a.categoryName.localeCompare(b.categoryName));
+}
+
 function DailySales({ range }: { range: DateRange }): JSX.Element {
   const report = useDailySalesReport(range);
   if (report.isLoading) return <Loading />;
@@ -542,6 +559,9 @@ function ItemMix({ range }: { range: DateRange }): JSX.Element {
   // money is summed by the money module, never by `+`.
   const unitsSold = lines.reduce((total, line) => total + line.qty, 0);
   const best = lines.reduce<ItemMixLine | null>((top, line) => (top === null || line.netSalesMinor > top.netSalesMinor ? line : top), null);
+  const netSalesTotal = sum(lines.map((line) => line.netSalesMinor));
+  // Category totals from the rows already fetched — no second query.
+  const categories = categoryRollup(lines);
 
   return (
     <div className="col">
@@ -549,10 +569,62 @@ function ItemMix({ range }: { range: DateRange }): JSX.Element {
         cards={[
           { label: 'Lines', value: lines.length, note: 'items and sizes' },
           { label: 'Units', value: unitsSold, note: 'individual portions' },
-          { label: 'Net sales', value: <Money minor={sum(lines.map((line) => line.netSalesMinor))} />, note: 'across every item' },
+          { label: 'Net sales', value: <Money minor={netSalesTotal} />, note: 'across every item' },
           { label: 'Best seller', value: best?.variantName ?? '—', note: best ? <Money minor={best.netSalesMinor} /> : undefined },
         ]}
       />
+
+    {/* Revenue by menu section for the range — the same rows, grouped. */}
+    <div className="card">
+      <h3 style={{ margin: 0 }}>Category sales</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th className="num">Items sold</th>
+            <th className="num">Net sales</th>
+            <th className="num">% of sales</th>
+          </tr>
+        </thead>
+        <tbody>
+          {categories.map((cat) => (
+            <tr key={cat.categoryName}>
+              <td>{cat.categoryName}</td>
+              <td className="num">{cat.qty}</td>
+              <td className="num">
+                <Money minor={cat.netSalesMinor} />
+              </td>
+              <td className="num muted">{sharePercent(cat.netSalesMinor, netSalesTotal)}</td>
+            </tr>
+          ))}
+          {categories.length === 0 && (
+            <tr>
+              <td className="muted" colSpan={4}>
+                Nothing sold in this range.
+              </td>
+            </tr>
+          )}
+        </tbody>
+        {categories.length > 0 && (
+          <tfoot>
+            <tr className="grand">
+              <td>
+                <strong>TOTAL</strong>
+              </td>
+              <td className="num">
+                <strong>{unitsSold}</strong>
+              </td>
+              <td className="num">
+                <strong>
+                  <Money minor={netSalesTotal} />
+                </strong>
+              </td>
+              <td />
+            </tr>
+          </tfoot>
+        )}
+      </table>
+    </div>
 
     <div className="card">
       <table>
@@ -947,6 +1019,59 @@ function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
           <span>… other methods</span>
           <Money minor={z.nonCashPaymentsMinor} />
         </div>
+      </div>
+
+      {/* Category sales — the same item sales rolled up by menu section,
+          so an owner can see BBQ vs Biryani at a glance. */}
+      <div className="card">
+        <h3 style={{ margin: 0 }}>Category sales</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th className="num">Items sold</th>
+              <th className="num">Net sales</th>
+              <th className="num">% of sales</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.categorySales.map((line) => (
+              <tr key={line.categoryName}>
+                <td>{line.categoryName}</td>
+                <td className="num">{line.qty}</td>
+                <td className="num">
+                  <Money minor={line.netSalesMinor} />
+                </td>
+                <td className="num muted">{sharePercent(line.netSalesMinor, data.itemSalesTotalMinor)}</td>
+              </tr>
+            ))}
+            {data.categorySales.length === 0 && (
+              <tr>
+                <td className="muted" colSpan={4}>
+                  Nothing sold this shift yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+          {data.categorySales.length > 0 && (
+            <tfoot>
+              <tr className="grand">
+                <td>
+                  <strong>TOTAL</strong>
+                </td>
+                <td className="num">
+                  <strong>{data.itemSalesQtyTotal}</strong>
+                </td>
+                <td className="num">
+                  <strong>
+                    <Money minor={data.itemSalesTotalMinor} />
+                  </strong>
+                </td>
+                <td />
+              </tr>
+            </tfoot>
+          )}
+        </table>
       </div>
 
       {/* Item sales (requirement 5) — every item, not a top-N */}

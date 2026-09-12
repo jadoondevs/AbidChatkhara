@@ -139,6 +139,22 @@ describe('shifts/shift-report', () => {
     expect(report.itemSalesTotalMinor).toBe(3800_00);
   });
 
+  it('rolls item sales up by menu category, biggest earner first', async () => {
+    const { shift } = await buildShift();
+    const report = await getShiftReport(ctx.db, shift.id);
+
+    // Tawa Chicken (Rs 3200) outsells Biryani (Rs 600), so it sorts first.
+    expect(report.categorySales).toEqual([
+      { categoryName: 'Tawa Chicken', qty: 4, netSalesMinor: 3200_00 },
+      { categoryName: 'Biryani', qty: 1, netSalesMinor: 600_00 },
+    ]);
+    // The category totals reconcile to the item-sales totals.
+    const qty = report.categorySales.reduce((total, line) => total + line.qty, 0);
+    const net = report.categorySales.reduce((total, line) => total + line.netSalesMinor, 0);
+    expect(qty).toBe(report.itemSalesQtyTotal);
+    expect(net).toBe(report.itemSalesTotalMinor);
+  });
+
   it('keeps service charge OUT of revenue and reports it on its own line', async () => {
     const { shift } = await buildShift();
     const report = await getShiftReport(ctx.db, shift.id);
