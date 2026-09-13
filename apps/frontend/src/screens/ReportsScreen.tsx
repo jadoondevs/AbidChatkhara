@@ -284,6 +284,11 @@ function Dashboard({ range }: { range: DateRange }): JSX.Element {
             value: <Money minor={data.serviceChargeMinor} />,
             note: 'held for waiters, not revenue',
           },
+          {
+            label: 'Delivery charge',
+            value: <Money minor={data.deliveryChargeMinor} />,
+            note: 'held for riders, not revenue',
+          },
         ]}
       />
 
@@ -418,12 +423,10 @@ function DailySales({ range }: { range: DateRange }): JSX.Element {
           <span>Service charge (owed to waiters)</span>
           <Money minor={data.serviceChargeMinor} />
         </div>
-        {data.deliveryChargeMinor > 0 && (
-          <div className="total-line">
-            <span>Delivery charge (owed to riders)</span>
-            <Money minor={data.deliveryChargeMinor} />
-          </div>
-        )}
+        <div className="total-line">
+          <span>Delivery charge (owed to riders)</span>
+          <Money minor={data.deliveryChargeMinor} />
+        </div>
         <div className="total-line">
           <span>Rounding adjustments</span>
           <Money minor={data.roundingAdjustmentMinor} />
@@ -468,23 +471,24 @@ function DailySales({ range }: { range: DateRange }): JSX.Element {
           </tbody>
         </table>
 
-        {data.deliveryChargeByRider.length > 0 && (
-          <>
-            <h3>Delivery charge per rider</h3>
-            <table>
-              <tbody>
-                {data.deliveryChargeByRider.map((line) => (
-                  <tr key={line.riderId}>
-                    <td>{line.riderName}</td>
-                    <td className="num">
-                      <Money minor={line.totalMinor} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </>
-        )}
+        <h3>Delivery charge per rider</h3>
+        <table>
+          <tbody>
+            {data.deliveryChargeByRider.map((line) => (
+              <tr key={line.riderId}>
+                <td>{line.riderName}</td>
+                <td className="num">
+                  <Money minor={line.totalMinor} />
+                </td>
+              </tr>
+            ))}
+            {data.deliveryChargeByRider.length === 0 && (
+              <tr>
+                <td className="muted">None.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
     </div>
@@ -1011,6 +1015,7 @@ function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
             note: 'total collected ÷ bills',
           },
           { label: 'Service charge', value: <Money minor={z.serviceChargeCollectedMinor} />, note: 'held for waiters, not revenue' },
+          { label: 'Delivery charge', value: <Money minor={z.deliveryChargeCollectedMinor} />, note: 'held for riders, not revenue' },
         ]}
       />
 
@@ -1027,12 +1032,10 @@ function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
           <span>Service charge (NOT revenue — held for waiters)</span>
           <Money minor={z.serviceChargeCollectedMinor} />
         </div>
-        {z.deliveryChargeCollectedMinor > 0 && (
-          <div className="total-line">
-            <span>Delivery charge (NOT revenue — held for riders)</span>
-            <Money minor={z.deliveryChargeCollectedMinor} />
-          </div>
-        )}
+        <div className="total-line">
+          <span>Delivery charge (NOT revenue — held for riders)</span>
+          <Money minor={z.deliveryChargeCollectedMinor} />
+        </div>
         <div className="total-line">
           <span>Tax collected</span>
           <Money minor={z.taxCollectedMinor} />

@@ -353,12 +353,13 @@ export function ZReportCard({ zReport, loading }: { zReport: ZReport | undefined
           <span>Service charge (held for waiters, not revenue)</span>
           <Money minor={zReport.serviceChargeCollectedMinor} />
         </div>
-        {zReport.deliveryChargeCollectedMinor > 0 && (
-          <div className="total-line">
-            <span>Delivery charge (held for riders, not revenue)</span>
-            <Money minor={zReport.deliveryChargeCollectedMinor} />
-          </div>
-        )}
+        {/* Always shown, at Rs 0 or not — the twin of the service-charge
+            line above, so the "held, not revenue" split reads the same
+            for riders as it does for waiters. */}
+        <div className="total-line">
+          <span>Delivery charge (held for riders, not revenue)</span>
+          <Money minor={zReport.deliveryChargeCollectedMinor} />
+        </div>
         <div className="total-line">
           <span>Cash</span>
           <Money minor={zReport.cashPaymentsMinor} />
