@@ -29,55 +29,78 @@
         { "name": "Tawa Piece", "price": 800 },
         { "name": "Tawa Piece Makhni", "price": 900 },
         { "name": "Tawa Piece Boneless", "price": 900 },
-        { "name": "Tawa Piece Boneless Makhni", "price": 950 },
+        { "name": "Tawa Boneless Makhni", "price": 950 },
         { "name": "Tawa Piece Masala", "price": 900 },
-        { "name": "Tawa Piece Masala Makhni", "price": 950 },
-        { "name": "Reshmi Malai Boti Plate", "price": 950 },
+        { "name": "Tawa Masala Makhni", "price": 950 },
         { "name": "Tawa Piece Boti", "price": 800 },
-        { "name": "Tawa Piece Boti Makhni", "price": 950 }
+        { "name": "Tawa Piece Boti Makhni", "price": 950 },
+        { "name": "Reshmi Malai Boti", "price": 530, "sizes": { "group": "Half / Full", "prices": { "Half": 530, "Full": 950 } } },
+        { "name": "Tawa Qeema", "price": 500, "sizes": { "group": "Half / Full", "prices": { "Half": 500, "Full": 800 } } }
+      ]
+    },
+    {
+      "name": "Biryani & Rice",
+      "items": [
+        { "name": "Matka Tikka Biryani", "price": 900 },
+        { "name": "Matka Malai Boti Biryani", "price": 1000 },
+        { "name": "Matka Beef Biryani", "price": 1250 },
+        { "name": "Chicken Biryani", "price": 400 },
+        { "name": "Tawa Chicken With Rice", "price": 1100 },
+        { "name": "Beef Nalli Biryani", "price": 4500 },
+        { "name": "Chicken Biryani Daig", "price": 3000 },
+        { "name": "Beef Biryani Daig", "price": 4000 }
       ]
     },
     {
       "name": "B.B.Q",
       "items": [
-        { "name": "Chicken Tikka Leg Piece", "price": 420 },
-        { "name": "Chicken Tikka Chest Piece", "price": 440 },
-        { "name": "Chicken Boti", "price": 360, "sizes": { "group": "Half / Full", "prices": { "Half": 360, "Full": 680 } } },
-        { "name": "Chicken Malai Boti", "price": 360, "sizes": { "group": "Half / Full", "prices": { "Half": 360, "Full": 720 } } },
-        { "name": "Chicken Seekh Kabab", "price": 200, "sizes": { "group": "Half / Full", "prices": { "Half": 200, "Full": 800 } } },
-        { "name": "Beef Seekh Kabab", "price": 200, "sizes": { "group": "Half / Full", "prices": { "Half": 200, "Full": 800 } } }
+        { "name": "Tikka Leg / Chest", "price": 550 },
+        { "name": "Chicken Malai Boti", "price": 530, "sizes": { "group": "Half / Full", "prices": { "Half": 530, "Full": 950 } } },
+        { "name": "Chicken Balochi Boti", "price": 550, "sizes": { "group": "Half / Full", "prices": { "Half": 550, "Full": 950 } } },
+        { "name": "Beef Behari Boti", "price": 1000, "sizes": { "group": "Half / Full", "prices": { "Half": 1000, "Full": 1500 } } },
+        { "name": "Chicken Seekh Kabab", "price": 800, "sizes": { "group": "Half / Full", "prices": { "Half": 800, "Full": 1200 } } },
+        { "name": "Beef Seekh Kabab", "price": 900, "sizes": { "group": "Half / Full", "prices": { "Half": 900, "Full": 1600 } } },
+        { "name": "Beef Behari Kabab", "price": 900, "sizes": { "group": "Half / Full", "prices": { "Half": 900, "Full": 1500 } } }
       ]
     },
     {
       "name": "Karahi",
       "items": [
         { "name": "Chicken Karahi", "price": 1100, "sizes": { "group": "Half / Full", "prices": { "Half": 1100, "Full": 2100 } } },
-        { "name": "Chicken Karahi Makhni", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2400 } } },
-        { "name": "Chicken Achari Karahi", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2400 } } },
-        { "name": "Chicken Achari Karahi Makhni", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2500 } } },
-        { "name": "Chicken Karahi White", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2500 } } },
-        { "name": "Chicken Karahi Makhni", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2500 } } },
-        { "name": "Chicken Boneless Karahi", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2600 } } },
+        { "name": "Karahi Makhni", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2400 } } },
+        { "name": "Achari Karahi", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2400 } } },
+        { "name": "Achari Makhni", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2500 } } },
+        { "name": "Karahi White", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2500 } } },
+        { "name": "Boneless Karahi", "price": 1300, "sizes": { "group": "Half / Full", "prices": { "Half": 1300, "Full": 2600 } } },
         { "name": "Seekh Kabab Karahi", "price": 1000, "sizes": { "group": "Half / Full", "prices": { "Half": 1000, "Full": 2000 } } },
         { "name": "Shinwari Karahi", "price": 2000, "sizes": { "group": "Half / Full", "prices": { "Half": 2000, "Full": 3800 } } }
       ]
     },
     {
-      "name": "Biryani",
+      "name": "Paratha Rolls",
       "items": [
-        { "name": "Matka Tikka Biryani", "price": 600 },
-        { "name": "Matka Malai Boti Biryani", "price": 650 },
-        { "name": "Tawa Chicken With Rice", "price": 850 },
-        { "name": "Chicken Biryani", "price": 400 }
+        { "name": "Chicken Chatni Roll", "price": 390 },
+        { "name": "Beef Boti Roll", "price": 430 },
+        { "name": "Chapati Behari Roll", "price": 400 },
+        { "name": "Shapatar Roll", "price": 1050 }
       ]
     },
     {
-      "name": "Chatni, Roti & Sides",
+      "name": "Soups",
       "items": [
-        { "name": "Mint Chatni", "price": 100 },
-        { "name": "Mint Raita", "price": 100 },
-        { "name": "Zeera Raita", "price": 100 },
-        { "name": "Fresh Salad", "price": 150 },
+        { "name": "Chicken Soup", "price": 400 },
+        { "name": "Yakhni", "price": 300 },
+        { "name": "Chicken Corn Soup", "price": 400 },
+        { "name": "Chicken Chinese Soup", "price": 400 }
+      ]
+    },
+    {
+      "name": "Chatni & Sides",
+      "items": [
+        { "name": "Mint Chatni", "price": 50 },
+        { "name": "Mint Raita", "price": 50 },
+        { "name": "Zeera Raita", "price": 50 },
+        { "name": "Fresh Salad", "price": 100 },
         { "name": "Chapati", "price": 30 }
       ]
     },
@@ -86,13 +109,24 @@
       "items": [
         { "name": "Golgappa", "price": 200, "sizes": { "group": "Half / Full", "prices": { "Half": 200, "Full": 380 } } },
         { "name": "Papri Chana Chaat", "price": 250 },
-        { "name": "Fruit Chaat", "price": 300 }
+        { "name": "Fruit Chaat", "price": 300 },
+        { "name": "Russian Salad", "price": 350 },
+        { "name": "Fruit Bowl", "price": 300 }
+      ]
+    },
+    {
+      "name": "Meetha",
+      "items": [
+        { "name": "Gajar ka Halwa", "price": 300 },
+        { "name": "Kheer", "price": 100 },
+        { "name": "Lab e Shireen", "price": 150 }
       ]
     },
     {
       "name": "Tea",
       "items": [
-        { "name": "Tea", "price": 100 },
+        { "name": "Matka Tea (Rait)", "price": 150 },
+        { "name": "Doodh Patti", "price": 100 },
         { "name": "Cardamom Tea", "price": 100 },
         { "name": "Green Tea", "price": 80 }
       ]
