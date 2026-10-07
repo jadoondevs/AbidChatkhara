@@ -597,6 +597,29 @@ async function shiftPartnerShare(db: Kysely<Database>, shiftId: number): Promise
  * the sales/cash/payment figures ARE the Z-report, and the item table is
  * the item-mix report scoped to this shift.
  */
+/** How a shift's customer bills split across dine-in / takeaway /
+ * delivery: a count and the net sales for each. Customer channel only,
+ * closed bills only — the same basis as `orderCount` and the Z-report's
+ * customer sales, so the three dovetail. All three types are always
+ * present, a zero row where that type saw no trade. */
+export interface ShiftOrderTypeLine {
+  readonly orderType: OrderType;
+  readonly orderCount: number;
+  readonly netSalesMinor: Paisa;
+}
+
+/** A shift's takings by payment method, with a COUNT of bills alongside
+ * the amount — the count the plain Z-report payment breakdown lacks. A
+ * split bill (part cash, part card) is counted under each method it
+ * touched; the amounts stay exact per method, so they still total the
+ * money collected. */
+export interface ShiftPaymentMethodCountLine {
+  readonly paymentMethodId: number;
+  readonly paymentMethodName: string;
+  readonly orderCount: number;
+  readonly totalMinor: Paisa;
+}
+
 export interface ShiftReport {
   readonly shift: ShiftSummary;
   readonly businessDate: string;
@@ -625,6 +648,58 @@ export interface ShiftReport {
    * delivery twin of the waiter service-charge payout. */
   readonly riderPayout: RiderPayoutLine[];
   readonly riderPayoutTotalMinor: Paisa;
+  /** Customer bills this shift split by dine-in / takeaway / delivery. */
+  readonly orderTypeBreakdown: ShiftOrderTypeLine[];
+  /** Payment methods this shift, each with its bill count and amount. */
+  readonly paymentMethodCounts: ShiftPaymentMethodCountLine[];
+}
+
+/** Dine-in / takeaway / delivery split for a shift's customer bills. The
+ * three types are always returned, in menu order, a zero row where none
+ * sold — so the table a manager reads never silently drops a channel. */
+async function shiftOrderTypeBreakdown(db: Kysely<Database>, shiftId: number): Promise<ShiftOrderTypeLine[]> {
+  const rows = await db
+    .selectFrom('order')
+    .select(({ fn }) => ['order_type as orderType', fn.count<number>('id').as('n'), fn.sum<number>('net_sales_minor').as('net')])
+    .where('shift_id', '=', shiftId)
+    .where('channel', '=', 'customer')
+    .where('status', '=', 'closed')
+    .groupBy('order_type')
+    .execute();
+  const byType = new Map(rows.map((r) => [r.orderType as OrderType, { n: Number(r.n), net: paisa(Number(r.net ?? 0)) }]));
+  const ORDER: OrderType[] = ['dine_in', 'takeaway', 'delivery'];
+  return ORDER.map((orderType) => {
+    const hit = byType.get(orderType);
+    return { orderType, orderCount: hit?.n ?? 0, netSalesMinor: hit?.net ?? paisa(0) };
+  });
+}
+
+/** Payment methods for a shift, with a distinct-bill count beside the
+ * amount. Counts bills (distinct order ids), so a split bill shows under
+ * each method it used; amounts are summed exactly and still reconcile to
+ * total collected. */
+async function shiftPaymentMethodCounts(db: Kysely<Database>, shiftId: number): Promise<ShiftPaymentMethodCountLine[]> {
+  const rows = await db
+    .selectFrom('payment')
+    .innerJoin('payment_method', 'payment_method.id', 'payment.payment_method_id')
+    .innerJoin('order', 'order.id', 'payment.order_id')
+    .select(({ fn }) => [
+      'payment_method.id as paymentMethodId',
+      'payment_method.display_name as paymentMethodName',
+      fn.count<number>('payment.order_id').distinct().as('orders'),
+      fn.sum<number>('payment.amount_minor').as('total'),
+    ])
+    .where('order.shift_id', '=', shiftId)
+    .groupBy(['payment_method.id', 'payment_method.display_name'])
+    .execute();
+  return rows
+    .map((r) => ({
+      paymentMethodId: r.paymentMethodId,
+      paymentMethodName: r.paymentMethodName,
+      orderCount: Number(r.orders),
+      totalMinor: paisa(Number(r.total ?? 0)),
+    }))
+    .sort((a, b) => a.paymentMethodName.localeCompare(b.paymentMethodName));
 }
 
 export async function getShiftReport(db: Kysely<Database>, shiftId: number): Promise<ShiftReport> {
@@ -660,6 +735,8 @@ export async function getShiftReport(db: Kysely<Database>, shiftId: number): Pro
 
   const partnerShare = await shiftPartnerShare(db, shiftId);
   const riderPayout = await riderPayoutTotals(db, { shiftId });
+  const orderTypeBreakdown = await shiftOrderTypeBreakdown(db, shiftId);
+  const paymentMethodCounts = await shiftPaymentMethodCounts(db, shiftId);
 
   return {
     shift,
@@ -678,5 +755,7 @@ export async function getShiftReport(db: Kysely<Database>, shiftId: number): Pro
     partnerShareTotalMinor: sum(partnerShare.map((line) => line.amountMinor)),
     riderPayout,
     riderPayoutTotalMinor: sum(riderPayout.map((line) => line.totalMinor)),
+    orderTypeBreakdown,
+    paymentMethodCounts,
   };
 }

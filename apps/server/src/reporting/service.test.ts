@@ -15,6 +15,7 @@ import { createPerson } from '../consumption/service.js';
 import { createUser } from '../identity/service.js';
 import { addLine, billOrder, createOrder, setDiscount, voidLine, voidOrder } from '../ordering/service.js';
 import { createPartner, setItemOwnership, setModifierOwnership } from '../partners/service.js';
+import { openShift } from '../shifts/service.js';
 import { createTestDb, enableServiceCharge } from '../platform/db/test-helpers.js';
 import { defaultsFor } from '../settings/schema.js';
 import { saveSetting } from '../settings/service.js';
@@ -116,6 +117,24 @@ describe('reporting/service', () => {
 
       const report = await dailySalesReport(ctx.db);
       expect(report.orderCount).toBe(2);
+    });
+
+    it('scopes to one shift by shiftId, and the shift wins over the date range', async () => {
+      const { actor, item, cash } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+      await closedCustomerOrder(item, cash.id, actor); // Rs 1000, under the shift
+
+      // A date window far in the past would exclude the sale — but with the
+      // shift selected it comes back, exactly as the item-mix report does.
+      const past = { fromInclusive: '2000-01-01T00:00:00.000Z', toExclusive: '2000-01-02T00:00:00.000Z' };
+      const scoped = await dailySalesReport(ctx.db, { shiftId: shift.id, ...past });
+      expect(scoped.customerSalesMinor).toBe(1000_00);
+      expect(scoped.orderCount).toBe(1);
+
+      // A shift with nothing in it reports zero.
+      const empty = await dailySalesReport(ctx.db, { shiftId: shift.id + 999 });
+      expect(empty.customerSalesMinor).toBe(0);
+      expect(empty.orderCount).toBe(0);
     });
 
     it('buckets takings by the LOCAL hour a bill closed, busiest hours included', async () => {
@@ -538,6 +557,24 @@ describe('reporting/service', () => {
 
       expect(await voidAndDiscountReport(ctx.db, { actorId: actor.actorId })).toEqual([]);
       expect(await voidAndDiscountReport(ctx.db, { actorId: other.id })).toHaveLength(1);
+    });
+
+    it('scopes to a shift by the order each entry belongs to — including a line void, placed by its order', async () => {
+      const { actor, item } = await setupBase();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, actor);
+
+      // In the shift: an order whose only line is voided (entity is the
+      // line, not the order — the scope must still place it by the order).
+      const inShift = await createOrder(ctx.db, { orderType: 'takeaway' }, actor);
+      const detail = await addLine(ctx.db, inShift.id, { itemId: item.id, qty: 1 }, actor);
+      await voidLine(ctx.db, inShift.id, detail.lines[0]!.id, { reason: 'wrong item' }, actor);
+
+      const scoped = await voidAndDiscountReport(ctx.db, { shiftId: shift.id });
+      expect(scoped).toHaveLength(1);
+      expect(scoped[0]).toMatchObject({ kind: 'void_line', orderId: inShift.id });
+
+      // A different shift sees none of it.
+      expect(await voidAndDiscountReport(ctx.db, { shiftId: shift.id + 999 })).toEqual([]);
     });
   });
 

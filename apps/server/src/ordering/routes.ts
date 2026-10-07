@@ -113,6 +113,7 @@ const orderSearchResultSchema = orderSummarySchema.extend({
   lineCount: z.number().int(),
   waiterName: z.string().nullable(),
   settledByName: z.string().nullable(),
+  paymentMethods: z.array(z.string()),
 });
 
 const floorBoardSchema = z.object({
@@ -370,15 +371,21 @@ export const orderingRoutes: FastifyPluginAsync<OrderingPluginOptions> = async (
         querystring: dateFilterSchema.extend({
           q: z.string().max(120).optional(),
           limit: z.coerce.number().int().positive().max(500).optional(),
+          shiftId: z.coerce.number().int().optional(),
         }),
         response: { 200: z.array(orderSearchResultSchema) },
       },
     },
     async (request, reply) => {
       requireAuth(request, reply);
-      const { q, limit, ...filter } = request.query;
+      const { q, limit, shiftId, ...filter } = request.query;
       const range = resolveDateRange(filter);
-      return searchOrders(db, { ...range, ...(q === undefined ? {} : { q }), ...(limit === undefined ? {} : { limit }) });
+      return searchOrders(db, {
+        ...range,
+        ...(q === undefined ? {} : { q }),
+        ...(limit === undefined ? {} : { limit }),
+        ...(shiftId === undefined ? {} : { shiftId }),
+      });
     },
   );
 

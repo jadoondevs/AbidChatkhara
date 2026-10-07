@@ -183,6 +183,9 @@ export interface OrderSearchResult extends OrderSummary {
   lineCount: number;
   waiterName: string | null;
   settledByName: string | null;
+  /** Distinct payment methods this order was settled with, in first-use
+   * order — one for a normal bill, several for a split, empty if unpaid. */
+  paymentMethods: string[];
 }
 
 export interface FloorBoard {
@@ -556,6 +559,19 @@ export interface ShiftCategorySalesLine {
   netSalesMinor: Paisa;
 }
 
+export interface ShiftOrderTypeLine {
+  orderType: OrderType;
+  orderCount: number;
+  netSalesMinor: Paisa;
+}
+
+export interface ShiftPaymentMethodCountLine {
+  paymentMethodId: number;
+  paymentMethodName: string;
+  orderCount: number;
+  totalMinor: Paisa;
+}
+
 /** The complete per-shift report behind Reports → Shift Reports: the
  * shift's own Z-report plus item sales, partner share and the headline
  * figures, all filed under one business date. */
@@ -576,6 +592,8 @@ export interface ShiftReport {
   partnerShareTotalMinor: Paisa;
   riderPayout: RiderPayoutLine[];
   riderPayoutTotalMinor: Paisa;
+  orderTypeBreakdown: ShiftOrderTypeLine[];
+  paymentMethodCounts: ShiftPaymentMethodCountLine[];
 }
 
 export interface DailySalesReport {

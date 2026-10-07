@@ -155,7 +155,7 @@ export function useOrders(statuses: OrderStatus[]): UseQueryResult<OrderSummary[
  * never the whole database. Defaults to today on the server when no
  * range is given.
  */
-export function useOrderSearch(params: { date?: string; from?: string; to?: string; q?: string }): UseQueryResult<OrderSearchResult[]> {
+export function useOrderSearch(params: { date?: string; from?: string; to?: string; q?: string; shiftId?: number }): UseQueryResult<OrderSearchResult[]> {
   return useQuery({
     queryKey: ['orders', params],
     queryFn: () => api.get<OrderSearchResult[]>(`/api/orders/search${query(params)}`),
@@ -605,6 +605,9 @@ export interface DateRange {
   to?: string;
   fromInclusive?: string;
   toExclusive?: string;
+  /** Scope the report to one shift instead of the dates. When set, the
+   * server ignores the range — a shift is a precise window. */
+  shiftId?: number;
 }
 
 export function useDailySalesReport(range: DateRange): UseQueryResult<DailySalesReport> {

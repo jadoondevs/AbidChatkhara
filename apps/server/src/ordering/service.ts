@@ -323,6 +323,10 @@ export interface OrderSearchOptions {
   readonly toExclusive?: string | undefined;
   readonly q?: string | undefined;
   readonly limit?: number | undefined;
+  /** Scope to one shift (by the order's own `shift_id`) instead of the
+   * date range. When set, the range is ignored — the shift is a precise
+   * window, so it wins, the same rule the reports follow. */
+  readonly shiftId?: number | undefined;
 }
 
 export interface OrderSearchResult extends OrderSummary {
@@ -331,6 +335,11 @@ export interface OrderSearchResult extends OrderSummary {
   readonly lineCount: number;
   readonly waiterName: string | null;
   readonly settledByName: string | null;
+  /** The distinct payment methods this order was settled with, by display
+   * name, in the order they were first used — one entry for a normal bill,
+   * several for a split (part cash, part card), empty for an unpaid one.
+   * Lets the orders list show how a bill was paid without opening it. */
+  readonly paymentMethods: string[];
 }
 
 export async function searchOrders(db: Kysely<Database>, opts: OrderSearchOptions = {}): Promise<OrderSearchResult[]> {
@@ -350,8 +359,12 @@ export async function searchOrders(db: Kysely<Database>, opts: OrderSearchOption
   // at 12:10am belongs to the night it was paid for, and one still open
   // belongs to the day it was started on.
   const dateColumn = sql<string>`COALESCE("order".closed_at, "order".opened_at)`;
-  if (opts.fromInclusive) query = query.where(dateColumn, '>=', opts.fromInclusive);
-  if (opts.toExclusive) query = query.where(dateColumn, '<', opts.toExclusive);
+  if (opts.shiftId !== undefined) {
+    query = query.where('order.shift_id', '=', opts.shiftId);
+  } else {
+    if (opts.fromInclusive) query = query.where(dateColumn, '>=', opts.fromInclusive);
+    if (opts.toExclusive) query = query.where(dateColumn, '<', opts.toExclusive);
+  }
 
   if (term !== '') {
     const like = `%${term.toLowerCase()}%`;
@@ -377,6 +390,24 @@ export async function searchOrders(db: Kysely<Database>, opts: OrderSearchOption
 
   const orderIds = rows.map((row) => row.id);
   const paidByOrder = await paidTotals(db, orderIds);
+
+  // How each order was paid, for the list to show without opening it. By
+  // payment.id so methods list in the order they were first applied, and
+  // de-duplicated so a two-tender bill reads "Cash, Card" not "Cash, Cash".
+  const methodsByOrder = new Map<number, string[]>();
+  const methodRows = await db
+    .selectFrom('payment')
+    .innerJoin('payment_method', 'payment_method.id', 'payment.payment_method_id')
+    .select(['payment.order_id as orderId', 'payment_method.display_name as name'])
+    .where('payment.order_id', 'in', orderIds)
+    .orderBy('payment.id', 'asc')
+    .execute();
+  for (const row of methodRows) {
+    const list = methodsByOrder.get(row.orderId) ?? [];
+    if (!list.includes(row.name)) list.push(row.name);
+    methodsByOrder.set(row.orderId, list);
+  }
+
   const lineCounts = new Map<number, number>();
   const counted = await db
     .selectFrom('order_line')
@@ -395,6 +426,7 @@ export async function searchOrders(db: Kysely<Database>, opts: OrderSearchOption
       lineCount: lineCounts.get(row.id) ?? 0,
       waiterName: row.waiterName,
       settledByName: row.settledByName,
+      paymentMethods: methodsByOrder.get(row.id) ?? [],
     };
   });
 }

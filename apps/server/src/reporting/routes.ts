@@ -25,6 +25,9 @@ import {
  */
 const dateRangeQuerySchema = dateFilterSchema.extend({
   format: z.enum(['json', 'csv']).optional(),
+  // Scope any report to a single shift instead of the date range. When
+  // present it wins over the dates — the service functions branch on it.
+  shiftId: z.coerce.number().int().optional(),
 });
 
 /**
@@ -83,7 +86,7 @@ export const reportingRoutes: FastifyPluginAsync<ReportingPluginOptions> = async
     { schema: { params: z.object({ id: z.coerce.number().int() }), querystring: dateRangeQuerySchema } },
     async (request, reply) => {
       requireRole(request, reply, 'manager');
-      const statement = await partnerStatement(db, request.params.id, resolveDateRange(request.query));
+      const statement = await partnerStatement(db, request.params.id, { ...request.query, ...resolveDateRange(request.query) });
       return sendReport(reply, request.query.format, statement);
     },
   );
@@ -93,7 +96,7 @@ export const reportingRoutes: FastifyPluginAsync<ReportingPluginOptions> = async
     { schema: { params: z.object({ id: z.coerce.number().int(), itemId: z.coerce.number().int() }), querystring: dateRangeQuerySchema } },
     async (request, reply) => {
       requireRole(request, reply, 'manager');
-      const bills = await partnerItemBills(db, request.params.id, request.params.itemId, resolveDateRange(request.query));
+      const bills = await partnerItemBills(db, request.params.id, request.params.itemId, { ...request.query, ...resolveDateRange(request.query) });
       return sendReport(reply, request.query.format, bills);
     },
   );

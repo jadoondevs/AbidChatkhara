@@ -9,6 +9,14 @@ import type { Database } from '../platform/db/types.js';
 export interface DateRangeOptions {
   readonly fromInclusive?: string | undefined;
   readonly toExclusive?: string | undefined;
+  /**
+   * Scope to one shift instead of a calendar range. When set, it follows
+   * each order's own `shift_id` and the date range is ignored entirely —
+   * the same shift-wins rule the item-mix report already uses, and the
+   * whole point of a shift that lives across midnight: a sale is tagged
+   * with the shift it was rung up under, never with the calendar day.
+   */
+  readonly shiftId?: number | undefined;
 }
 
 export interface PaymentMethodBreakdownLine {
@@ -108,8 +116,12 @@ export async function dailySalesReport(db: Kysely<Database>, opts: DateRangeOpti
       'total_minor',
     ])
     .where('status', '=', 'closed');
-  if (opts.fromInclusive) query = query.where('closed_at', '>=', opts.fromInclusive);
-  if (opts.toExclusive) query = query.where('closed_at', '<', opts.toExclusive);
+  if (opts.shiftId !== undefined) {
+    query = query.where('shift_id', '=', opts.shiftId);
+  } else {
+    if (opts.fromInclusive) query = query.where('closed_at', '>=', opts.fromInclusive);
+    if (opts.toExclusive) query = query.where('closed_at', '<', opts.toExclusive);
+  }
   const orders = await query.execute();
 
   const customerSalesMinor = sum(orders.filter((o) => o.channel === 'customer').map((o) => o.net_sales_minor));
@@ -120,8 +132,11 @@ export async function dailySalesReport(db: Kysely<Database>, opts: DateRangeOpti
   // Customer bills only — see the note on `orderCount`.
   const customerOrders = orders.filter((o) => o.channel === 'customer');
 
-  const serviceChargeByWaiter = await waiterPayoutTotals(db, { fromInclusive: opts.fromInclusive, toExclusive: opts.toExclusive });
-  const deliveryChargeByRider = await riderPayoutTotals(db, { fromInclusive: opts.fromInclusive, toExclusive: opts.toExclusive });
+  // Same scope the orders above were pulled under: one shift, or the date
+  // range. The payout helpers take either, so pass whichever applies.
+  const payoutScope = opts.shiftId !== undefined ? { shiftId: opts.shiftId } : { fromInclusive: opts.fromInclusive, toExclusive: opts.toExclusive };
+  const serviceChargeByWaiter = await waiterPayoutTotals(db, payoutScope);
+  const deliveryChargeByRider = await riderPayoutTotals(db, payoutScope);
   const paymentMethodBreakdown = await paymentMethodBreakdownForOrders(
     db,
     orders.map((o) => o.id),
@@ -216,8 +231,12 @@ export async function allocationReconciliation(db: Kysely<Database>, opts: DateR
     .select(['order_line.id as orderLineId', 'order_line.allocation_base_minor as allocationBaseMinor'])
     .where('order.status', '=', 'closed')
     .where('order_line.voided', '=', 0);
-  if (opts.fromInclusive) lineQuery = lineQuery.where('order.closed_at', '>=', opts.fromInclusive);
-  if (opts.toExclusive) lineQuery = lineQuery.where('order.closed_at', '<', opts.toExclusive);
+  if (opts.shiftId !== undefined) {
+    lineQuery = lineQuery.where('order.shift_id', '=', opts.shiftId);
+  } else {
+    if (opts.fromInclusive) lineQuery = lineQuery.where('order.closed_at', '>=', opts.fromInclusive);
+    if (opts.toExclusive) lineQuery = lineQuery.where('order.closed_at', '<', opts.toExclusive);
+  }
   const lineRows = await lineQuery.execute();
   const orderLineIds = lineRows.map((r) => r.orderLineId);
 
@@ -270,8 +289,12 @@ export async function partnerStatement(db: Kysely<Database>, partnerId: number, 
     .select(['line_allocation.amount_minor as amountMinor', 'order.channel as channel', 'order_line.item_id as itemId', 'order_line.qty as qty'])
     .where('line_allocation.partner_id', '=', partnerId)
     .where('order.status', '=', 'closed');
-  if (opts.fromInclusive) rowsQuery = rowsQuery.where('order.closed_at', '>=', opts.fromInclusive);
-  if (opts.toExclusive) rowsQuery = rowsQuery.where('order.closed_at', '<', opts.toExclusive);
+  if (opts.shiftId !== undefined) {
+    rowsQuery = rowsQuery.where('order.shift_id', '=', opts.shiftId);
+  } else {
+    if (opts.fromInclusive) rowsQuery = rowsQuery.where('order.closed_at', '>=', opts.fromInclusive);
+    if (opts.toExclusive) rowsQuery = rowsQuery.where('order.closed_at', '<', opts.toExclusive);
+  }
   const rows = await rowsQuery.execute();
 
   const totalAllocatedMinor = sum(rows.map((r) => r.amountMinor));
@@ -315,8 +338,12 @@ export async function partnerItemBills(db: Kysely<Database>, partnerId: number, 
     .where('line_allocation.partner_id', '=', partnerId)
     .where('order_line.item_id', '=', itemId)
     .where('order.status', '=', 'closed');
-  if (opts.fromInclusive) query = query.where('order.closed_at', '>=', opts.fromInclusive);
-  if (opts.toExclusive) query = query.where('order.closed_at', '<', opts.toExclusive);
+  if (opts.shiftId !== undefined) {
+    query = query.where('order.shift_id', '=', opts.shiftId);
+  } else {
+    if (opts.fromInclusive) query = query.where('order.closed_at', '>=', opts.fromInclusive);
+    if (opts.toExclusive) query = query.where('order.closed_at', '<', opts.toExclusive);
+  }
   const rows = await query.orderBy('order.closed_at', 'asc').execute();
   return rows;
 }
@@ -710,8 +737,15 @@ export async function voidAndDiscountReport(db: Kysely<Database>, opts: VoidAndD
     .selectAll()
     .where('action', 'in', Object.keys(ACTION_KIND));
   if (opts.actorId !== undefined) query = query.where('actor_id', '=', opts.actorId);
-  if (opts.fromInclusive) query = query.where('created_at', '>=', opts.fromInclusive);
-  if (opts.toExclusive) query = query.where('created_at', '<', opts.toExclusive);
+  // A shift scope is applied after the entries are built, by the order
+  // each one resolves to (see below) — the audit row itself carries no
+  // shift, and its `entity_id` is a line id for a line void, so filtering
+  // on the already-resolved orderId is both simpler and type-safe. The
+  // date range is only applied when NOT scoping to a shift.
+  if (opts.shiftId === undefined) {
+    if (opts.fromInclusive) query = query.where('created_at', '>=', opts.fromInclusive);
+    if (opts.toExclusive) query = query.where('created_at', '<', opts.toExclusive);
+  }
   const rows = await query.orderBy('created_at', 'desc').execute();
 
   const lineIds = rows.filter((r) => r.entity === 'order_line').map((r) => Number(r.entity_id));
@@ -743,6 +777,16 @@ export async function voidAndDiscountReport(db: Kysely<Database>, opts: VoidAndD
       discountMinor: kind === 'discount' ? paisa(after?.discountMinor ?? 0) : null,
       createdAt: row.created_at,
     });
+  }
+
+  // Shift scope: keep only entries whose order belongs to the shift. Done
+  // on the resolved orderId (a number) rather than on the audit row, so a
+  // line void — whose entity is the line, not the order — is placed by the
+  // order it was a line of.
+  if (opts.shiftId !== undefined) {
+    const shiftOrders = await db.selectFrom('order').select('id').where('shift_id', '=', opts.shiftId).execute();
+    const inShift = new Set(shiftOrders.map((o) => o.id));
+    return entries.filter((entry) => entry.orderId !== null && inShift.has(entry.orderId));
   }
   return entries;
 }

@@ -11,11 +11,12 @@ import {
   setItemModifierPrice,
   setItemPrice,
 } from '../catalog/service.js';
-import { createPaymentMethod, recordPayment } from '../billing/service.js';
+import { createPaymentAccount, createPaymentMethod, recordPayment } from '../billing/service.js';
 import { createPerson } from '../consumption/service.js';
 import { createPartner, setItemOwnership } from '../partners/service.js';
 import { createUser } from '../identity/service.js';
 import { createRider } from '../riders/service.js';
+import { openShift } from '../shifts/service.js';
 import { createTestDb, enableServiceCharge } from '../platform/db/test-helpers.js';
 import { eventBus } from '../platform/events/bus.js';
 import {
@@ -31,6 +32,7 @@ import {
   previewBillTotals,
   removeLine,
   reopenOrder,
+  searchOrders,
   setDiscount,
   setLineNote,
   setLineQty,
@@ -846,6 +848,54 @@ describe('ordering/service', () => {
   // -------------------------------------------------------------------
   // Bill preview
   // -------------------------------------------------------------------
+
+  describe('searchOrders', () => {
+    it('attaches the payment methods a bill was settled with — de-duplicated, in first-use order', async () => {
+      const { item, orderActor } = await setupMenu();
+      const cash = await createPaymentMethod(ctx.db, { code: 'cash', displayName: 'Cash', kind: 'cash' }, orderActor);
+      const easypaisa = await createPaymentMethod(ctx.db, { code: 'easypaisa', displayName: 'Easypaisa', kind: 'wallet' }, orderActor);
+      await createPaymentAccount(ctx.db, { paymentMethodId: easypaisa.id, label: 'Counter wallet' }, orderActor);
+
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+      const billed = await billOrder(ctx.db, order.id, {}, orderActor);
+      // A split bill: part cash, then part easypaisa — one order, two methods.
+      await recordPayment(ctx.db, billed.id, { paymentMethodId: cash.id, amountMinor: paisa(100_00) }, orderActor);
+      await recordPayment(ctx.db, billed.id, { paymentMethodId: easypaisa.id, amountMinor: paisa(50_00) }, orderActor);
+
+      const results = await searchOrders(ctx.db, {});
+      expect(results.find((o) => o.id === order.id)?.paymentMethods).toEqual(['Cash', 'Easypaisa']);
+    });
+
+    it('reports an empty payment-method list for an unpaid order', async () => {
+      const { item, orderActor } = await setupMenu();
+      const order = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, order.id, { itemId: item.id, qty: 1 }, orderActor);
+      await billOrder(ctx.db, order.id, {}, orderActor);
+
+      const results = await searchOrders(ctx.db, {});
+      expect(results.find((o) => o.id === order.id)?.paymentMethods).toEqual([]);
+    });
+
+    it('scopes to one shift by shiftId, and the shift wins over the date range', async () => {
+      const { item, server, orderActor } = await setupMenu();
+      const shift = await openShift(ctx.db, { openingCashMinor: paisa(0) }, orderActor);
+
+      const a = await createOrder(ctx.db, { orderType: 'takeaway' }, orderActor);
+      await addLine(ctx.db, a.id, { itemId: item.id, qty: 1 }, orderActor);
+      const b = await createOrder(ctx.db, { orderType: 'dine_in', waiterId: server.id }, orderActor);
+      await addLine(ctx.db, b.id, { itemId: item.id, qty: 1 }, orderActor);
+
+      // A date window far in the past would exclude both orders — but with
+      // the shift selected they still come back, proving the shift wins.
+      const past = { fromInclusive: '2000-01-01T00:00:00.000Z', toExclusive: '2000-01-02T00:00:00.000Z' };
+      const inShift = await searchOrders(ctx.db, { shiftId: shift.id, ...past });
+      expect(inShift.map((o) => o.id).sort((x, y) => x - y)).toEqual([a.id, b.id].sort((x, y) => x - y));
+
+      // A shift with no orders returns nothing.
+      expect(await searchOrders(ctx.db, { shiftId: shift.id + 999 })).toEqual([]);
+    });
+  });
 
   describe('previewBillTotals', () => {
     it('predicts exactly the total that billing then persists, rounding included', async () => {

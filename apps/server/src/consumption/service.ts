@@ -289,12 +289,19 @@ export interface ConsumptionRecordQueryOptions {
   readonly personId?: number | undefined;
   readonly fromInclusive?: string | undefined;
   readonly toExclusive?: string | undefined;
+  /** Scope to one shift (by the meal order's own `shift_id`) instead of a
+   * date range. When set, the range is ignored — the same shift-wins rule
+   * the sales reports use. */
+  readonly shiftId?: number | undefined;
 }
 
 export async function listConsumptionRecords(db: Kysely<Database>, opts: ConsumptionRecordQueryOptions = {}): Promise<ConsumptionRecordSummary[]> {
   let query = db
     .selectFrom('consumption_record')
     .innerJoin('person', 'person.id', 'consumption_record.person_id')
+    // The meal's own order carries the shift it was rung up under — joined
+    // so a shift-scoped consumption report follows that, not the clock.
+    .innerJoin('order', 'order.id', 'consumption_record.order_id')
     .select([
       'consumption_record.id',
       'consumption_record.order_id',
@@ -308,8 +315,12 @@ export async function listConsumptionRecords(db: Kysely<Database>, opts: Consump
       'person.name as person_name',
     ]);
   if (opts.personId !== undefined) query = query.where('consumption_record.person_id', '=', opts.personId);
-  if (opts.fromInclusive) query = query.where('consumption_record.created_at', '>=', opts.fromInclusive);
-  if (opts.toExclusive) query = query.where('consumption_record.created_at', '<', opts.toExclusive);
+  if (opts.shiftId !== undefined) {
+    query = query.where('order.shift_id', '=', opts.shiftId);
+  } else {
+    if (opts.fromInclusive) query = query.where('consumption_record.created_at', '>=', opts.fromInclusive);
+    if (opts.toExclusive) query = query.where('consumption_record.created_at', '<', opts.toExclusive);
+  }
 
   const rows = await query.orderBy('consumption_record.created_at', 'asc').execute();
   return rows.map((row) =>

@@ -218,6 +218,38 @@ describe('shifts/shift-report', () => {
     expect(afterClose.closedByName).toBe('Admin');
   });
 
+  it('breaks the shift down by order type — dine-in, takeaway, delivery — with a count and net sales each', async () => {
+    const { shift } = await buildShift();
+    const report = await getShiftReport(ctx.db, shift.id);
+
+    // Order A is dine-in (Rs 1600 of tawa); B, C, D are takeaway
+    // (600 + 800 + 800 = 2200). No delivery this shift — but the row is
+    // still present, as a zero, so the channel never silently vanishes.
+    expect(report.orderTypeBreakdown).toEqual([
+      { orderType: 'dine_in', orderCount: 1, netSalesMinor: 1600_00 },
+      { orderType: 'takeaway', orderCount: 3, netSalesMinor: 2200_00 },
+      { orderType: 'delivery', orderCount: 0, netSalesMinor: 0 },
+    ]);
+    // Counts reconcile to the bill count, amounts to customer sales.
+    expect(report.orderTypeBreakdown.reduce((total, line) => total + line.orderCount, 0)).toBe(report.orderCount);
+    expect(report.orderTypeBreakdown.reduce((total, line) => total + line.netSalesMinor, 0)).toBe(report.zReport.customerSalesMinor);
+  });
+
+  it('counts bills per payment method beside the amount, and reconciles to money collected', async () => {
+    const { shift } = await buildShift();
+    const report = await getShiftReport(ctx.db, shift.id);
+
+    // Cash settled A, C and D (1700 + 800 + 800 = 3300); Easypaisa settled
+    // B (600). The count is of BILLS, so cash shows 3.
+    const cash = report.paymentMethodCounts.find((line) => line.paymentMethodName === 'Cash');
+    const easypaisa = report.paymentMethodCounts.find((line) => line.paymentMethodName === 'Easypaisa');
+    expect(cash).toMatchObject({ orderCount: 3, totalMinor: 3300_00 });
+    expect(easypaisa).toMatchObject({ orderCount: 1, totalMinor: 600_00 });
+
+    const total = report.paymentMethodCounts.reduce((sum, line) => sum + line.totalMinor, 0);
+    expect(total).toBe(report.totalCollectedMinor);
+  });
+
   it('lists shifts with business date, status, opener and headline takings', async () => {
     const { shift } = await buildShift();
     const list = await listShiftReports(ctx.db);

@@ -116,6 +116,10 @@ const shiftReportSchema = z.object({
   partnerShareTotalMinor: z.number().int(),
   riderPayout: z.array(z.object({ riderId: z.number().int(), riderName: z.string(), totalMinor: z.number().int() })),
   riderPayoutTotalMinor: z.number().int(),
+  orderTypeBreakdown: z.array(z.object({ orderType: z.enum(['dine_in', 'takeaway', 'delivery']), orderCount: z.number().int(), netSalesMinor: z.number().int() })),
+  paymentMethodCounts: z.array(
+    z.object({ paymentMethodId: z.number().int(), paymentMethodName: z.string(), orderCount: z.number().int(), totalMinor: z.number().int() }),
+  ),
 });
 
 export interface ShiftsPluginOptions {

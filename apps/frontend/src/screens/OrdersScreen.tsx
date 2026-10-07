@@ -1,9 +1,15 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useOrderSearch } from '../api/hooks.js';
-import type { OrderSearchResult } from '../api/types.js';
+import { useOrderSearch, useShiftReportList } from '../api/hooks.js';
+import type { OrderSearchResult, OrderType } from '../api/types.js';
 import { ErrorBanner, Loading, Money } from '../components/ui.tsx';
 import { orderTitle } from './OrderScreen.tsx';
+
+const ORDER_TYPE_LABEL: Record<OrderType, string> = {
+  dine_in: 'Dine in',
+  takeaway: 'Takeaway',
+  delivery: 'Delivery',
+};
 
 /**
  * Orders: what happened, as opposed to what is happening.
@@ -43,8 +49,17 @@ export function OrdersScreen(): JSX.Element {
   // keystroke against a joined search is a query per keystroke.
   const [searchDraft, setSearchDraft] = useState('');
   const [search, setSearch] = useState('');
+  // Scope to one shift instead of the date range. When set it wins — a
+  // shift is a precise window — and the date controls are ignored.
+  const [shiftId, setShiftId] = useState<number | ''>('');
+  const shiftList = useShiftReportList();
 
-  const orders = useOrderSearch({ from: range.from, to: range.to, ...(search ? { q: search } : {}) });
+  const orders = useOrderSearch(
+    shiftId === ''
+      ? { from: range.from, to: range.to, ...(search ? { q: search } : {}) }
+      : { shiftId, ...(search ? { q: search } : {}) },
+  );
+  const byShift = shiftId !== '';
 
   const isToday = range.from === today && range.to === today;
   const isYesterday = range.from === daysAgo(1) && range.to === range.from;
@@ -65,18 +80,37 @@ export function OrdersScreen(): JSX.Element {
       <div className="card col report-filter">
         <div className="row" style={{ flexWrap: 'wrap' }}>
           <div className="tabs">
-            <button className={isToday ? 'active' : ''} onClick={() => setRange({ from: today, to: today })}>
+            <button className={!byShift && isToday ? 'active' : ''} disabled={byShift} onClick={() => setRange({ from: today, to: today })}>
               Today
             </button>
-            <button className={isYesterday ? 'active' : ''} onClick={() => setRange({ from: daysAgo(1), to: daysAgo(1) })}>
+            <button className={!byShift && isYesterday ? 'active' : ''} disabled={byShift} onClick={() => setRange({ from: daysAgo(1), to: daysAgo(1) })}>
               Yesterday
             </button>
-            <button className={isWeek ? 'active' : ''} onClick={() => setRange({ from: daysAgo(6), to: today })}>
+            <button className={!byShift && isWeek ? 'active' : ''} disabled={byShift} onClick={() => setRange({ from: daysAgo(6), to: today })}>
               Last 7 days
             </button>
           </div>
 
           <span style={{ flex: 1 }} />
+
+          {/* Scope to one shift. Selecting a shift overrides the dates —
+              a shift is already the exact window an operator means. */}
+          <div style={{ minWidth: 220 }}>
+            <label htmlFor="orders-shift">Shift</label>
+            <select
+              id="orders-shift"
+              value={shiftId}
+              onChange={(event) => setShiftId(event.target.value === '' ? '' : Number(event.target.value))}
+            >
+              <option value="">By date (all shifts)</option>
+              {(shiftList.data ?? []).map((entry) => (
+                <option key={entry.shift.id} value={entry.shift.id}>
+                  #{entry.shift.id} · {entry.businessDate}
+                  {entry.status === 'open' ? ' · OPEN' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div>
             <label htmlFor="orders-from">From</label>
@@ -84,6 +118,7 @@ export function OrdersScreen(): JSX.Element {
               id="orders-from"
               type="date"
               value={range.from}
+              disabled={byShift}
               onChange={(event) => setRange((current) => ({ ...current, from: event.target.value }))}
             />
           </div>
@@ -93,9 +128,12 @@ export function OrdersScreen(): JSX.Element {
               id="orders-to"
               type="date"
               value={range.to}
+              disabled={byShift}
               onChange={(event) => setRange((current) => ({ ...current, to: event.target.value }))}
             />
-            <p className="muted field-hint">Both days included. The same date in both is one day.</p>
+            <p className="muted field-hint">
+              {byShift ? 'Showing one shift — clear the shift to filter by date.' : 'Both days included. The same date in both is one day.'}
+            </p>
           </div>
         </div>
 
@@ -132,7 +170,11 @@ export function OrdersScreen(): JSX.Element {
 
       {orders.data && orders.data.length === 0 && (
         <p className="muted">
-          {search ? `Nothing matching “${search}” in this date range.` : 'No orders in this date range.'}
+          {search
+            ? `Nothing matching “${search}” ${byShift ? 'in this shift.' : 'in this date range.'}`
+            : byShift
+              ? 'No orders in this shift.'
+              : 'No orders in this date range.'}
         </p>
       )}
 
@@ -143,10 +185,12 @@ export function OrdersScreen(): JSX.Element {
               <thead>
                 <tr>
                   <th>When</th>
+                  <th>Type</th>
                   <th>Order</th>
                   <th>Invoice</th>
                   <th>Customer</th>
                   <th>Staff</th>
+                  <th>Payment</th>
                   <th>Status</th>
                   <th className="num">Total</th>
                 </tr>
@@ -171,11 +215,15 @@ function OrderRow({ order, onOpen }: { order: OrderSearchResult; onOpen: () => v
     <tr className="orders-row" onClick={onOpen} tabIndex={0} role="button" onKeyDown={(event) => event.key === 'Enter' && onOpen()}>
       <td>{new Date(when).toLocaleString()}</td>
       <td>
+        <span className="pill">{ORDER_TYPE_LABEL[order.orderType]}</span>
+      </td>
+      <td>
         {orderTitle(order)} <span className="muted">#{order.id}</span>
       </td>
       <td className="muted">{order.invoiceNo === null ? '—' : `#${order.invoiceNo}`}</td>
       <td>{order.customerName ?? <span className="muted">—</span>}</td>
       <td className="muted">{order.waiterName ?? order.settledByName ?? '—'}</td>
+      <td>{order.paymentMethods.length > 0 ? order.paymentMethods.join(', ') : <span className="muted">—</span>}</td>
       <td>
         <StatusPill order={order} />
       </td>

@@ -34,6 +34,12 @@ const REPORTS: { key: ReportKey; label: string; path: string }[] = [
   { key: 'void-discount', label: 'Voids & discounts', path: '/api/reports/void-and-discount' },
 ];
 
+const ORDER_TYPE_LABEL: Record<'dine_in' | 'takeaway' | 'delivery', string> = {
+  dine_in: 'Dine in',
+  takeaway: 'Takeaway',
+  delivery: 'Delivery',
+};
+
 /** Screen 11. Every report takes the same date range and every one is
  * CSV-exportable — the export link is the same endpoint with
  * `?format=csv`, so what's on screen and what's downloaded can't drift
@@ -60,9 +66,14 @@ export function ReportsScreen(): JSX.Element {
   const [from, setFrom] = useState(localDay(new Date()));
   const [to, setTo] = useState(localDay(new Date()));
   const [partnerId, setPartnerId] = useState<number | ''>('');
+  // Scope every report to one shift instead of the date range. When set it
+  // wins — the server ignores the dates — and the date controls go quiet.
+  const [shiftId, setShiftId] = useState<number | ''>('');
   const partners = usePartners();
+  const shiftList = useShiftReportList();
 
-  const range: DateRange = { ...(from ? { from } : {}), ...(to ? { to } : {}) };
+  const byShift = shiftId !== '';
+  const range: DateRange = byShift ? { shiftId } : { ...(from ? { from } : {}), ...(to ? { to } : {}) };
 
   const setDay = (day: string) => {
     setFrom(day);
@@ -106,14 +117,15 @@ export function ReportsScreen(): JSX.Element {
       <div className="card col report-filter">
         <div className="row" style={{ flexWrap: 'wrap' }}>
           <div className="tabs">
-            <button className={isToday ? 'active' : ''} onClick={() => setDay(localDay(new Date()))}>
+            <button className={!byShift && isToday ? 'active' : ''} disabled={byShift} onClick={() => setDay(localDay(new Date()))}>
               Today
             </button>
-            <button className={isYesterday ? 'active' : ''} onClick={() => setDay(daysAgo(1))}>
+            <button className={!byShift && isYesterday ? 'active' : ''} disabled={byShift} onClick={() => setDay(daysAgo(1))}>
               Yesterday
             </button>
             <button
-              className={!isToday && !isYesterday && !isThisMonth ? 'active' : ''}
+              className={!byShift && !isToday && !isYesterday && !isThisMonth ? 'active' : ''}
+              disabled={byShift}
               onClick={() => {
                 setFrom(daysAgo(6));
                 setTo(localDay(new Date()));
@@ -122,7 +134,8 @@ export function ReportsScreen(): JSX.Element {
               Last 7 days
             </button>
             <button
-              className={isThisMonth ? 'active' : ''}
+              className={!byShift && isThisMonth ? 'active' : ''}
+              disabled={byShift}
               onClick={() => {
                 setFrom(localDay(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
                 setTo(localDay(new Date()));
@@ -131,17 +144,36 @@ export function ReportsScreen(): JSX.Element {
               This month
             </button>
           </div>
+
+          <span style={{ flex: 1 }} />
+
+          {/* Scope every report to one shift. Selecting a shift overrides
+              the date range for all tabs; "By date" hands it back. */}
+          <div style={{ minWidth: 220 }}>
+            <label htmlFor="report-shift">Shift</label>
+            <select id="report-shift" value={shiftId} onChange={(event) => setShiftId(event.target.value === '' ? '' : Number(event.target.value))}>
+              <option value="">By date (all shifts)</option>
+              {(shiftList.data ?? []).map((entry) => (
+                <option key={entry.shift.id} value={entry.shift.id}>
+                  #{entry.shift.id} · {entry.businessDate}
+                  {entry.status === 'open' ? ' · OPEN' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="row" style={{ flexWrap: 'wrap' }}>
           <div>
             <label htmlFor="from">From</label>
-            <input id="from" type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+            <input id="from" type="date" value={from} disabled={byShift} onChange={(event) => setFrom(event.target.value)} />
           </div>
           <div>
             <label htmlFor="to">To</label>
-            <input id="to" type="date" value={to} onChange={(event) => setTo(event.target.value)} />
-            <p className="muted field-hint">Both days are included. The same date in both gives one day.</p>
+            <input id="to" type="date" value={to} disabled={byShift} onChange={(event) => setTo(event.target.value)} />
+            <p className="muted field-hint">
+              {byShift ? 'Showing one shift — switch Shift back to “By date” to use the range.' : 'Both days are included. The same date in both gives one day.'}
+            </p>
           </div>
 
           {active === 'partner-statement' && (
@@ -1054,6 +1086,50 @@ function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
         </div>
       </div>
 
+      {/* Orders by type — how this shift's bills split across dine-in,
+          takeaway and delivery, with a count and the net sales for each. */}
+      <div className="card">
+        <h3 style={{ margin: 0 }}>Orders by type</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th className="num">Bills</th>
+              <th className="num">Net sales</th>
+              <th className="num">% of sales</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.orderTypeBreakdown.map((line) => (
+              <tr key={line.orderType}>
+                <td>{ORDER_TYPE_LABEL[line.orderType]}</td>
+                <td className="num">{line.orderCount}</td>
+                <td className="num">
+                  <Money minor={line.netSalesMinor} />
+                </td>
+                <td className="num muted">{sharePercent(line.netSalesMinor, z.customerSalesMinor)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="grand">
+              <td>
+                <strong>TOTAL</strong>
+              </td>
+              <td className="num">
+                <strong>{data.orderTypeBreakdown.reduce((total, line) => total + line.orderCount, 0)}</strong>
+              </td>
+              <td className="num">
+                <strong>
+                  <Money minor={z.customerSalesMinor} />
+                </strong>
+              </td>
+              <td />
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
       {/* Category sales — the same item sales rolled up by menu section,
           so an owner can see BBQ vs Biryani at a glance. */}
       <div className="card">
@@ -1170,41 +1246,47 @@ function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
         </div>
       </div>
 
-      {/* Payment breakdown (requirement 6) */}
+      {/* Payment breakdown (requirement 6) — amount AND a bill count per
+          method (cash / easypaisa / bank …). A split bill is counted under
+          each method it used, so the Bills column can total more than the
+          shift's bill count; the amounts stay exact and reconcile. */}
       <div className="card">
         <h3 style={{ margin: 0 }}>Payment breakdown</h3>
         <table>
           <thead>
             <tr>
               <th>Method</th>
+              <th className="num">Bills</th>
               <th className="num">Amount</th>
               <th className="num">%</th>
             </tr>
           </thead>
           <tbody>
-            {z.paymentMethodBreakdown.map((line) => (
+            {data.paymentMethodCounts.map((line) => (
               <tr key={line.paymentMethodId}>
                 <td>{line.paymentMethodName}</td>
+                <td className="num">{line.orderCount}</td>
                 <td className="num">
                   <Money minor={line.totalMinor} />
                 </td>
                 <td className="num muted">{sharePercent(line.totalMinor, data.totalCollectedMinor)}</td>
               </tr>
             ))}
-            {z.paymentMethodBreakdown.length === 0 && (
+            {data.paymentMethodCounts.length === 0 && (
               <tr>
-                <td className="muted" colSpan={3}>
+                <td className="muted" colSpan={4}>
                   No payments taken this shift.
                 </td>
               </tr>
             )}
           </tbody>
-          {z.paymentMethodBreakdown.length > 0 && (
+          {data.paymentMethodCounts.length > 0 && (
             <tfoot>
               <tr className="grand">
                 <td>
                   <strong>TOTAL</strong>
                 </td>
+                <td />
                 <td className="num">
                   <strong>
                     <Money minor={data.totalCollectedMinor} />
