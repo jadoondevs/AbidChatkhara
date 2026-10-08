@@ -11,6 +11,17 @@ export interface PurchaseCategoryTable {
   created_at: string;
 }
 
+/** The owner's configurable list of purchase payment sources — where a
+ * purchase's money came from (Cash drawer, a person who fronted it). A
+ * pure record, like the purchase; see migration 0026. */
+export interface PurchaseSourceTable {
+  id: Generated<number>;
+  name: string;
+  active: number;
+  sort_order: number;
+  created_at: string;
+}
+
 /** One purchase: one partner, one category, one amount. A correction is a
  * void (voided = 1), never an edit. */
 export interface PurchaseTable {
@@ -20,6 +31,7 @@ export interface PurchaseTable {
   purchase_category_id: number;
   description: string | null;
   amount_minor: Paisa;
+  payment_source_id: number | null;
   note: string | null;
   created_by: number;
   created_at: string;
@@ -31,5 +43,6 @@ export interface PurchaseTable {
 
 export interface PurchasesTables {
   purchase_category: PurchaseCategoryTable;
+  purchase_source: PurchaseSourceTable;
   purchase: PurchaseTable;
 }

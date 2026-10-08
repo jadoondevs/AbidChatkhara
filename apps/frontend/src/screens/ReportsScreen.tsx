@@ -15,6 +15,7 @@ import {
   type DateRange,
 } from '../api/hooks.js';
 import type { DailySalesReport, ItemMixLine, ShiftReportListEntry } from '../api/types.js';
+import { PurchaseBySource, PurchasePartnerMatrix } from '../components/PurchaseSummary.tsx';
 import { ErrorBanner, Loading, Money } from '../components/ui.tsx';
 import { ZReportCard } from './ShiftScreen.tsx';
 
@@ -911,72 +912,19 @@ function Purchases({ range }: { range: DateRange }): JSX.Element {
         ]}
       />
 
-      <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', alignItems: 'start' }}>
-        <div className="card">
-          <h3 style={{ margin: 0 }}>By category</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Category</th>
-                <th className="num">Count</th>
-                <th className="num">Spent</th>
-                <th className="num">% </th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.byCategory.map((line) => (
-                <tr key={line.id}>
-                  <td>{line.name}</td>
-                  <td className="num muted">{line.count}</td>
-                  <td className="num">
-                    <Money minor={line.totalMinor} />
-                  </td>
-                  <td className="num muted">{sharePercent(line.totalMinor, data.totalMinor)}</td>
-                </tr>
-              ))}
-              {data.byCategory.length === 0 && (
-                <tr>
-                  <td className="muted" colSpan={4}>
-                    No purchases in this range.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+      {/* One row per category, one column per partner — the shift's
+          purchases split the way the owner asked for. */}
+      <div className="card">
+        <h3 style={{ margin: 0 }}>By category &amp; partner</h3>
+        <PurchasePartnerMatrix report={data} />
+      </div>
 
-        <div className="card">
-          <h3 style={{ margin: 0 }}>By partner</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Partner</th>
-                <th className="num">Count</th>
-                <th className="num">Spent</th>
-                <th className="num">%</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.byPartner.map((line) => (
-                <tr key={line.id}>
-                  <td>{line.name}</td>
-                  <td className="num muted">{line.count}</td>
-                  <td className="num">
-                    <Money minor={line.totalMinor} />
-                  </td>
-                  <td className="num muted">{sharePercent(line.totalMinor, data.totalMinor)}</td>
-                </tr>
-              ))}
-              {data.byPartner.length === 0 && (
-                <tr>
-                  <td className="muted" colSpan={4}>
-                    No purchases in this range.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+      <div className="card">
+        <h3 style={{ margin: 0 }}>Paid from</h3>
+        <p className="muted" style={{ marginTop: 0 }}>
+          How much of the buying came from the cash drawer vs. whoever fronted it. A record only — not netted against the drawer.
+        </p>
+        <PurchaseBySource report={data} />
       </div>
 
       <div className="card">
@@ -989,6 +937,7 @@ function Purchases({ range }: { range: DateRange }): JSX.Element {
                 <th>Partner</th>
                 <th>Category</th>
                 <th>What</th>
+                <th>Paid from</th>
                 <th>By</th>
                 <th className="num">Amount</th>
               </tr>
@@ -1003,6 +952,7 @@ function Purchases({ range }: { range: DateRange }): JSX.Element {
                     {purchase.description ?? <span className="muted">—</span>}
                     {purchase.note && <div className="muted line-modifiers">{purchase.note}</div>}
                   </td>
+                  <td>{purchase.sourceName ?? <span className="muted">—</span>}</td>
                   <td className="muted">{purchase.createdByName ?? '—'}</td>
                   <td className="num">
                     <Money minor={purchase.amountMinor} />
@@ -1011,7 +961,7 @@ function Purchases({ range }: { range: DateRange }): JSX.Element {
               ))}
               {data.purchases.length === 0 && (
                 <tr>
-                  <td className="muted" colSpan={6}>
+                  <td className="muted" colSpan={7}>
                     No purchases in this range.
                   </td>
                 </tr>
@@ -1020,7 +970,7 @@ function Purchases({ range }: { range: DateRange }): JSX.Element {
             {data.purchases.length > 0 && (
               <tfoot>
                 <tr className="grand">
-                  <td colSpan={5}>
+                  <td colSpan={6}>
                     <strong>TOTAL</strong>
                   </td>
                   <td className="num">
@@ -1060,48 +1010,12 @@ function ShiftPurchasesCard({ shiftId }: { shiftId: number }): JSX.Element {
           {data.purchases.length === 0 ? (
             <p className="muted">No purchases recorded this shift.</p>
           ) : (
-            <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', alignItems: 'start' }}>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Category</th>
-                    <th className="num">Count</th>
-                    <th className="num">Spent</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.byCategory.map((line) => (
-                    <tr key={line.id}>
-                      <td>{line.name}</td>
-                      <td className="num muted">{line.count}</td>
-                      <td className="num">
-                        <Money minor={line.totalMinor} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Partner</th>
-                    <th className="num">Count</th>
-                    <th className="num">Spent</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.byPartner.map((line) => (
-                    <tr key={line.id}>
-                      <td>{line.name}</td>
-                      <td className="num muted">{line.count}</td>
-                      <td className="num">
-                        <Money minor={line.totalMinor} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <h4 style={{ marginBottom: 4 }}>By category &amp; partner</h4>
+              <PurchasePartnerMatrix report={data} />
+              <h4 style={{ marginBottom: 4 }}>Paid from</h4>
+              <PurchaseBySource report={data} />
+            </>
           )}
         </>
       )}

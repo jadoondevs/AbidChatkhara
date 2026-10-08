@@ -9,12 +9,17 @@ import type { Database } from '../platform/db/types.js';
 import {
   createPurchase,
   createPurchaseCategory,
+  createPurchaseSource,
   deletePurchaseCategory,
+  deletePurchaseSource,
   listPurchaseCategories,
+  listPurchaseSources,
   listPurchases,
   purchaseReport,
   renamePurchaseCategory,
+  renamePurchaseSource,
   setPurchaseCategoryActive,
+  setPurchaseSourceActive,
   voidPurchase,
 } from './service.js';
 
@@ -26,6 +31,10 @@ const purchaseCategorySchema = z.object({
   createdAt: z.string(),
 });
 
+// A payment source has the same shape as a category — both are small
+// owner-managed lists.
+const purchaseSourceSchema = purchaseCategorySchema;
+
 const purchaseSchema = z.object({
   id: z.number().int(),
   shiftId: z.number().int().nullable(),
@@ -35,6 +44,8 @@ const purchaseSchema = z.object({
   categoryName: z.string(),
   description: z.string().nullable(),
   amountMinor: z.number().int(),
+  sourceId: z.number().int().nullable(),
+  sourceName: z.string().nullable(),
   note: z.string().nullable(),
   createdBy: z.number().int(),
   createdByName: z.string().nullable(),
@@ -53,6 +64,7 @@ const purchaseReportSchema = z.object({
   count: z.number().int(),
   byCategory: z.array(purchaseGroupLineSchema),
   byPartner: z.array(purchaseGroupLineSchema),
+  bySource: z.array(purchaseGroupLineSchema),
   purchases: z.array(purchaseSchema),
 });
 
@@ -60,6 +72,7 @@ const purchaseFilterSchema = dateFilterSchema.extend({
   shiftId: z.coerce.number().int().optional(),
   partnerId: z.coerce.number().int().optional(),
   categoryId: z.coerce.number().int().optional(),
+  sourceId: z.coerce.number().int().optional(),
 });
 
 export interface PurchasesPluginOptions {
@@ -127,6 +140,55 @@ export const purchasesRoutes: FastifyPluginAsync<PurchasesPluginOptions> = async
     },
   );
 
+  // ---- purchase payment sources (Settings) ----
+
+  app.get(
+    '/api/purchase-sources',
+    { schema: { querystring: z.object({ includeInactive: z.coerce.boolean().optional() }), response: { 200: z.array(purchaseSourceSchema) } } },
+    async (request, reply) => {
+      requireAuth(request, reply);
+      return listPurchaseSources(db, { includeInactive: request.query.includeInactive });
+    },
+  );
+
+  app.post(
+    '/api/purchase-sources',
+    { schema: { body: z.object({ name: z.string().min(1), sortOrder: z.number().int().optional() }), response: { 201: purchaseSourceSchema } } },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      reply.code(201);
+      return createPurchaseSource(db, request.body, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  app.patch(
+    '/api/purchase-sources/:id',
+    { schema: { params: z.object({ id: z.coerce.number().int() }), body: z.object({ name: z.string().min(1) }), response: { 200: purchaseSourceSchema } } },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      return renamePurchaseSource(db, request.params.id, request.body.name, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  app.patch(
+    '/api/purchase-sources/:id/active',
+    { schema: { params: z.object({ id: z.coerce.number().int() }), body: z.object({ active: z.boolean() }), response: { 200: purchaseSourceSchema } } },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      return setPurchaseSourceActive(db, request.params.id, request.body.active, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  app.delete(
+    '/api/purchase-sources/:id',
+    { schema: { params: z.object({ id: z.coerce.number().int() }), response: { 200: z.object({ outcome: z.enum(['deleted', 'retired']) }) } } },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      const outcome = await deletePurchaseSource(db, request.params.id, { actorId: actor.userId, terminalId: actor.terminalId });
+      return { outcome };
+    },
+  );
+
   // ---- purchases ----
 
   app.get(
@@ -134,12 +196,13 @@ export const purchasesRoutes: FastifyPluginAsync<PurchasesPluginOptions> = async
     { schema: { querystring: purchaseFilterSchema.extend({ includeVoided: z.coerce.boolean().optional() }), response: { 200: z.array(purchaseSchema) } } },
     async (request, reply) => {
       requireRole(request, reply, 'cashier');
-      const { shiftId, partnerId, categoryId, includeVoided, ...filter } = request.query;
+      const { shiftId, partnerId, categoryId, sourceId, includeVoided, ...filter } = request.query;
       return listPurchases(db, {
         ...resolveDateRange(filter),
         ...(shiftId === undefined ? {} : { shiftId }),
         ...(partnerId === undefined ? {} : { partnerId }),
         ...(categoryId === undefined ? {} : { categoryId }),
+        ...(sourceId === undefined ? {} : { sourceId }),
         ...(includeVoided === undefined ? {} : { includeVoided }),
       });
     },
@@ -153,6 +216,7 @@ export const purchasesRoutes: FastifyPluginAsync<PurchasesPluginOptions> = async
           partnerId: z.number().int(),
           categoryId: z.number().int(),
           amountMinor: paisaSchema,
+          sourceId: z.number().int().optional(),
           description: z.string().max(200).optional(),
           note: z.string().max(500).optional(),
         }),
@@ -179,12 +243,13 @@ export const purchasesRoutes: FastifyPluginAsync<PurchasesPluginOptions> = async
 
   app.get('/api/reports/purchases', { schema: { querystring: purchaseFilterSchema, response: { 200: purchaseReportSchema } } }, async (request, reply) => {
     requireRole(request, reply, 'manager');
-    const { shiftId, partnerId, categoryId, ...filter } = request.query;
+    const { shiftId, partnerId, categoryId, sourceId, ...filter } = request.query;
     return purchaseReport(db, {
       ...resolveDateRange(filter),
       ...(shiftId === undefined ? {} : { shiftId }),
       ...(partnerId === undefined ? {} : { partnerId }),
       ...(categoryId === undefined ? {} : { categoryId }),
+      ...(sourceId === undefined ? {} : { sourceId }),
     });
   });
 };

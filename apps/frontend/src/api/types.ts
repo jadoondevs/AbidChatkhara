@@ -446,6 +446,10 @@ export interface PurchaseCategory {
   createdAt: string;
 }
 
+/** A configurable "paid from" source for a purchase — Cash drawer, or a
+ * person who fronted it. Same shape as a purchase category. */
+export type PurchaseSource = PurchaseCategory;
+
 export interface Purchase {
   id: number;
   shiftId: number | null;
@@ -455,6 +459,8 @@ export interface Purchase {
   categoryName: string;
   description: string | null;
   amountMinor: Paisa;
+  sourceId: number | null;
+  sourceName: string | null;
   note: string | null;
   createdBy: number;
   createdByName: string | null;
@@ -478,6 +484,7 @@ export interface PurchaseReport {
   count: number;
   byCategory: PurchaseGroupLine[];
   byPartner: PurchaseGroupLine[];
+  bySource: PurchaseGroupLine[];
   purchases: Purchase[];
 }
 

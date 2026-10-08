@@ -7,11 +7,15 @@ import { openShift } from '../shifts/service.js';
 import {
   createPurchase,
   createPurchaseCategory,
+  createPurchaseSource,
   deletePurchaseCategory,
+  deletePurchaseSource,
   listPurchaseCategories,
+  listPurchaseSources,
   listPurchases,
   purchaseReport,
   renamePurchaseCategory,
+  renamePurchaseSource,
   setPurchaseCategoryActive,
   voidPurchase,
 } from './service.js';
@@ -169,6 +173,46 @@ describe('purchases', () => {
       expect(report.byPartner).toEqual([
         { id: azhar.id, name: 'Azhar', count: 2, totalMinor: 1500_00 },
         { id: restaurant.id, name: 'Restaurant', count: 1, totalMinor: 300_00 },
+      ]);
+    });
+  });
+
+  describe('payment sources', () => {
+    it('creates, lists active-only, renames, deletes unused but retires used', async () => {
+      const { actor, azhar, meat } = await setup();
+      const drawer = await createPurchaseSource(ctx.db, { name: 'Cash drawer' }, actor);
+      const irfan = await createPurchaseSource(ctx.db, { name: 'Irfan' }, actor);
+      expect((await listPurchaseSources(ctx.db)).map((s) => s.name)).toEqual(['Cash drawer', 'Irfan']);
+
+      await renamePurchaseSource(ctx.db, irfan.id, 'Irfan Khan', actor);
+      expect((await listPurchaseSources(ctx.db)).map((s) => s.name)).toEqual(['Cash drawer', 'Irfan Khan']);
+
+      // Irfan is unused → deleted outright.
+      expect(await deletePurchaseSource(ctx.db, irfan.id, actor)).toBe('deleted');
+
+      // Cash drawer funded a purchase → retired, not deleted.
+      await createPurchase(ctx.db, { partnerId: azhar.id, categoryId: meat.id, amountMinor: paisa(100_00), sourceId: drawer.id }, actor);
+      expect(await deletePurchaseSource(ctx.db, drawer.id, actor)).toBe('retired');
+      expect((await listPurchaseSources(ctx.db, { includeInactive: true })).find((s) => s.id === drawer.id)).toMatchObject({ active: false });
+    });
+
+    it('records a purchase against its source, and the report splits spend by source — sourceless under "—"', async () => {
+      const { actor, azhar, meat } = await setup();
+      const drawer = await createPurchaseSource(ctx.db, { name: 'Cash drawer' }, actor);
+      const irfan = await createPurchaseSource(ctx.db, { name: 'Irfan' }, actor);
+
+      const fromDrawer = await createPurchase(ctx.db, { partnerId: azhar.id, categoryId: meat.id, amountMinor: paisa(1000_00), sourceId: drawer.id }, actor);
+      expect(fromDrawer).toMatchObject({ sourceId: drawer.id, sourceName: 'Cash drawer' });
+      await createPurchase(ctx.db, { partnerId: azhar.id, categoryId: meat.id, amountMinor: paisa(400_00), sourceId: irfan.id }, actor);
+      // No source given — allowed, and reported under "—".
+      const none = await createPurchase(ctx.db, { partnerId: azhar.id, categoryId: meat.id, amountMinor: paisa(100_00) }, actor);
+      expect(none).toMatchObject({ sourceId: null, sourceName: null });
+
+      const report = await purchaseReport(ctx.db, {});
+      expect(report.bySource).toEqual([
+        { id: drawer.id, name: 'Cash drawer', count: 1, totalMinor: 1000_00 },
+        { id: irfan.id, name: 'Irfan', count: 1, totalMinor: 400_00 },
+        { id: 0, name: '—', count: 1, totalMinor: 100_00 },
       ]);
     });
   });

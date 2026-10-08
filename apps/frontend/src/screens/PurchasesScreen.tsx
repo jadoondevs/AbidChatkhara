@@ -1,8 +1,17 @@
 import { paisa, type Paisa } from '@pos/shared';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useCreatePurchase, useOpenShift, usePartners, usePurchaseCategories, usePurchaseReport, useVoidPurchase } from '../api/hooks.js';
+import {
+  useCreatePurchase,
+  useOpenShift,
+  usePartners,
+  usePurchaseCategories,
+  usePurchaseReport,
+  usePurchaseSources,
+  useVoidPurchase,
+} from '../api/hooks.js';
 import type { Purchase } from '../api/types.js';
+import { PurchaseBySource, PurchasePartnerMatrix } from '../components/PurchaseSummary.tsx';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 
 /** Local calendar day as YYYY-MM-DD — the day the restaurant is having,
@@ -14,8 +23,8 @@ function localDay(date: Date): string {
 
 /**
  * The daily purchase ledger — what the restaurant bought today, for how
- * much, for which partner, under which category. A pure record: nothing
- * here is subtracted from sales or the cash drawer.
+ * much, for which partner, under which category, and paid from where. A
+ * pure record: nothing here is subtracted from sales or the cash drawer.
  *
  * It records against the open shift when there is one (so a shift's
  * purchases are correct across midnight, like its orders); with no shift
@@ -25,15 +34,23 @@ export function PurchasesScreen(): JSX.Element {
   const openShift = useOpenShift();
   const partners = usePartners();
   const categories = usePurchaseCategories();
+  const sources = usePurchaseSources();
 
   const create = useCreatePurchase();
 
   const [partnerId, setPartnerId] = useState<number | ''>('');
   const [categoryId, setCategoryId] = useState<number | ''>('');
+  const [sourceId, setSourceId] = useState<number | ''>('');
   const [description, setDescription] = useState('');
   const [amountMinor, setAmountMinor] = useState<Paisa>(paisa(0));
   const [amountValid, setAmountValid] = useState(true);
   const [note, setNote] = useState('');
+
+  // Pre-select the first "paid from" source (the owner puts Cash drawer
+  // first). Only fills an empty field, so it never fights a deliberate pick.
+  useEffect(() => {
+    if (sourceId === '' && (sources.data?.length ?? 0) > 0) setSourceId(sources.data![0]!.id);
+  }, [sources.data, sourceId]);
 
   // The ledger shown below is this shift's if one is open, else today's —
   // the same records the shift report and the Reports → Purchases tab show.
@@ -41,7 +58,7 @@ export function PurchasesScreen(): JSX.Element {
   const scope = openShift.data ? { shiftId: openShift.data.id } : { date: today };
   const report = usePurchaseReport(scope);
 
-  const canCreate = partnerId !== '' && categoryId !== '' && amountMinor > 0 && amountValid;
+  const canCreate = partnerId !== '' && categoryId !== '' && sourceId !== '' && amountMinor > 0 && amountValid;
 
   const submit = () => {
     if (!canCreate || create.isPending) return;
@@ -50,13 +67,15 @@ export function PurchasesScreen(): JSX.Element {
         partnerId: Number(partnerId),
         categoryId: Number(categoryId),
         amountMinor,
+        // canCreate guarantees a source is selected, so always send it.
+        sourceId: Number(sourceId),
         ...(description.trim() ? { description: description.trim() } : {}),
         ...(note.trim() ? { note: note.trim() } : {}),
       },
       {
         onSuccess: () => {
-          // Keep partner and category — purchases come in runs — but clear
-          // the amount, description and note for the next entry.
+          // Keep partner, category and source — purchases come in runs —
+          // but clear the amount, description and note for the next entry.
           setAmountMinor(paisa(0));
           setDescription('');
           setNote('');
@@ -67,6 +86,7 @@ export function PurchasesScreen(): JSX.Element {
 
   const noPartners = !partners.isLoading && (partners.data ?? []).length === 0;
   const noCategories = !categories.isLoading && (categories.data ?? []).length === 0;
+  const noSources = !sources.isLoading && (sources.data ?? []).length === 0;
 
   return (
     <div className="col">
@@ -85,7 +105,7 @@ export function PurchasesScreen(): JSX.Element {
         ) : (
           <>No shift open — purchases are recorded under today’s date.</>
         )}{' '}
-        A record only — nothing here is taken off your sales.
+        A record only — nothing here is taken off your sales or the drawer.
       </p>
 
       <ErrorBanner error={create.error} />
@@ -98,6 +118,12 @@ export function PurchasesScreen(): JSX.Element {
           {noCategories && (
             <p className="muted">
               No purchase categories yet. Add some under <Link to="/config/purchase-categories">Settings → Purchase categories</Link> first.
+            </p>
+          )}
+          {noSources && (
+            <p className="muted">
+              No “paid from” sources yet. Add them (start with Cash drawer) under{' '}
+              <Link to="/config/purchase-sources">Settings → Paid-from sources</Link> first.
             </p>
           )}
           {noPartners && (
@@ -125,6 +151,18 @@ export function PurchasesScreen(): JSX.Element {
               {categories.data?.map((category) => (
                 <option key={category.id} value={category.id}>
                   {category.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="purchase-source">Paid from</label>
+            <select id="purchase-source" value={sourceId} onChange={(event) => setSourceId(event.target.value === '' ? '' : Number(event.target.value))}>
+              <option value="">Select a source…</option>
+              {sources.data?.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.name}
                 </option>
               ))}
             </select>
@@ -164,45 +202,11 @@ export function PurchasesScreen(): JSX.Element {
                 {report.data.count} {report.data.count === 1 ? 'purchase' : 'purchases'}
               </p>
 
-              <h4 style={{ marginBottom: 4 }}>By category</h4>
-              <table>
-                <tbody>
-                  {report.data.byCategory.map((line) => (
-                    <tr key={line.id}>
-                      <td>{line.name}</td>
-                      <td className="num muted">{line.count}</td>
-                      <td className="num">
-                        <Money minor={line.totalMinor} />
-                      </td>
-                    </tr>
-                  ))}
-                  {report.data.byCategory.length === 0 && (
-                    <tr>
-                      <td className="muted">Nothing yet.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+              <h4 style={{ marginBottom: 4 }}>By category &amp; partner</h4>
+              <PurchasePartnerMatrix report={report.data} />
 
-              <h4 style={{ marginBottom: 4 }}>By partner</h4>
-              <table>
-                <tbody>
-                  {report.data.byPartner.map((line) => (
-                    <tr key={line.id}>
-                      <td>{line.name}</td>
-                      <td className="num muted">{line.count}</td>
-                      <td className="num">
-                        <Money minor={line.totalMinor} />
-                      </td>
-                    </tr>
-                  ))}
-                  {report.data.byPartner.length === 0 && (
-                    <tr>
-                      <td className="muted">Nothing yet.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+              <h4 style={{ marginBottom: 4 }}>Paid from</h4>
+              <PurchaseBySource report={report.data} />
             </>
           )}
         </div>
@@ -222,6 +226,7 @@ export function PurchasesScreen(): JSX.Element {
                   <th>Partner</th>
                   <th>Category</th>
                   <th>What</th>
+                  <th>Paid from</th>
                   <th>By</th>
                   <th className="num">Amount</th>
                   <th />
@@ -254,6 +259,7 @@ function PurchaseRow({ purchase }: { purchase: Purchase }): JSX.Element {
         {purchase.description ?? <span className="muted">—</span>}
         {purchase.note && <div className="muted line-modifiers">{purchase.note}</div>}
       </td>
+      <td>{purchase.sourceName ?? <span className="muted">—</span>}</td>
       <td className="muted">{purchase.createdByName ?? '—'}</td>
       <td className="num">
         <Money minor={purchase.amountMinor} />

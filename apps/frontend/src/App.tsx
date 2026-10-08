@@ -14,6 +14,7 @@ import { PartnerConfigScreen } from './screens/PartnerConfigScreen.tsx';
 import { PaymentScreen } from './screens/PaymentScreen.tsx';
 import { PeopleConfigScreen } from './screens/PeopleConfigScreen.tsx';
 import { PurchaseCategoryConfigScreen } from './screens/PurchaseCategoryConfigScreen.tsx';
+import { PurchaseSourceConfigScreen } from './screens/PurchaseSourceConfigScreen.tsx';
 import { PurchasesScreen } from './screens/PurchasesScreen.tsx';
 import { RidersConfigScreen } from './screens/RidersConfigScreen.tsx';
 import { ReportsScreen } from './screens/ReportsScreen.tsx';
@@ -162,6 +163,14 @@ export function App(): JSX.Element {
             element={
               <RoleGate minimum="manager">
                 <PurchaseCategoryConfigScreen />
+              </RoleGate>
+            }
+          />
+          <Route
+            path="/config/purchase-sources"
+            element={
+              <RoleGate minimum="manager">
+                <PurchaseSourceConfigScreen />
               </RoleGate>
             }
           />

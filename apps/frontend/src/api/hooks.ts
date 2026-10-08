@@ -37,6 +37,7 @@ import type {
   Purchase,
   PurchaseCategory,
   PurchaseReport,
+  PurchaseSource,
   PartnerStatement,
   PaymentMethod,
   PaymentMethodKind,
@@ -505,6 +506,33 @@ export function useDeletePurchaseCategory(): UseMutationResult<{ outcome: 'delet
   return useMutation({ mutationFn: (id) => api.del<{ outcome: 'deleted' | 'retired' }>(`/api/purchase-categories/${id}`), onSuccess: invalidate });
 }
 
+export function usePurchaseSources(includeInactive = false): UseQueryResult<PurchaseSource[]> {
+  return useQuery({
+    queryKey: ['purchase-sources', includeInactive],
+    queryFn: () => api.get<PurchaseSource[]>(`/api/purchase-sources${query({ includeInactive })}`),
+  });
+}
+
+export function useCreatePurchaseSource(): UseMutationResult<PurchaseSource, Error, { name: string }> {
+  const invalidate = useInvalidateOnSuccess(['purchase-sources']);
+  return useMutation({ mutationFn: ({ name }) => api.post<PurchaseSource>('/api/purchase-sources', { name }), onSuccess: invalidate });
+}
+
+export function useRenamePurchaseSource(): UseMutationResult<PurchaseSource, Error, { id: number; name: string }> {
+  const invalidate = useInvalidateOnSuccess(['purchase-sources']);
+  return useMutation({ mutationFn: ({ id, name }) => api.patch<PurchaseSource>(`/api/purchase-sources/${id}`, { name }), onSuccess: invalidate });
+}
+
+export function useSetPurchaseSourceActive(): UseMutationResult<PurchaseSource, Error, { id: number; active: boolean }> {
+  const invalidate = useInvalidateOnSuccess(['purchase-sources']);
+  return useMutation({ mutationFn: ({ id, active }) => api.patch<PurchaseSource>(`/api/purchase-sources/${id}/active`, { active }), onSuccess: invalidate });
+}
+
+export function useDeletePurchaseSource(): UseMutationResult<{ outcome: 'deleted' | 'retired' }, Error, number> {
+  const invalidate = useInvalidateOnSuccess(['purchase-sources']);
+  return useMutation({ mutationFn: (id) => api.del<{ outcome: 'deleted' | 'retired' }>(`/api/purchase-sources/${id}`), onSuccess: invalidate });
+}
+
 export interface PurchaseFilter {
   date?: string;
   from?: string;
@@ -512,6 +540,7 @@ export interface PurchaseFilter {
   shiftId?: number;
   partnerId?: number;
   categoryId?: number;
+  sourceId?: number;
   includeVoided?: boolean;
 }
 
@@ -525,7 +554,7 @@ export function usePurchases(params: PurchaseFilter): UseQueryResult<Purchase[]>
 export function useCreatePurchase(): UseMutationResult<
   Purchase,
   Error,
-  { partnerId: number; categoryId: number; amountMinor: Paisa; description?: string; note?: string }
+  { partnerId: number; categoryId: number; amountMinor: Paisa; sourceId?: number; description?: string; note?: string }
 > {
   const invalidate = useInvalidateOnSuccess(['purchases', 'purchase-report']);
   return useMutation({ mutationFn: (vars) => api.post<Purchase>('/api/purchases', vars), onSuccess: invalidate });

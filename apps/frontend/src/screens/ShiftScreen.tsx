@@ -12,6 +12,7 @@ import {
   useZReport,
 } from '../api/hooks.js';
 import type { ZReport } from '../api/types.js';
+import { PurchaseBySource, PurchasePartnerMatrix } from '../components/PurchaseSummary.tsx';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 
 /**
@@ -254,23 +255,16 @@ function ShiftPurchasesCard({ shiftId }: { shiftId: number }): JSX.Element {
             <span>Total purchases</span>
             <Money minor={data.totalMinor} />
           </div>
-          <table>
-            <tbody>
-              {data.byCategory.map((line) => (
-                <tr key={line.id}>
-                  <td>{line.name}</td>
-                  <td className="num">
-                    <Money minor={line.totalMinor} />
-                  </td>
-                </tr>
-              ))}
-              {data.byCategory.length === 0 && (
-                <tr>
-                  <td className="muted">No purchases recorded this shift.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+          {data.purchases.length === 0 ? (
+            <p className="muted">No purchases recorded this shift.</p>
+          ) : (
+            <>
+              <h4 style={{ marginBottom: 4 }}>By category &amp; partner</h4>
+              <PurchasePartnerMatrix report={data} />
+              <h4 style={{ marginBottom: 4 }}>Paid from</h4>
+              <PurchaseBySource report={data} />
+            </>
+          )}
         </>
       )}
     </div>
