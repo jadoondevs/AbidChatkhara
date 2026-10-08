@@ -1,79 +1,61 @@
-import { add, paisa, type Paisa } from '@pos/shared';
 import type { PurchaseReport } from '../api/types.js';
 import { Money } from './ui.tsx';
 
 /**
- * A shift's (or a range's) purchases laid out as a matrix: one row per
- * category, one COLUMN PER PARTNER, each cell what that partner spent in
- * that category — with a per-partner total row and a grand total. Built
+ * A compact summary of a shift's (or range's) purchases: each partner's
+ * total (with the collective total), and each category's total. Built
  * entirely from the report the caller already fetched, so it never
  * disagrees with the totals shown beside it.
  */
-export function PurchasePartnerMatrix({ report }: { report: PurchaseReport }): JSX.Element {
-  const partners = report.byPartner;
-  const categories = report.byCategory;
-
+export function PurchaseTotals({ report }: { report: PurchaseReport }): JSX.Element {
   if (report.purchases.length === 0) return <p className="muted">No purchases recorded.</p>;
-
-  // cell[categoryId][partnerId] — summed with the money module, never `+`.
-  const cell = new Map<string, Paisa>();
-  for (const purchase of report.purchases) {
-    const key = `${purchase.categoryId}:${purchase.partnerId}`;
-    cell.set(key, add(cell.get(key) ?? paisa(0), purchase.amountMinor));
-  }
-
   return (
-    <div className="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Category</th>
-            {partners.map((partner) => (
-              <th key={partner.id} className="num">
-                {partner.name}
-              </th>
+    <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', alignItems: 'start' }}>
+      <div>
+        <h4 style={{ margin: '0 0 4px' }}>By partner</h4>
+        <table>
+          <tbody>
+            {report.byPartner.map((line) => (
+              <tr key={line.id}>
+                <td>{line.name}</td>
+                <td className="num muted">{line.count}</td>
+                <td className="num">
+                  <Money minor={line.totalMinor} />
+                </td>
+              </tr>
             ))}
-            <th className="num">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {categories.map((category) => (
-            <tr key={category.id}>
-              <td>{category.name}</td>
-              {partners.map((partner) => {
-                const value = cell.get(`${category.id}:${partner.id}`);
-                return (
-                  <td key={partner.id} className="num">
-                    {value === undefined ? <span className="muted">—</span> : <Money minor={value} />}
-                  </td>
-                );
-              })}
-              <td className="num">
-                <Money minor={category.totalMinor} />
+          </tbody>
+          <tfoot>
+            <tr className="grand">
+              <td>
+                <strong>Total</strong>
               </td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr className="grand">
-            <td>
-              <strong>TOTAL</strong>
-            </td>
-            {partners.map((partner) => (
-              <td key={partner.id} className="num">
+              <td />
+              <td className="num">
                 <strong>
-                  <Money minor={partner.totalMinor} />
+                  <Money minor={report.totalMinor} />
                 </strong>
               </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div>
+        <h4 style={{ margin: '0 0 4px' }}>By category</h4>
+        <table>
+          <tbody>
+            {report.byCategory.map((line) => (
+              <tr key={line.id}>
+                <td>{line.name}</td>
+                <td className="num muted">{line.count}</td>
+                <td className="num">
+                  <Money minor={line.totalMinor} />
+                </td>
+              </tr>
             ))}
-            <td className="num">
-              <strong>
-                <Money minor={report.totalMinor} />
-              </strong>
-            </td>
-          </tr>
-        </tfoot>
-      </table>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

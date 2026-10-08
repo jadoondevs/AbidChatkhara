@@ -12,7 +12,7 @@ import {
   useZReport,
 } from '../api/hooks.js';
 import type { ZReport } from '../api/types.js';
-import { PurchaseBySource, PurchasePartnerMatrix } from '../components/PurchaseSummary.tsx';
+import { PurchaseBySource, PurchaseTotals } from '../components/PurchaseSummary.tsx';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 
 /**
@@ -259,8 +259,7 @@ function ShiftPurchasesCard({ shiftId }: { shiftId: number }): JSX.Element {
             <p className="muted">No purchases recorded this shift.</p>
           ) : (
             <>
-              <h4 style={{ marginBottom: 4 }}>By category &amp; partner</h4>
-              <PurchasePartnerMatrix report={data} />
+              <PurchaseTotals report={data} />
               <h4 style={{ marginBottom: 4 }}>Paid from</h4>
               <PurchaseBySource report={data} />
             </>

@@ -15,7 +15,7 @@ import {
   type DateRange,
 } from '../api/hooks.js';
 import type { DailySalesReport, ItemMixLine, ShiftReportListEntry } from '../api/types.js';
-import { PurchaseBySource, PurchaseListByPartner, PurchasePartnerMatrix } from '../components/PurchaseSummary.tsx';
+import { PurchaseBySource, PurchaseListByPartner, PurchaseTotals } from '../components/PurchaseSummary.tsx';
 import { ErrorBanner, Loading, Money } from '../components/ui.tsx';
 import { ZReportCard } from './ShiftScreen.tsx';
 
@@ -912,11 +912,9 @@ function Purchases({ range }: { range: DateRange }): JSX.Element {
         ]}
       />
 
-      {/* One row per category, one column per partner — the shift's
-          purchases split the way the owner asked for. */}
       <div className="card">
-        <h3 style={{ margin: 0 }}>By category &amp; partner</h3>
-        <PurchasePartnerMatrix report={data} />
+        <h3 style={{ margin: 0 }}>Totals</h3>
+        <PurchaseTotals report={data} />
       </div>
 
       <div className="card">
@@ -959,8 +957,7 @@ function ShiftPurchasesCard({ shiftId }: { shiftId: number }): JSX.Element {
             <p className="muted">No purchases recorded this shift.</p>
           ) : (
             <>
-              <h4 style={{ marginBottom: 4 }}>By category &amp; partner</h4>
-              <PurchasePartnerMatrix report={data} />
+              <PurchaseTotals report={data} />
               <h4 style={{ marginBottom: 4 }}>Paid from</h4>
               <PurchaseBySource report={data} />
             </>

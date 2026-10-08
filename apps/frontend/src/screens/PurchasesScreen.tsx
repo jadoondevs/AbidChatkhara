@@ -11,7 +11,7 @@ import {
   useVoidPurchase,
 } from '../api/hooks.js';
 import type { Purchase, PurchaseReport } from '../api/types.js';
-import { PurchaseBySource, PurchasePartnerMatrix } from '../components/PurchaseSummary.tsx';
+import { PurchaseBySource, PurchaseTotals } from '../components/PurchaseSummary.tsx';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 
 /** Local calendar day as YYYY-MM-DD — the day the restaurant is having,
@@ -202,8 +202,7 @@ export function PurchasesScreen(): JSX.Element {
                 {report.data.count} {report.data.count === 1 ? 'purchase' : 'purchases'}
               </p>
 
-              <h4 style={{ marginBottom: 4 }}>By category &amp; partner</h4>
-              <PurchasePartnerMatrix report={report.data} />
+              <PurchaseTotals report={report.data} />
 
               <h4 style={{ marginBottom: 4 }}>Paid from</h4>
               <PurchaseBySource report={report.data} />
