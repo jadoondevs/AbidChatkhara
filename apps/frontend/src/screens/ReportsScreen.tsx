@@ -15,7 +15,7 @@ import {
   type DateRange,
 } from '../api/hooks.js';
 import type { DailySalesReport, ItemMixLine, ShiftReportListEntry } from '../api/types.js';
-import { PurchaseBySource, PurchasePartnerMatrix } from '../components/PurchaseSummary.tsx';
+import { PurchaseBySource, PurchaseListByPartner, PurchasePartnerMatrix } from '../components/PurchaseSummary.tsx';
 import { ErrorBanner, Loading, Money } from '../components/ui.tsx';
 import { ZReportCard } from './ShiftScreen.tsx';
 
@@ -927,62 +927,10 @@ function Purchases({ range }: { range: DateRange }): JSX.Element {
         <PurchaseBySource report={data} />
       </div>
 
+      {/* One list per partner, side by side. */}
       <div className="card">
-        <h3 style={{ margin: 0 }}>Every purchase</h3>
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Partner</th>
-                <th>Category</th>
-                <th>What</th>
-                <th>Paid from</th>
-                <th>By</th>
-                <th className="num">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.purchases.map((purchase) => (
-                <tr key={purchase.id}>
-                  <td>{new Date(purchase.createdAt).toLocaleString()}</td>
-                  <td>{purchase.partnerName}</td>
-                  <td>{purchase.categoryName}</td>
-                  <td>
-                    {purchase.description ?? <span className="muted">—</span>}
-                    {purchase.note && <div className="muted line-modifiers">{purchase.note}</div>}
-                  </td>
-                  <td>{purchase.sourceName ?? <span className="muted">—</span>}</td>
-                  <td className="muted">{purchase.createdByName ?? '—'}</td>
-                  <td className="num">
-                    <Money minor={purchase.amountMinor} />
-                  </td>
-                </tr>
-              ))}
-              {data.purchases.length === 0 && (
-                <tr>
-                  <td className="muted" colSpan={7}>
-                    No purchases in this range.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-            {data.purchases.length > 0 && (
-              <tfoot>
-                <tr className="grand">
-                  <td colSpan={6}>
-                    <strong>TOTAL</strong>
-                  </td>
-                  <td className="num">
-                    <strong>
-                      <Money minor={data.totalMinor} />
-                    </strong>
-                  </td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
+        <h3 style={{ margin: 0 }}>Every purchase — by partner</h3>
+        <PurchaseListByPartner report={data} />
       </div>
     </div>
   );

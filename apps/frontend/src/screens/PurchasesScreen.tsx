@@ -10,7 +10,7 @@ import {
   usePurchaseSources,
   useVoidPurchase,
 } from '../api/hooks.js';
-import type { Purchase } from '../api/types.js';
+import type { Purchase, PurchaseReport } from '../api/types.js';
 import { PurchaseBySource, PurchasePartnerMatrix } from '../components/PurchaseSummary.tsx';
 import { ErrorBanner, Loading, Money, MoneyInput } from '../components/ui.tsx';
 
@@ -212,34 +212,62 @@ export function PurchasesScreen(): JSX.Element {
         </div>
       </div>
 
-      {/* The individual rows */}
-      <div className="card">
-        <h3 style={{ margin: 0 }}>Purchases {openShift.data ? 'this shift' : 'today'}</h3>
-        <ErrorBanner error={report.error} />
-        {report.data && report.data.purchases.length === 0 && <p className="muted">No purchases recorded yet.</p>}
-        {report.data && report.data.purchases.length > 0 && (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>Partner</th>
-                  <th>Category</th>
-                  <th>What</th>
-                  <th>Paid from</th>
-                  <th>By</th>
-                  <th className="num">Amount</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {report.data.purchases.map((purchase) => (
-                  <PurchaseRow key={purchase.id} purchase={purchase} />
-                ))}
-              </tbody>
-            </table>
+      {/* The individual rows, SPLIT into one list per partner — side by
+          side, each with its own subtotal. */}
+      <ErrorBanner error={report.error} />
+      {report.data && report.data.purchases.length === 0 && (
+        <div className="card">
+          <h3 style={{ margin: 0 }}>Purchases {openShift.data ? 'this shift' : 'today'}</h3>
+          <p className="muted">No purchases recorded yet.</p>
+        </div>
+      )}
+      {report.data && report.data.purchases.length > 0 && <PurchasesByPartnerList report={report.data} openShift={openShift.data !== null && openShift.data !== undefined} />}
+    </div>
+  );
+}
+
+/** The purchase list split into one column per partner, side by side —
+ * each partner's own purchases with a subtotal, which is what "divide the
+ * list, one side per partner" means. */
+function PurchasesByPartnerList({ report, openShift }: { report: PurchaseReport; openShift: boolean }): JSX.Element {
+  return (
+    <div className="col">
+      <h3 style={{ margin: 0 }}>Purchases {openShift ? 'this shift' : 'today'} — by partner</h3>
+      <div className="grid" style={{ gridTemplateColumns: `repeat(${Math.max(1, report.byPartner.length)}, minmax(300px, 1fr))`, alignItems: 'start' }}>
+        {report.byPartner.map((partner) => (
+          <div key={partner.id} className="card col">
+            <div className="row" style={{ alignItems: 'baseline' }}>
+              <h4 style={{ margin: 0, flex: 1 }}>{partner.name}</h4>
+              <strong>
+                <Money minor={partner.totalMinor} />
+              </strong>
+            </div>
+            <p className="muted" style={{ marginTop: 0 }}>
+              {partner.count} {partner.count === 1 ? 'purchase' : 'purchases'}
+            </p>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Category</th>
+                    <th>What</th>
+                    <th>Paid from</th>
+                    <th className="num">Amount</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.purchases
+                    .filter((purchase) => purchase.partnerId === partner.id)
+                    .map((purchase) => (
+                      <PurchaseRow key={purchase.id} purchase={purchase} />
+                    ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        )}
+        ))}
       </div>
     </div>
   );
@@ -253,14 +281,12 @@ function PurchaseRow({ purchase }: { purchase: Purchase }): JSX.Element {
   return (
     <tr>
       <td>{new Date(purchase.createdAt).toLocaleString()}</td>
-      <td>{purchase.partnerName}</td>
       <td>{purchase.categoryName}</td>
       <td>
         {purchase.description ?? <span className="muted">—</span>}
         {purchase.note && <div className="muted line-modifiers">{purchase.note}</div>}
       </td>
       <td>{purchase.sourceName ?? <span className="muted">—</span>}</td>
-      <td className="muted">{purchase.createdByName ?? '—'}</td>
       <td className="num">
         <Money minor={purchase.amountMinor} />
       </td>
