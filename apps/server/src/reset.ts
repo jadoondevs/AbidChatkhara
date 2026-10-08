@@ -26,8 +26,8 @@ import type SqliteDatabase from 'better-sqlite3';
  *
  * Everything NOT in this list — category, item, item_price, modifier and
  * its groups/links/overrides, item availability and ownership, partner,
- * user, person, app_setting, payment_method, payment_account, tax_rule —
- * is configuration, and is kept.
+ * purchase_category, user, person, app_setting, payment_method,
+ * payment_account, tax_rule — is configuration, and is kept.
  */
 const TRANSACTIONAL_TABLES = [
   'line_allocation',
@@ -35,6 +35,7 @@ const TRANSACTIONAL_TABLES = [
   'service_charge_entry',
   'delivery_charge_entry',
   'consumption_record',
+  'purchase',
   'order_line_modifier',
   'order_line',
   'order',

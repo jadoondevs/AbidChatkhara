@@ -156,17 +156,17 @@ describe('catalog/menu-import', () => {
   it('loads the restaurant menu that ships with the repo', async () => {
     ctx = createTestDb();
     const file = readMenuFile(new URL('../../menu/abid-chatkhara.json', import.meta.url).pathname);
-    expect(file.categories).toHaveLength(11);
-    expect(file.categories.reduce((total, category) => total + category.items.length, 0)).toBe(54);
+    expect(file.categories).toHaveLength(14);
+    expect(file.categories.reduce((total, category) => total + category.items.length, 0)).toBe(73);
 
     await importMenu(ctx.db, file, actor);
     const menu = await listMenu(ctx.db);
-    expect(menu).toHaveLength(54);
+    expect(menu).toHaveLength(73);
     // Every item is priced: an unpriced item cannot be added to an order.
     expect(menu.filter((item) => item.priceMinor === null)).toEqual([]);
 
     const sized = await ctx.db.selectFrom('item_modifier_group').select('item_id').distinct().execute();
-    expect(sized).toHaveLength(16);
+    expect(sized).toHaveLength(19);
 
     expect((await importMenu(ctx.db, file, actor)).actions).toEqual([]);
   });

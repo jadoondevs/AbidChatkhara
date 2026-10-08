@@ -72,8 +72,8 @@ export function SettingsScreen(): JSX.Element {
           admin who came here looking for it should not have to guess
           that. */}
       <p className="muted elsewhere-note">
-        Also configurable: <Link to="/config/menu">menu and prices</Link>, <Link to="/config/partners">partners and ownership</Link>, and{' '}
-        <Link to="/config/people">people for staff meals</Link>.
+        Also configurable: <Link to="/config/menu">menu and prices</Link>, <Link to="/config/partners">partners and ownership</Link>,{' '}
+        <Link to="/config/people">people for staff meals</Link>, and <Link to="/config/purchase-categories">purchase categories</Link>.
       </p>
 
       {tab === 'restaurant' && <RestaurantPanel />}

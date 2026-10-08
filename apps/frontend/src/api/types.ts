@@ -438,6 +438,49 @@ export interface Rider {
   createdAt: string;
 }
 
+export interface PurchaseCategory {
+  id: number;
+  name: string;
+  active: boolean;
+  sortOrder: number;
+  createdAt: string;
+}
+
+export interface Purchase {
+  id: number;
+  shiftId: number | null;
+  partnerId: number;
+  partnerName: string;
+  categoryId: number;
+  categoryName: string;
+  description: string | null;
+  amountMinor: Paisa;
+  note: string | null;
+  createdBy: number;
+  createdByName: string | null;
+  createdAt: string;
+  voided: boolean;
+  voidedBy: number | null;
+  voidedByName: string | null;
+  voidedAt: string | null;
+  voidReason: string | null;
+}
+
+export interface PurchaseGroupLine {
+  id: number;
+  name: string;
+  count: number;
+  totalMinor: Paisa;
+}
+
+export interface PurchaseReport {
+  totalMinor: Paisa;
+  count: number;
+  byCategory: PurchaseGroupLine[];
+  byPartner: PurchaseGroupLine[];
+  purchases: Purchase[];
+}
+
 export interface OwnershipShare {
   partnerId: number;
   shareBp: number;

@@ -7,6 +7,7 @@ import {
   useItemMixReport,
   usePartnerStatement,
   usePartners,
+  usePurchaseReport,
   useServiceChargeReport,
   useShiftReport,
   useShiftReportList,
@@ -17,7 +18,16 @@ import type { DailySalesReport, ItemMixLine, ShiftReportListEntry } from '../api
 import { ErrorBanner, Loading, Money } from '../components/ui.tsx';
 import { ZReportCard } from './ShiftScreen.tsx';
 
-type ReportKey = 'dashboard' | 'daily-sales' | 'shift-reports' | 'partner-statement' | 'item-mix' | 'consumption' | 'service-charge' | 'void-discount';
+type ReportKey =
+  | 'dashboard'
+  | 'daily-sales'
+  | 'shift-reports'
+  | 'partner-statement'
+  | 'item-mix'
+  | 'consumption'
+  | 'service-charge'
+  | 'purchases'
+  | 'void-discount';
 
 const REPORTS: { key: ReportKey; label: string; path: string }[] = [
   // The dashboard composes two reports that already exist rather than
@@ -31,6 +41,8 @@ const REPORTS: { key: ReportKey; label: string; path: string }[] = [
   { key: 'item-mix', label: 'Item mix', path: '/api/reports/item-mix' },
   { key: 'consumption', label: 'Consumption', path: '/api/reports/consumption' },
   { key: 'service-charge', label: 'Service charge', path: '/api/reports/service-charge' },
+  // Purchases carry no CSV export yet, so no path — like shift reports.
+  { key: 'purchases', label: 'Purchases', path: '' },
   { key: 'void-discount', label: 'Voids & discounts', path: '/api/reports/void-and-discount' },
 ];
 
@@ -86,9 +98,9 @@ export function ReportsScreen(): JSX.Element {
 
   const report = REPORTS.find((candidate) => candidate.key === active);
   const csvHref =
-    active === 'shift-reports'
-      ? // Shift reports carry their own picker and no shared date range —
-        // the CSV path here would be meaningless, so there is none.
+    active === 'shift-reports' || active === 'purchases'
+      ? // Shift reports and purchases carry no CSV export here — there is
+        // no flat endpoint to point at, so there is no link.
         null
       : active === 'partner-statement'
         ? partnerId === ''
@@ -207,6 +219,7 @@ export function ReportsScreen(): JSX.Element {
       {active === 'item-mix' && <ItemMix range={range} />}
       {active === 'consumption' && <Consumption range={range} />}
       {active === 'service-charge' && <ServiceCharge range={range} />}
+      {active === 'purchases' && <Purchases range={range} />}
       {active === 'void-discount' && <VoidsAndDiscounts range={range} />}
     </div>
   );
@@ -878,6 +891,224 @@ function ServiceCharge({ range }: { range: DateRange }): JSX.Element {
   );
 }
 
+function Purchases({ range }: { range: DateRange }): JSX.Element {
+  const report = usePurchaseReport(range);
+  if (report.isLoading) return <Loading />;
+  if (report.error) return <ErrorBanner error={report.error} />;
+  const data = report.data;
+  if (!data) return <p className="muted">No data.</p>;
+
+  const topCategory = data.byCategory[0];
+
+  return (
+    <div className="col">
+      <StatCards
+        cards={[
+          { label: 'Total purchases', value: <Money minor={data.totalMinor} />, note: 'what was bought' },
+          { label: 'Entries', value: data.count, note: data.count === 1 ? 'purchase' : 'purchases' },
+          { label: 'Categories', value: data.byCategory.length, note: 'with spend' },
+          { label: 'Top category', value: topCategory?.name ?? '—', note: topCategory ? <Money minor={topCategory.totalMinor} /> : undefined },
+        ]}
+      />
+
+      <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', alignItems: 'start' }}>
+        <div className="card">
+          <h3 style={{ margin: 0 }}>By category</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th className="num">Count</th>
+                <th className="num">Spent</th>
+                <th className="num">% </th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.byCategory.map((line) => (
+                <tr key={line.id}>
+                  <td>{line.name}</td>
+                  <td className="num muted">{line.count}</td>
+                  <td className="num">
+                    <Money minor={line.totalMinor} />
+                  </td>
+                  <td className="num muted">{sharePercent(line.totalMinor, data.totalMinor)}</td>
+                </tr>
+              ))}
+              {data.byCategory.length === 0 && (
+                <tr>
+                  <td className="muted" colSpan={4}>
+                    No purchases in this range.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="card">
+          <h3 style={{ margin: 0 }}>By partner</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Partner</th>
+                <th className="num">Count</th>
+                <th className="num">Spent</th>
+                <th className="num">%</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.byPartner.map((line) => (
+                <tr key={line.id}>
+                  <td>{line.name}</td>
+                  <td className="num muted">{line.count}</td>
+                  <td className="num">
+                    <Money minor={line.totalMinor} />
+                  </td>
+                  <td className="num muted">{sharePercent(line.totalMinor, data.totalMinor)}</td>
+                </tr>
+              ))}
+              {data.byPartner.length === 0 && (
+                <tr>
+                  <td className="muted" colSpan={4}>
+                    No purchases in this range.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3 style={{ margin: 0 }}>Every purchase</h3>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Partner</th>
+                <th>Category</th>
+                <th>What</th>
+                <th>By</th>
+                <th className="num">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.purchases.map((purchase) => (
+                <tr key={purchase.id}>
+                  <td>{new Date(purchase.createdAt).toLocaleString()}</td>
+                  <td>{purchase.partnerName}</td>
+                  <td>{purchase.categoryName}</td>
+                  <td>
+                    {purchase.description ?? <span className="muted">—</span>}
+                    {purchase.note && <div className="muted line-modifiers">{purchase.note}</div>}
+                  </td>
+                  <td className="muted">{purchase.createdByName ?? '—'}</td>
+                  <td className="num">
+                    <Money minor={purchase.amountMinor} />
+                  </td>
+                </tr>
+              ))}
+              {data.purchases.length === 0 && (
+                <tr>
+                  <td className="muted" colSpan={6}>
+                    No purchases in this range.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+            {data.purchases.length > 0 && (
+              <tfoot>
+                <tr className="grand">
+                  <td colSpan={5}>
+                    <strong>TOTAL</strong>
+                  </td>
+                  <td className="num">
+                    <strong>
+                      <Money minor={data.totalMinor} />
+                    </strong>
+                  </td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Purchases filed under one shift — shown inside that shift's report.
+ * A pure ledger: these are not subtracted from the shift's sales. */
+function ShiftPurchasesCard({ shiftId }: { shiftId: number }): JSX.Element {
+  const report = usePurchaseReport({ shiftId });
+  const data = report.data;
+
+  return (
+    <div className="card">
+      <h3 style={{ margin: 0 }}>Purchases</h3>
+      <p className="muted" style={{ marginTop: 0 }}>
+        What was bought this shift, by category and partner. A record only — not taken off the sales above.
+      </p>
+      {report.isLoading && <Loading />}
+      {data && (
+        <>
+          <div className="total-line grand">
+            <span>Total purchases</span>
+            <Money minor={data.totalMinor} />
+          </div>
+          {data.purchases.length === 0 ? (
+            <p className="muted">No purchases recorded this shift.</p>
+          ) : (
+            <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', alignItems: 'start' }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th className="num">Count</th>
+                    <th className="num">Spent</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.byCategory.map((line) => (
+                    <tr key={line.id}>
+                      <td>{line.name}</td>
+                      <td className="num muted">{line.count}</td>
+                      <td className="num">
+                        <Money minor={line.totalMinor} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Partner</th>
+                    <th className="num">Count</th>
+                    <th className="num">Spent</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.byPartner.map((line) => (
+                    <tr key={line.id}>
+                      <td>{line.name}</td>
+                      <td className="num muted">{line.count}</td>
+                      <td className="num">
+                        <Money minor={line.totalMinor} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function VoidsAndDiscounts({ range }: { range: DateRange }): JSX.Element {
   const report = useVoidAndDiscountReport(range);
   if (report.isLoading) return <Loading />;
@@ -1390,6 +1621,10 @@ function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
           </table>
         </div>
       )}
+
+      {/* Purchases recorded under this shift — a pure ledger, never netted
+          against the sales above. By category and by partner. */}
+      <ShiftPurchasesCard shiftId={data.shift.id} />
 
       {/* The full Z-report accounting chain + drawer reconciliation
           (requirement 8), reusing the very same card the operational

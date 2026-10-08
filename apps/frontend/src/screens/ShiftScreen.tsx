@@ -8,6 +8,7 @@ import {
   useOpenShift,
   useOpenShiftMutation,
   usePayoutSheet,
+  usePurchaseReport,
   useZReport,
 } from '../api/hooks.js';
 import type { ZReport } from '../api/types.js';
@@ -227,7 +228,51 @@ export function ShiftScreen(): JSX.Element {
             </tbody>
           </table>
         </div>
+
+        <ShiftPurchasesCard shiftId={shift.id} />
       </div>
+    </div>
+  );
+}
+
+/** Purchases recorded under this shift — shown at a glance on the shift
+ * screen. A pure ledger: NOT subtracted from the drawer or the Z-report
+ * above. The full breakdown lives in Reports → Shift reports. */
+function ShiftPurchasesCard({ shiftId }: { shiftId: number }): JSX.Element {
+  const report = usePurchaseReport({ shiftId });
+  const data = report.data;
+  return (
+    <div className="card">
+      <h3 style={{ margin: 0 }}>Purchases this shift</h3>
+      <p className="muted" style={{ marginTop: 0 }}>
+        What was bought this shift — a record only, not taken off the drawer.
+      </p>
+      {report.isLoading && <Loading />}
+      {data && (
+        <>
+          <div className="total-line grand">
+            <span>Total purchases</span>
+            <Money minor={data.totalMinor} />
+          </div>
+          <table>
+            <tbody>
+              {data.byCategory.map((line) => (
+                <tr key={line.id}>
+                  <td>{line.name}</td>
+                  <td className="num">
+                    <Money minor={line.totalMinor} />
+                  </td>
+                </tr>
+              ))}
+              {data.byCategory.length === 0 && (
+                <tr>
+                  <td className="muted">No purchases recorded this shift.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </>
+      )}
     </div>
   );
 }

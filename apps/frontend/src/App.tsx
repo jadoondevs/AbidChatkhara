@@ -13,6 +13,8 @@ import { OrdersScreen } from './screens/OrdersScreen.tsx';
 import { PartnerConfigScreen } from './screens/PartnerConfigScreen.tsx';
 import { PaymentScreen } from './screens/PaymentScreen.tsx';
 import { PeopleConfigScreen } from './screens/PeopleConfigScreen.tsx';
+import { PurchaseCategoryConfigScreen } from './screens/PurchaseCategoryConfigScreen.tsx';
+import { PurchasesScreen } from './screens/PurchasesScreen.tsx';
 import { RidersConfigScreen } from './screens/RidersConfigScreen.tsx';
 import { ReportsScreen } from './screens/ReportsScreen.tsx';
 import { SettingsScreen } from './screens/SettingsScreen.tsx';
@@ -24,7 +26,7 @@ import { StaffMealScreen } from './screens/StaffMealScreen.tsx';
  * call these screens make is checked there too — so this only avoids
  * showing someone a screen whose every request would come back 403.
  */
-function RoleGate({ minimum, children }: { minimum: 'manager' | 'admin'; children: JSX.Element }): JSX.Element {
+function RoleGate({ minimum, children }: { minimum: 'cashier' | 'manager' | 'admin'; children: JSX.Element }): JSX.Element {
   const { hasAtLeastRole } = useAuth();
   return hasAtLeastRole(minimum) ? children : <Navigate to="/" replace />;
 }
@@ -59,6 +61,9 @@ const OPERATIONS = [
 
 const MANAGEMENT = [
   { to: '/reports', label: 'Reports', minimum: 'manager' },
+  // Recording purchases is a cashier+ task; it sits with the back-office
+  // group rather than the live floor.
+  { to: '/purchases', label: 'Purchases', minimum: 'cashier' },
   { to: '/config/menu', label: 'Menu', minimum: 'manager' },
   { to: '/config/partners', label: 'Partners', minimum: 'manager' },
   { to: '/config/people', label: 'People', minimum: 'manager' },
@@ -144,6 +149,22 @@ export function App(): JSX.Element {
           <Route path="/orders/:orderId/payment" element={<PaymentScreen />} />
           <Route path="/staff-meal" element={<StaffMealScreen />} />
           <Route path="/shift" element={<ShiftScreen />} />
+          <Route
+            path="/purchases"
+            element={
+              <RoleGate minimum="cashier">
+                <PurchasesScreen />
+              </RoleGate>
+            }
+          />
+          <Route
+            path="/config/purchase-categories"
+            element={
+              <RoleGate minimum="manager">
+                <PurchaseCategoryConfigScreen />
+              </RoleGate>
+            }
+          />
           <Route
             path="/reports"
             element={

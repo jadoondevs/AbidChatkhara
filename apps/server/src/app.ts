@@ -10,6 +10,7 @@ import { resolveSession } from './identity/auth.js';
 import { identityRoutes } from './identity/routes.js';
 import { orderingRoutes } from './ordering/routes.js';
 import { partnersRoutes } from './partners/routes.js';
+import { purchasesRoutes } from './purchases/routes.js';
 import { ridersRoutes } from './riders/routes.js';
 import type { Database } from './platform/db/types.js';
 import type { PrinterTarget } from './platform/printing/client.js';
@@ -68,6 +69,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(catalogRoutes, { db: opts.db });
   await app.register(orderingRoutes, { db: opts.db });
   await app.register(partnersRoutes, { db: opts.db });
+  await app.register(purchasesRoutes, { db: opts.db });
   await app.register(ridersRoutes, { db: opts.db });
   await app.register(consumptionRoutes, { db: opts.db });
   await app.register(taxRoutes, { db: opts.db });

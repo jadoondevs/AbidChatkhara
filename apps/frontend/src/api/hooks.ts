@@ -34,6 +34,9 @@ import type {
   OrderType,
   OwnershipShare,
   Partner,
+  Purchase,
+  PurchaseCategory,
+  PurchaseReport,
   PartnerStatement,
   PaymentMethod,
   PaymentMethodKind,
@@ -469,6 +472,75 @@ export function useRenameRider(): UseMutationResult<Rider, Error, { id: number; 
 export function useSetRiderActive(): UseMutationResult<Rider, Error, { id: number; active: boolean }> {
   const invalidate = useInvalidateOnSuccess(['riders']);
   return useMutation({ mutationFn: ({ id, active }) => api.patch<Rider>(`/api/riders/${id}/active`, { active }), onSuccess: invalidate });
+}
+
+// ---------------------------------------------------------------------
+// Purchases (daily purchase ledger) + its category list
+// ---------------------------------------------------------------------
+
+export function usePurchaseCategories(includeInactive = false): UseQueryResult<PurchaseCategory[]> {
+  return useQuery({
+    queryKey: ['purchase-categories', includeInactive],
+    queryFn: () => api.get<PurchaseCategory[]>(`/api/purchase-categories${query({ includeInactive })}`),
+  });
+}
+
+export function useCreatePurchaseCategory(): UseMutationResult<PurchaseCategory, Error, { name: string }> {
+  const invalidate = useInvalidateOnSuccess(['purchase-categories']);
+  return useMutation({ mutationFn: ({ name }) => api.post<PurchaseCategory>('/api/purchase-categories', { name }), onSuccess: invalidate });
+}
+
+export function useRenamePurchaseCategory(): UseMutationResult<PurchaseCategory, Error, { id: number; name: string }> {
+  const invalidate = useInvalidateOnSuccess(['purchase-categories']);
+  return useMutation({ mutationFn: ({ id, name }) => api.patch<PurchaseCategory>(`/api/purchase-categories/${id}`, { name }), onSuccess: invalidate });
+}
+
+export function useSetPurchaseCategoryActive(): UseMutationResult<PurchaseCategory, Error, { id: number; active: boolean }> {
+  const invalidate = useInvalidateOnSuccess(['purchase-categories']);
+  return useMutation({ mutationFn: ({ id, active }) => api.patch<PurchaseCategory>(`/api/purchase-categories/${id}/active`, { active }), onSuccess: invalidate });
+}
+
+export function useDeletePurchaseCategory(): UseMutationResult<{ outcome: 'deleted' | 'retired' }, Error, number> {
+  const invalidate = useInvalidateOnSuccess(['purchase-categories']);
+  return useMutation({ mutationFn: (id) => api.del<{ outcome: 'deleted' | 'retired' }>(`/api/purchase-categories/${id}`), onSuccess: invalidate });
+}
+
+export interface PurchaseFilter {
+  date?: string;
+  from?: string;
+  to?: string;
+  shiftId?: number;
+  partnerId?: number;
+  categoryId?: number;
+  includeVoided?: boolean;
+}
+
+export function usePurchases(params: PurchaseFilter): UseQueryResult<Purchase[]> {
+  return useQuery({
+    queryKey: ['purchases', params],
+    queryFn: () => api.get<Purchase[]>(`/api/purchases${query({ ...params })}`),
+  });
+}
+
+export function useCreatePurchase(): UseMutationResult<
+  Purchase,
+  Error,
+  { partnerId: number; categoryId: number; amountMinor: Paisa; description?: string; note?: string }
+> {
+  const invalidate = useInvalidateOnSuccess(['purchases', 'purchase-report']);
+  return useMutation({ mutationFn: (vars) => api.post<Purchase>('/api/purchases', vars), onSuccess: invalidate });
+}
+
+export function useVoidPurchase(): UseMutationResult<Purchase, Error, { id: number; reason: string }> {
+  const invalidate = useInvalidateOnSuccess(['purchases', 'purchase-report']);
+  return useMutation({ mutationFn: ({ id, reason }) => api.post<Purchase>(`/api/purchases/${id}/void`, { reason }), onSuccess: invalidate });
+}
+
+export function usePurchaseReport(params: DateRange & { partnerId?: number; categoryId?: number }): UseQueryResult<PurchaseReport> {
+  return useQuery({
+    queryKey: ['purchase-report', params],
+    queryFn: () => api.get<PurchaseReport>(`/api/reports/purchases${query({ ...params })}`),
+  });
 }
 
 export function useItemOwnership(itemId: number | null): UseQueryResult<OwnershipShare[]> {
