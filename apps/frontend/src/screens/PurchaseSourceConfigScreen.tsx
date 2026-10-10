@@ -1,6 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useCreatePurchaseSource, useDeletePurchaseSource, usePurchaseSources, useRenamePurchaseSource, useSetPurchaseSourceActive } from '../api/hooks.js';
+import {
+  useCreatePurchaseSource,
+  useDeletePurchaseSource,
+  usePurchaseSources,
+  useRenamePurchaseSource,
+  useSetPurchaseSourceActive,
+  useSetPurchaseSourceCashDrawer,
+} from '../api/hooks.js';
 import type { PurchaseSource } from '../api/types.js';
 import { ErrorBanner, Loading } from '../components/ui.tsx';
 
@@ -28,7 +35,8 @@ export function PurchaseSourceConfigScreen(): JSX.Element {
       <p className="muted" style={{ marginTop: 0 }}>
         Where the money for a <Link to="/purchases">purchase</Link> came from — e.g. <strong>Cash drawer</strong> or <strong>Irfan</strong>. A
         record only; nothing here is taken off the drawer or your sales. The first in the list is pre-selected on the form, so put Cash
-        drawer first.
+        drawer first. Tick <strong>“This is the cash drawer”</strong> on the one that is your till cash — that’s what the “remaining in
+        drawer” figure subtracts from (only one source can be the drawer).
       </p>
       <ErrorBanner error={create.error} />
 
@@ -59,6 +67,7 @@ export function PurchaseSourceConfigScreen(): JSX.Element {
 function PurchaseSourceRow({ source }: { source: PurchaseSource }): JSX.Element {
   const rename = useRenamePurchaseSource();
   const setActive = useSetPurchaseSourceActive();
+  const setCashDrawer = useSetPurchaseSourceCashDrawer();
   const remove = useDeletePurchaseSource();
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState(source.name);
@@ -71,10 +80,23 @@ function PurchaseSourceRow({ source }: { source: PurchaseSource }): JSX.Element 
         ) : (
           <span style={{ flex: 1 }}>{source.name}</span>
         )}
+        {source.isCashDrawer && <span className="pill ok">Cash drawer</span>}
         {!source.active && <span className="pill">Retired</span>}
       </div>
 
-      <ErrorBanner error={rename.error ?? setActive.error ?? remove.error} />
+      {source.active && (
+        <label className="row" style={{ alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={source.isCashDrawer}
+            disabled={setCashDrawer.isPending}
+            onChange={(event) => setCashDrawer.mutate({ id: source.id, isCashDrawer: event.target.checked })}
+          />
+          <span className="muted">This is the cash drawer</span>
+        </label>
+      )}
+
+      <ErrorBanner error={rename.error ?? setActive.error ?? setCashDrawer.error ?? remove.error} />
 
       {renaming ? (
         <div className="row">

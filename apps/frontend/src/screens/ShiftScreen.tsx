@@ -1,4 +1,4 @@
-import { abs, paisa, type Paisa } from '@pos/shared';
+import { abs, paisa, sub, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { ApiError } from '../api/client.js';
 import {
@@ -230,7 +230,7 @@ export function ShiftScreen(): JSX.Element {
           </table>
         </div>
 
-        <ShiftPurchasesCard shiftId={shift.id} />
+        <ShiftPurchasesCard shiftId={shift.id} expectedCashMinor={zReport.data?.expectedCashMinor} />
       </div>
     </div>
   );
@@ -239,7 +239,7 @@ export function ShiftScreen(): JSX.Element {
 /** Purchases recorded under this shift — shown at a glance on the shift
  * screen. A pure ledger: NOT subtracted from the drawer or the Z-report
  * above. The full breakdown lives in Reports → Shift reports. */
-function ShiftPurchasesCard({ shiftId }: { shiftId: number }): JSX.Element {
+function ShiftPurchasesCard({ shiftId, expectedCashMinor }: { shiftId: number; expectedCashMinor?: Paisa | undefined }): JSX.Element {
   const report = usePurchaseReport({ shiftId });
   const data = report.data;
   return (
@@ -262,11 +262,41 @@ function ShiftPurchasesCard({ shiftId }: { shiftId: number }): JSX.Element {
               <PurchaseTotals report={data} />
               <h4 style={{ marginBottom: 4 }}>Paid from</h4>
               <PurchaseBySource report={data} />
+              {expectedCashMinor !== undefined && (
+                <DrawerRemaining expectedCashMinor={expectedCashMinor} drawerTotalMinor={data.drawerTotalMinor} />
+              )}
             </>
           )}
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * View-only "remaining in drawer": the cash the Z-report expects, less
+ * the purchases that were paid out of the drawer this shift. Nothing here
+ * changes the expected cash or the variance above — it just shows how
+ * much of the till the buying has eaten into, as purchases are made.
+ */
+function DrawerRemaining({ expectedCashMinor, drawerTotalMinor }: { expectedCashMinor: Paisa; drawerTotalMinor: Paisa }): JSX.Element {
+  return (
+    <>
+      <h4 style={{ marginBottom: 4 }}>Cash drawer</h4>
+      <div className="total-line">
+        <span>Expected cash (from sales)</span>
+        <Money minor={expectedCashMinor} />
+      </div>
+      <div className="total-line">
+        <span>Less: purchases from drawer</span>
+        <Money minor={drawerTotalMinor} />
+      </div>
+      <div className="total-line grand">
+        <span>Remaining in drawer</span>
+        <Money minor={sub(expectedCashMinor, drawerTotalMinor)} />
+      </div>
+      <p className="muted field-hint">For viewing only — the expected cash and variance above are unchanged.</p>
+    </>
   );
 }
 

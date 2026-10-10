@@ -447,8 +447,16 @@ export interface PurchaseCategory {
 }
 
 /** A configurable "paid from" source for a purchase — Cash drawer, or a
- * person who fronted it. Same shape as a purchase category. */
-export type PurchaseSource = PurchaseCategory;
+ * person who fronted it. `isCashDrawer` marks the one that is the actual
+ * till cash, used by the view-only "remaining in drawer" figure. */
+export interface PurchaseSource {
+  id: number;
+  name: string;
+  active: boolean;
+  sortOrder: number;
+  isCashDrawer: boolean;
+  createdAt: string;
+}
 
 export interface Purchase {
   id: number;
@@ -461,6 +469,7 @@ export interface Purchase {
   amountMinor: Paisa;
   sourceId: number | null;
   sourceName: string | null;
+  sourceIsCashDrawer: boolean;
   note: string | null;
   createdBy: number;
   createdByName: string | null;
@@ -482,6 +491,7 @@ export interface PurchaseGroupLine {
 export interface PurchaseReport {
   totalMinor: Paisa;
   count: number;
+  drawerTotalMinor: Paisa;
   byCategory: PurchaseGroupLine[];
   byPartner: PurchaseGroupLine[];
   bySource: PurchaseGroupLine[];

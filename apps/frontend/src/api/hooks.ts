@@ -533,6 +533,16 @@ export function useDeletePurchaseSource(): UseMutationResult<{ outcome: 'deleted
   return useMutation({ mutationFn: (id) => api.del<{ outcome: 'deleted' | 'retired' }>(`/api/purchase-sources/${id}`), onSuccess: invalidate });
 }
 
+export function useSetPurchaseSourceCashDrawer(): UseMutationResult<PurchaseSource, Error, { id: number; isCashDrawer: boolean }> {
+  // Toggling the drawer flag changes what "remaining in drawer" subtracts,
+  // so refresh the purchase report too.
+  const invalidate = useInvalidateOnSuccess(['purchase-sources', 'purchase-report']);
+  return useMutation({
+    mutationFn: ({ id, isCashDrawer }) => api.patch<PurchaseSource>(`/api/purchase-sources/${id}/cash-drawer`, { isCashDrawer }),
+    onSuccess: invalidate,
+  });
+}
+
 export interface PurchaseFilter {
   date?: string;
   from?: string;

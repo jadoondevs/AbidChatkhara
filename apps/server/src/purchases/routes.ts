@@ -20,6 +20,7 @@ import {
   renamePurchaseSource,
   setPurchaseCategoryActive,
   setPurchaseSourceActive,
+  setPurchaseSourceCashDrawer,
   voidPurchase,
 } from './service.js';
 
@@ -31,9 +32,8 @@ const purchaseCategorySchema = z.object({
   createdAt: z.string(),
 });
 
-// A payment source has the same shape as a category — both are small
-// owner-managed lists.
-const purchaseSourceSchema = purchaseCategorySchema;
+// A payment source is a category plus the cash-drawer flag.
+const purchaseSourceSchema = purchaseCategorySchema.extend({ isCashDrawer: z.boolean() });
 
 const purchaseSchema = z.object({
   id: z.number().int(),
@@ -46,6 +46,7 @@ const purchaseSchema = z.object({
   amountMinor: z.number().int(),
   sourceId: z.number().int().nullable(),
   sourceName: z.string().nullable(),
+  sourceIsCashDrawer: z.boolean(),
   note: z.string().nullable(),
   createdBy: z.number().int(),
   createdByName: z.string().nullable(),
@@ -62,6 +63,7 @@ const purchaseGroupLineSchema = z.object({ id: z.number().int(), name: z.string(
 const purchaseReportSchema = z.object({
   totalMinor: z.number().int(),
   count: z.number().int(),
+  drawerTotalMinor: z.number().int(),
   byCategory: z.array(purchaseGroupLineSchema),
   byPartner: z.array(purchaseGroupLineSchema),
   bySource: z.array(purchaseGroupLineSchema),
@@ -176,6 +178,15 @@ export const purchasesRoutes: FastifyPluginAsync<PurchasesPluginOptions> = async
     async (request, reply) => {
       const actor = requireRole(request, reply, 'manager');
       return setPurchaseSourceActive(db, request.params.id, request.body.active, { actorId: actor.userId, terminalId: actor.terminalId });
+    },
+  );
+
+  app.patch(
+    '/api/purchase-sources/:id/cash-drawer',
+    { schema: { params: z.object({ id: z.coerce.number().int() }), body: z.object({ isCashDrawer: z.boolean() }), response: { 200: purchaseSourceSchema } } },
+    async (request, reply) => {
+      const actor = requireRole(request, reply, 'manager');
+      return setPurchaseSourceCashDrawer(db, request.params.id, request.body.isCashDrawer, { actorId: actor.userId, terminalId: actor.terminalId });
     },
   );
 

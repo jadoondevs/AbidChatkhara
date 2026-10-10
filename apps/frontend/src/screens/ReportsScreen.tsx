@@ -1,4 +1,4 @@
-import { divideBy, ratio, sum, type Paisa } from '@pos/shared';
+import { divideBy, paisa, ratio, sub, sum, type Paisa } from '@pos/shared';
 import { useState } from 'react';
 import { query } from '../api/client.js';
 import {
@@ -936,7 +936,7 @@ function Purchases({ range }: { range: DateRange }): JSX.Element {
 
 /** Purchases filed under one shift — shown inside that shift's report.
  * A pure ledger: these are not subtracted from the shift's sales. */
-function ShiftPurchasesCard({ shiftId }: { shiftId: number }): JSX.Element {
+function ShiftPurchasesCard({ shiftId, expectedCashMinor }: { shiftId: number; expectedCashMinor?: Paisa }): JSX.Element {
   const report = usePurchaseReport({ shiftId });
   const data = report.data;
 
@@ -962,8 +962,34 @@ function ShiftPurchasesCard({ shiftId }: { shiftId: number }): JSX.Element {
               <PurchaseBySource report={data} />
             </>
           )}
+          {expectedCashMinor !== undefined && <DrawerRemaining expectedCashMinor={expectedCashMinor} drawerTotalMinor={data.drawerTotalMinor} />}
         </>
       )}
+    </div>
+  );
+}
+
+/** The view-only "remaining in drawer" line: the Z-report's expected cash
+ * minus what was taken from the drawer for purchases. It changes no real
+ * balance — the expected cash and the shift's variance stay as they are;
+ * this is what the physical count *should* match. */
+function DrawerRemaining({ expectedCashMinor, drawerTotalMinor }: { expectedCashMinor: Paisa; drawerTotalMinor: Paisa }): JSX.Element {
+  return (
+    <div style={{ marginTop: 12 }}>
+      <h4 style={{ marginBottom: 4 }}>Cash drawer (after purchases)</h4>
+      <p className="muted" style={{ marginTop: 0 }}>For viewing only — the expected cash and variance above are unchanged.</p>
+      <div className="total-line">
+        <span>Expected cash (from sales)</span>
+        <Money minor={expectedCashMinor} />
+      </div>
+      <div className="total-line">
+        <span>Less: purchases from drawer</span>
+        <Money minor={drawerTotalMinor} />
+      </div>
+      <div className="total-line grand">
+        <span>Remaining in drawer</span>
+        <Money minor={sub(expectedCashMinor, drawerTotalMinor)} />
+      </div>
     </div>
   );
 }
@@ -1098,6 +1124,9 @@ function ShiftListRow({ entry, active, onSelect }: { entry: ShiftReportListEntry
 
 function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
   const report = useShiftReport(shiftId);
+  // Same purchase report the Purchases card uses (react-query dedups the
+  // key) — here it feeds the view-only "remaining share" per partner.
+  const purchases = usePurchaseReport(shiftId !== null ? { shiftId } : {});
   if (shiftId === null) return <p className="muted">Pick a shift.</p>;
   if (report.isLoading) return <Loading />;
   if (report.error) return <ErrorBanner error={report.error} />;
@@ -1105,6 +1134,19 @@ function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
   if (!data) return <p className="muted">No data.</p>;
 
   const z = data.zReport;
+
+  // Each partner's purchases this shift, and the view-only "remaining
+  // share" (share − their purchases). Partners with purchases but no sales
+  // share still appear, as a share of 0.
+  const spentByPartner = new Map((purchases.data?.byPartner ?? []).map((line) => [line.id, line.totalMinor]));
+  const shareIds = new Set(data.partnerShare.map((line) => line.partnerId));
+  const partnerRows = [
+    ...data.partnerShare.map((line) => ({ partnerId: line.partnerId, partnerName: line.partnerName, shareMinor: line.amountMinor })),
+    ...(purchases.data?.byPartner ?? [])
+      .filter((line) => !shareIds.has(line.id))
+      .map((line) => ({ partnerId: line.id, partnerName: line.name, shareMinor: paisa(0) })),
+  ];
+  const purchasesTotalMinor = purchases.data?.totalMinor ?? paisa(0);
 
   return (
     <div className="col">
@@ -1389,50 +1431,71 @@ function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
         </table>
       </div>
 
-      {/* Partner share (requirement 7) */}
+      {/* Partner share (requirement 7), with the view-only "remaining
+          share" = share − that partner's purchases this shift. The Share
+          column is unchanged; Remaining is for viewing only. */}
       <div className="card">
         <h3 style={{ margin: 0 }}>Partner share</h3>
         <p className="muted" style={{ marginTop: 0 }}>
-          Sales credited to each partner from the items they own, for this shift.
+          Sales credited to each partner from the items they own, this shift. <strong>Remaining</strong> subtracts that partner’s own
+          purchases — for viewing only; the share itself is unchanged.
         </p>
         <table>
           <thead>
             <tr>
               <th>Partner</th>
               <th className="num">Share</th>
-              <th className="num">%</th>
+              <th className="num">Purchases</th>
+              <th className="num">Remaining</th>
             </tr>
           </thead>
           <tbody>
-            {data.partnerShare.map((line) => (
-              <tr key={line.partnerId}>
-                <td>{line.partnerName}</td>
-                <td className="num">
-                  <Money minor={line.amountMinor} />
-                </td>
-                <td className="num muted">{sharePercent(line.amountMinor, data.partnerShareTotalMinor)}</td>
-              </tr>
-            ))}
-            {data.partnerShare.length === 0 && (
+            {partnerRows.map((row) => {
+              const spent = spentByPartner.get(row.partnerId) ?? paisa(0);
+              return (
+                <tr key={row.partnerId}>
+                  <td>{row.partnerName}</td>
+                  <td className="num">
+                    <Money minor={row.shareMinor} />
+                  </td>
+                  <td className="num muted">{spent === 0 ? <span className="muted">—</span> : <Money minor={spent} />}</td>
+                  <td className="num">
+                    <strong>
+                      <Money minor={sub(row.shareMinor, spent)} />
+                    </strong>
+                  </td>
+                </tr>
+              );
+            })}
+            {partnerRows.length === 0 && (
               <tr>
-                <td className="muted" colSpan={3}>
+                <td className="muted" colSpan={4}>
                   No partner-owned items sold this shift.
                 </td>
               </tr>
             )}
           </tbody>
-          {data.partnerShare.length > 0 && (
+          {partnerRows.length > 0 && (
             <tfoot>
               <tr className="grand">
                 <td>
-                  <strong>TOTAL PARTNER SHARE</strong>
+                  <strong>TOTAL</strong>
                 </td>
                 <td className="num">
                   <strong>
                     <Money minor={data.partnerShareTotalMinor} />
                   </strong>
                 </td>
-                <td />
+                <td className="num">
+                  <strong>
+                    <Money minor={purchasesTotalMinor} />
+                  </strong>
+                </td>
+                <td className="num">
+                  <strong>
+                    <Money minor={sub(data.partnerShareTotalMinor, purchasesTotalMinor)} />
+                  </strong>
+                </td>
               </tr>
             </tfoot>
           )}
@@ -1482,8 +1545,9 @@ function ShiftReportView({ shiftId }: { shiftId: number | null }): JSX.Element {
       )}
 
       {/* Purchases recorded under this shift — a pure ledger, never netted
-          against the sales above. By category and by partner. */}
-      <ShiftPurchasesCard shiftId={data.shift.id} />
+          against the sales above. By category and by partner, plus the
+          view-only remaining-in-drawer. */}
+      <ShiftPurchasesCard shiftId={data.shift.id} expectedCashMinor={z.expectedCashMinor} />
 
       {/* The full Z-report accounting chain + drawer reconciliation
           (requirement 8), reusing the very same card the operational

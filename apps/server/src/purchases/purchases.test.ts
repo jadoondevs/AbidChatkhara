@@ -17,6 +17,7 @@ import {
   renamePurchaseCategory,
   renamePurchaseSource,
   setPurchaseCategoryActive,
+  setPurchaseSourceCashDrawer,
   voidPurchase,
 } from './service.js';
 
@@ -214,6 +215,31 @@ describe('purchases', () => {
         { id: irfan.id, name: 'Irfan', count: 1, totalMinor: 400_00 },
         { id: 0, name: '—', count: 1, totalMinor: 100_00 },
       ]);
+    });
+
+    it('flags one source as the cash drawer (single-drawer) and totals only its purchases', async () => {
+      const { actor, azhar, meat } = await setup();
+      const drawer = await createPurchaseSource(ctx.db, { name: 'Cash drawer' }, actor);
+      const irfan = await createPurchaseSource(ctx.db, { name: 'Irfan' }, actor);
+
+      expect((await setPurchaseSourceCashDrawer(ctx.db, drawer.id, true, actor)).isCashDrawer).toBe(true);
+
+      // Flagging another clears the first — at most one drawer.
+      await setPurchaseSourceCashDrawer(ctx.db, irfan.id, true, actor);
+      let list = await listPurchaseSources(ctx.db);
+      expect(list.find((s) => s.id === drawer.id)?.isCashDrawer).toBe(false);
+      expect(list.find((s) => s.id === irfan.id)?.isCashDrawer).toBe(true);
+
+      // Put it back on the real drawer; only drawer purchases count.
+      await setPurchaseSourceCashDrawer(ctx.db, drawer.id, true, actor);
+      list = await listPurchaseSources(ctx.db);
+      expect(list.find((s) => s.id === irfan.id)?.isCashDrawer).toBe(false);
+
+      await createPurchase(ctx.db, { partnerId: azhar.id, categoryId: meat.id, amountMinor: paisa(1000_00), sourceId: drawer.id }, actor);
+      await createPurchase(ctx.db, { partnerId: azhar.id, categoryId: meat.id, amountMinor: paisa(400_00), sourceId: irfan.id }, actor);
+
+      const report = await purchaseReport(ctx.db, {});
+      expect(report.drawerTotalMinor).toBe(1000_00);
     });
   });
 });

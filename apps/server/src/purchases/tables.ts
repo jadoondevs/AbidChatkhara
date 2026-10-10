@@ -19,6 +19,8 @@ export interface PurchaseSourceTable {
   name: string;
   active: number;
   sort_order: number;
+  /** 1 on the one source that is the actual cash drawer — see 0027. */
+  is_cash_drawer: number;
   created_at: string;
 }
 

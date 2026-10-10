@@ -1,4 +1,4 @@
-import { paisa, type Paisa } from '@pos/shared';
+import { paisa, sub, type Paisa } from '@pos/shared';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -9,6 +9,7 @@ import {
   usePurchaseReport,
   usePurchaseSources,
   useVoidPurchase,
+  useZReport,
 } from '../api/hooks.js';
 import type { Purchase, PurchaseReport } from '../api/types.js';
 import { PurchaseBySource, PurchaseTotals } from '../components/PurchaseSummary.tsx';
@@ -57,6 +58,9 @@ export function PurchasesScreen(): JSX.Element {
   const today = localDay(new Date());
   const scope = openShift.data ? { shiftId: openShift.data.id } : { date: today };
   const report = usePurchaseReport(scope);
+  // Only an open shift has an expected-cash figure to subtract drawer
+  // purchases from; with no shift open there's no "remaining in drawer".
+  const zReport = useZReport(openShift.data?.id ?? null);
 
   const canCreate = partnerId !== '' && categoryId !== '' && sourceId !== '' && amountMinor > 0 && amountValid;
 
@@ -206,6 +210,27 @@ export function PurchasesScreen(): JSX.Element {
 
               <h4 style={{ marginBottom: 4 }}>Paid from</h4>
               <PurchaseBySource report={report.data} />
+
+              {zReport.data && (
+                <>
+                  <h4 style={{ marginBottom: 4 }}>Cash drawer</h4>
+                  <div className="total-line">
+                    <span>Expected cash (from sales)</span>
+                    <Money minor={zReport.data.expectedCashMinor} />
+                  </div>
+                  <div className="total-line">
+                    <span>Less: purchases from drawer</span>
+                    <Money minor={report.data.drawerTotalMinor} />
+                  </div>
+                  <div className="total-line grand">
+                    <span>Remaining in drawer</span>
+                    <Money minor={sub(zReport.data.expectedCashMinor, report.data.drawerTotalMinor)} />
+                  </div>
+                  <p className="muted" style={{ marginTop: 0 }}>
+                    For viewing only — the expected cash and the shift’s variance are unchanged.
+                  </p>
+                </>
+              )}
             </>
           )}
         </div>

@@ -170,6 +170,9 @@ export interface PurchaseSourceSummary {
   readonly name: string;
   readonly active: boolean;
   readonly sortOrder: number;
+  /** True on the one source that is the actual cash drawer, used by the
+   * "remaining in drawer" view. */
+  readonly isCashDrawer: boolean;
   readonly createdAt: string;
 }
 
@@ -178,11 +181,12 @@ interface PurchaseSourceRow {
   name: string;
   active: number;
   sort_order: number;
+  is_cash_drawer: number;
   created_at: string;
 }
 
 function toPurchaseSourceSummary(row: PurchaseSourceRow): PurchaseSourceSummary {
-  return { id: row.id, name: row.name, active: row.active === 1, sortOrder: row.sort_order, createdAt: row.created_at };
+  return { id: row.id, name: row.name, active: row.active === 1, sortOrder: row.sort_order, isCashDrawer: row.is_cash_drawer === 1, createdAt: row.created_at };
 }
 
 export async function createPurchaseSource(
@@ -196,7 +200,7 @@ export async function createPurchaseSource(
   const sortOrder = input.sortOrder ?? (max?.max ?? 0) + 1;
   const row = await db
     .insertInto('purchase_source')
-    .values({ name: input.name.trim(), active: 1, sort_order: sortOrder, created_at: now })
+    .values({ name: input.name.trim(), active: 1, sort_order: sortOrder, is_cash_drawer: 0, created_at: now })
     .returningAll()
     .executeTakeFirstOrThrow();
   const summary = toPurchaseSourceSummary(row);
@@ -251,6 +255,37 @@ export async function setPurchaseSourceActive(db: Kysely<Database>, id: number, 
   return toPurchaseSourceSummary(after);
 }
 
+/** Mark (or unmark) a source as the cash drawer — the signal the
+ * "remaining in drawer" view uses. At most one source is the drawer: on
+ * setting one, any other is cleared, so the figure can never double-count.
+ * A pure view flag; it moves no money. */
+export async function setPurchaseSourceCashDrawer(db: Kysely<Database>, id: number, isCashDrawer: boolean, actor: ActorContext): Promise<PurchaseSourceSummary> {
+  return db.transaction().execute(async (trx) => {
+    const before = await trx.selectFrom('purchase_source').selectAll().where('id', '=', id).executeTakeFirst();
+    if (!before) throw new Error(`payment source ${id} not found`);
+    if (isCashDrawer) {
+      // Single-drawer invariant: clear the flag on every other source.
+      await trx.updateTable('purchase_source').set({ is_cash_drawer: 0 }).where('id', '!=', id).execute();
+    }
+    const after = await trx
+      .updateTable('purchase_source')
+      .set({ is_cash_drawer: isCashDrawer ? 1 : 0 })
+      .where('id', '=', id)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    await recordAudit(trx, {
+      actorId: actor.actorId,
+      terminalId: actor.terminalId,
+      action: isCashDrawer ? 'purchase_source.set_cash_drawer' : 'purchase_source.clear_cash_drawer',
+      entity: 'purchase_source',
+      entityId: id,
+      before: toPurchaseSourceSummary(before),
+      after: toPurchaseSourceSummary(after),
+    });
+    return toPurchaseSourceSummary(after);
+  });
+}
+
 /** Delete-or-retire a payment source, the same rule the category list
  * uses: deleted if nothing references it, retired otherwise. */
 export async function deletePurchaseSource(db: Kysely<Database>, id: number, actor: ActorContext): Promise<PurchaseCategoryRemoval> {
@@ -302,6 +337,9 @@ export interface PurchaseSummary {
   readonly amountMinor: Paisa;
   readonly sourceId: number | null;
   readonly sourceName: string | null;
+  /** True when this purchase's source is the cash drawer — used to total
+   * drawer spend for the "remaining in drawer" view. */
+  readonly sourceIsCashDrawer: boolean;
   readonly note: string | null;
   readonly createdBy: number;
   readonly createdByName: string | null;
@@ -324,6 +362,7 @@ interface PurchaseJoinedRow {
   amount_minor: Paisa;
   payment_source_id: number | null;
   source_name: string | null;
+  source_is_cash_drawer: number | null;
   note: string | null;
   created_by: number;
   created_by_name: string | null;
@@ -347,6 +386,7 @@ function toPurchaseSummary(row: PurchaseJoinedRow): PurchaseSummary {
     amountMinor: row.amount_minor,
     sourceId: row.payment_source_id,
     sourceName: row.source_name,
+    sourceIsCashDrawer: row.source_is_cash_drawer === 1,
     note: row.note,
     createdBy: row.created_by,
     createdByName: row.created_by_name,
@@ -378,6 +418,7 @@ function purchaseSelect(db: Kysely<Database>) {
       'purchase.amount_minor as amount_minor',
       'purchase.payment_source_id as payment_source_id',
       'purchase_source.name as source_name',
+      'purchase_source.is_cash_drawer as source_is_cash_drawer',
       'purchase.note as note',
       'purchase.created_by as created_by',
       'creator.name as created_by_name',
@@ -538,6 +579,10 @@ export interface PurchaseGroupLine {
 export interface PurchaseReport {
   readonly totalMinor: Paisa;
   readonly count: number;
+  /** Total of purchases paid from the cash drawer (the source flagged as
+   * the drawer). Zero until a source is flagged. Drives the view-only
+   * "remaining in drawer" figure — still nets against no real balance. */
+  readonly drawerTotalMinor: Paisa;
   readonly byCategory: PurchaseGroupLine[];
   readonly byPartner: PurchaseGroupLine[];
   /** By where the money came from (Cash drawer, a person). A purchase
@@ -573,6 +618,7 @@ export async function purchaseReport(
   return {
     totalMinor: sum(purchases.map((p) => p.amountMinor)),
     count: purchases.length,
+    drawerTotalMinor: sum(purchases.filter((p) => p.sourceIsCashDrawer).map((p) => p.amountMinor)),
     byCategory: groupBy(purchases, (p) => ({ id: p.categoryId, name: p.categoryName })),
     byPartner: groupBy(purchases, (p) => ({ id: p.partnerId, name: p.partnerName })),
     bySource: groupBy(purchases, (p) => ({ id: p.sourceId ?? 0, name: p.sourceName ?? '—' })),
